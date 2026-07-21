@@ -1,0 +1,4 @@
+timestamp,keller_pressure_bar,keller_temperature_degC,n_keller_samples,vacuum_chamber_mbar,te_temperature_degC,tc_fault
+2026-07-21T15:45:49.524,,,0,,,
+2026-07-21T15:45:50.034,0.9551,24.55,1,1.4245534636989703e-06,26.6328125,0
+2026-07-21T15:45:50.527,0.9551,24.55,2,1.4245534636989703e-06,26.5703125,0
