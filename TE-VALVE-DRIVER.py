@@ -6,7 +6,8 @@ Live display and logging for the thermally-enabled (TE) valve test setup.
 
 Logs three sensor channels with a robust, self-reconnecting architecture:
   • Upstream pressure + temperature  — Keller PAA-23SX-H2 (RS485/USB, K-114)
-  • Vacuum chamber pressure          — LabJack U3, FIO2 (log-linear gauge)
+  • Vacuum chamber pressure          — Pfeiffer IKR 270 cold cathode gauge,
+                                       LabJack U3 FIO2 via voltage divider
   • TE valve temperature             — MAX31856 Type-K thermocouple, LabJack SPI
 
 Each sensor runs on its own thread. If any device disconnects mid-session the
@@ -108,10 +109,19 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
-# LabJack vacuum gauge (FIO2, analogue)
-LABJACK_FIO2_CHANNEL  = 2          # AIN2 = FIO2
-VACUUM_SLOPE          = 5.389      # log-linear calibration slope
-VACUUM_INTERCEPT      = -11.329    # log-linear calibration intercept
+# LabJack vacuum gauge (FIO2, analogue) — Pfeiffer IKR 270 cold cathode gauge
+# behind a voltage divider. Gauge characteristic (manual, Appendix A):
+#   p [mbar] = 10 ** (1.25 * U_gauge - 12.75)   valid for U_gauge 1.96 … 8.6 V
+# The LabJack sees V = U_gauge / VACUUM_DIVIDER_RATIO, so the slope per
+# LabJack volt is 1.25 × ratio. The divider does not change the intercept.
+LABJACK_FIO2_CHANNEL  = 2          # AIN2 (analogue input 2) = FIO2
+VACUUM_DIVIDER_RATIO  = 3.235      # U_gauge / V_LabJack — calibrated 1.713 V ↔ 1.5e-6 mbar
+VACUUM_GAUGE_SLOPE    = 1.25       # decades per gauge volt (IKR 270)
+VACUUM_SLOPE          = VACUUM_GAUGE_SLOPE * VACUUM_DIVIDER_RATIO   # ≈ 4.044 decades per LabJack volt
+VACUUM_INTERCEPT      = -12.75     # log10(p / mbar) at 0 V (IKR 270, mbar)
+VACUUM_GAUGE_ERROR_V  = 0.5        # gauge side: below = sensor error / no supply
+VACUUM_GAUGE_MIN_V    = 1.96       # gauge side: below = underrange (<5e-11 mbar) or not ignited
+VACUUM_GAUGE_MAX_V    = 8.6        # gauge side: above = overrange (>1e-2 mbar)
 
 # MAX31856 thermocouple (SPI on FIO4-7)
 TC_FIO_SDO = 4    # MAX31856 SDO  → LabJack MISO
@@ -468,7 +478,24 @@ def _tc_init(lj):
 # _labjack_ok tracks the vacuum channel, _tc_ok tracks the thermocouple. They
 # are reported independently in the GUI so a fault on one doesn't mask the other.
 
-def _voltage_to_vacuum_mbar(volts: float) -> float:
+def _vacuum_gauge_status(volts: float):
+    """Classify a LabJack voltage against the IKR 270 signal ranges.
+    Returns None if the reading is valid, otherwise a short reason string."""
+    u = volts * VACUUM_DIVIDER_RATIO            # back to gauge-side volts
+    if u < VACUUM_GAUGE_ERROR_V:
+        return "sensor error / no supply"
+    if u < VACUUM_GAUGE_MIN_V:
+        return "underrange or not yet ignited"
+    if u > VACUUM_GAUGE_MAX_V:
+        return "overrange (>1e-2 mbar)"
+    return None
+
+
+def _voltage_to_vacuum_mbar(volts: float):
+    """LabJack voltage → chamber pressure in mbar, or None if the gauge
+    signal is outside its valid measuring range (never a made-up number)."""
+    if _vacuum_gauge_status(volts) is not None:
+        return None
     return 10.0 ** (VACUUM_SLOPE * volts + VACUUM_INTERCEPT)
 
 
@@ -627,6 +654,7 @@ def labjack_thread():
         out_high     = False
         bad_tc_reads = 0
         last_ctrl    = time.time()
+        vac_status   = "startup"    # last gauge status, so changes are logged once
 
         try:
             while not _stop.is_set():
@@ -640,6 +668,15 @@ def labjack_thread():
                     try:
                         raw  = lj.getAIN(LABJACK_FIO2_CHANNEL)
                         mbar = _voltage_to_vacuum_mbar(raw)
+                        status = _vacuum_gauge_status(raw)
+                        if status != vac_status:
+                            if status is not None:
+                                log_event(f"Vacuum gauge {status} — "
+                                          f"{raw:.3f} V at LabJack, "
+                                          f"{raw * VACUUM_DIVIDER_RATIO:.2f} V at gauge")
+                            elif vac_status != "startup":
+                                log_event("Vacuum gauge back in range")
+                            vac_status = status
                         with _lock:
                             _state['vacuum_chamber_mbar'] = mbar
                             _vac_chart.append(mbar)
