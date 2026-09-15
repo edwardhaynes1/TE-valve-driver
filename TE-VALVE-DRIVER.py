@@ -17,7 +17,7 @@ unaffected.
 
 HEATER CONTROL is included (FIO0). See the safety notes below. Three modes:
   manual    fixed duty cycle
-  auto (T)  PI loop holding the valve at a temperature setpoint
+  auto (T)  PI loop (optional D) holding the valve at a temperature setpoint
   auto (P)  cascade: an outer PI loop on log10(chamber pressure) moves the
             temperature setpoint, and the auto-mode PI holds the valve there
 
@@ -194,8 +194,21 @@ TC_BAD_READS_TO_TRIP  = 3          # consecutive bad TC reads before tripping
 LJ_WATCHDOG_S         = 10         # U3 firmware watchdog → FIO0 low if we die
 
 # ─── Closed-loop temperature control (mode 'auto') ───────────────────────────
-PID_KP                = 0.020      # duty per °C of error
-PID_KI                = 0.0015     # duty per °C·s of accumulated error
+# Tuned 15 Sept 2026 from bench data. The valve fits a first-order plant with
+# gain ≈ 105 °C per unit duty and time constant ≈ 80 s. The previous gains
+# (Kp 0.020, Ki 0.0015 → integral time 13 s, far shorter than the plant's
+# 80 s) gave damping ≈ 0.44: ~20 % overshoot and a ~2.5 min oscillation.
+# These gains were chosen by simulation across ±30-40 % plant variation,
+# thermocouple lag up to 20 s and 2.5× sensor noise: overshoot ≤ 0.4 °C,
+# 30 °C step settled to ±1 °C in ~1.5 min nominal, ≤ 3 min worst case.
+PID_KP                = 0.050      # duty per °C of error
+PID_KI                = 0.0010     # duty per °C·s of accumulated error (Ti = 50 s)
+PID_KD                = 0.0        # duty per °C/s, acts on the MEASUREMENT (no
+                                   # setpoint kick). 0 = PI, recommended here: in
+                                   # simulation D bought a few seconds of settling
+                                   # at the cost of amplified sensor noise. Try
+                                   # ≤ 0.2 if the thermocouple ever gets laggier.
+PID_D_FILTER_S        = 5.0        # low-pass on the derivative, s
 PID_SETPOINT_DEFAULT  = 60.0       # °C
 
 # ─── Closed-loop PRESSURE control (mode 'pressure') ──────────────────────────
@@ -348,6 +361,8 @@ _heater = dict(
     armed_at     = None,       # time.time() when armed
     trip_reason  = None,       # non-None = latched trip, needs re-arm
     integral     = 0.0,        # PI integral term
+    d_prev       = None,       # last valve temperature seen by the D term
+    d_filt       = 0.0,        # filtered dT/dt, °C/s
     # ── live electrical readout (written by the device thread) ────────────
     out_high     = False,      # FIO0 state right now
     v_now        = 0.0,        # calculated element voltage right now, V
@@ -377,6 +392,7 @@ _heat_chart  = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)  # recent heater 
 _keller_ok   = False
 _labjack_ok  = False   # vacuum gauge channel healthy
 _tc_ok       = False   # thermocouple channel healthy
+_csv_ok      = None    # CSV logger: None = starting, True = writing, False = failing
 
 
 _events_pending = []    # events not yet written to the CSV (protected by _lock)
@@ -389,7 +405,27 @@ def log_event(text: str):
     with _lock:
         _events.append((stamp, text))
         _events_pending.append(text)
-    print(f"[{stamp}] {text}")
+        if len(_events_pending) > 1000:          # CSV failing for a long time
+            del _events_pending[:-1000]
+    try:
+        print(f"[{stamp}] {text}")
+    except Exception:
+        # Console that can't show a character (e.g. cp1252) must not break
+        # the calling thread — which may be the heater/device thread.
+        try:
+            print(f"[{stamp}] {_ascii(text)}")
+        except Exception:
+            pass
+
+
+_ASCII_MAP = str.maketrans({'→': '->', '·': ';', '—': '-', '–': '-',
+                            '°': 'deg', '…': '...', 'Ω': 'ohm', '±': '+/-',
+                            '≈': '~', 'µ': 'u', '×': 'x'})
+
+
+def _ascii(text: str) -> str:
+    """Plain-ASCII version of an event line, for the CSV and odd consoles."""
+    return text.translate(_ASCII_MAP).encode('ascii', 'replace').decode('ascii')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -651,6 +687,7 @@ def heater_command(**kwargs):
                 _heater['trip_reason'] = None
                 _heater['integral']    = 0.0
                 _heater['p_init']      = True
+                _heater['d_prev']      = None
             else:
                 _heater['armed']    = False
                 _heater['armed_at'] = None
@@ -659,6 +696,7 @@ def heater_command(**kwargs):
         if new_mode is not None and new_mode != _heater['mode']:
             if (new_mode == 'manual') != (_heater['mode'] == 'manual'):
                 _heater['integral'] = 0.0
+                _heater['d_prev']   = None
             if new_mode == 'pressure':
                 _heater['p_init'] = True
         for k in ('mode', 'duty_cmd', 'setpoint_C', 'p_target_mbar'):
@@ -818,11 +856,19 @@ def _heater_compute_duty(temp, tc_healthy, dt,
             return 0.0      # not initialised yet — don't heat on a stale setpoint
         # else: a single missed read — hold the last setpoint
 
-    # ── 'auto' / 'pressure': PI on valve temperature, with anti-windup ─────
+    # ── 'auto' / 'pressure': PI(D) on valve temperature, with anti-windup ──
     error = setpoint - temp
     with _heater_lock:
+        prev = _heater['d_prev']
+        if prev is None or PID_KD == 0.0:
+            _heater['d_filt'] = 0.0
+        else:
+            rate = (temp - prev) / dt
+            _heater['d_filt'] += dt / (PID_D_FILTER_S + dt) * (rate - _heater['d_filt'])
+        _heater['d_prev'] = temp
         integral = _heater['integral'] + error * dt
-        duty     = PID_KP * error + PID_KI * integral
+        duty     = (PID_KP * error + PID_KI * integral
+                    - PID_KD * _heater['d_filt'])
         clamped  = max(0.0, min(HEATER_MAX_DUTY, duty))
         # Only accumulate when not saturated — keeps the integrator honest.
         if duty == clamped:
@@ -1096,7 +1142,14 @@ def labjack_thread():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def logger_thread():
-    with open(LOG_FILE, 'a', newline='') as f:
+    """CSV writer. Encoding is explicit UTF-8 — Windows would otherwise use
+    cp1252 — and the events text is additionally reduced to ASCII, so any
+    reader (Excel, LOG-PLOTTER.py, default-encoding open()) copes.
+
+    A failed row never kills the thread: the error is shown in the GUI
+    ([CSV:ERR] plus an event-log line), the row's events are kept for the
+    next attempt, and logging resumes as soon as a write succeeds."""
+    with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow([
             'timestamp',
@@ -1121,6 +1174,7 @@ def logger_thread():
         f.flush()
 
         def write_row():
+            global _csv_ok
             with _lock:
                 p_samp = _state['keller_pressure_samples']
                 t_samp = _state['keller_temperature_samples']
@@ -1134,8 +1188,9 @@ def logger_thread():
                 te_temp = _state['te_temperature_degC']
                 fault   = _state['tc_fault']
                 vac_st  = _state['vacuum_status'] or ''
-                events  = ' | '.join(_events_pending)
+                taken   = list(_events_pending)
                 _events_pending.clear()
+            events = ' | '.join(_ascii(e) for e in taken)
 
             with _heater_lock:
                 h_duty = round(_heater['duty_actual'], 4)
@@ -1154,14 +1209,26 @@ def logger_thread():
                           if _heater['mode'] == 'manual' else '')
 
             ts = datetime.now().isoformat(timespec='milliseconds')
-            writer.writerow([
-                ts, p_mean, t_mean, n_k, vac, te_temp,
-                fault if fault is not None else '',
-                h_duty, h_mode, h_set,
-                v_calc, i_calc, v_m, i_m, p_tgt, vac_st,
-                d_cmd, events,
-            ])
-            f.flush()
+            try:
+                writer.writerow([
+                    ts, p_mean, t_mean, n_k, vac, te_temp,
+                    fault if fault is not None else '',
+                    h_duty, h_mode, h_set,
+                    v_calc, i_calc, v_m, i_m, p_tgt, vac_st,
+                    d_cmd, events,
+                ])
+                f.flush()
+            except Exception as e:
+                with _lock:                       # keep the events for next time
+                    _events_pending[:0] = taken
+                if _csv_ok is not False:          # report once per outage
+                    _csv_ok = False
+                    log_event(f"CSV WRITE FAILED — {type(e).__name__}: {e} — "
+                              f"data is NOT being logged, retrying every row")
+                return
+            if _csv_ok is False:
+                log_event("CSV logging resumed")
+            _csv_ok = True
 
         start = time.time()
         n = 0
@@ -1576,6 +1643,8 @@ class TEGui:
             (f"[KELLER:{'OK' if _keller_ok else '--'}]",  _keller_ok,  True),
             (f"[VACUUM:{'OK' if _labjack_ok else '--'}]", _labjack_ok, LABJACK_AVAILABLE),
             (f"[TE-TEMP:{'OK' if _tc_ok else '--'}]",     _tc_ok,      LABJACK_AVAILABLE),
+            (f"[CSV:{'OK' if _csv_ok else ('ERR' if _csv_ok is False else '--')}]",
+             bool(_csv_ok), True),
         ):
             tag = "ok" if ok else ("dim" if not avail else "err")
             st.insert("end", lbl + "  ", tag)
