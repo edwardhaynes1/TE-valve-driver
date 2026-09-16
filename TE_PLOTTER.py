@@ -34,12 +34,24 @@ import argparse
 import sys
 import traceback
 
-import matplotlib
-import matplotlib.pyplot as plt
-import matplotlib.transforms
-import numpy as np
-import pandas as pd
-from scipy.optimize import curve_fit
+try:
+    import matplotlib
+    import matplotlib.pyplot as plt
+    import matplotlib.transforms
+    import numpy as np
+    import pandas as pd
+except ImportError as _exc:
+    _missing = getattr(_exc, "name", None) or str(_exc)
+    print(f"\nTE_PLOTTER needs the Python package '{_missing}', which is not "
+          "installed for this Python.\nInstall the requirements with:\n\n"
+          f'    "{sys.executable}" -m pip install numpy pandas matplotlib\n',
+          file=sys.stderr)
+    if len(sys.argv) == 1:               # double-clicked: keep the window open
+        try:
+            input("Press Enter to close...")
+        except EOFError:
+            pass
+    sys.exit(1)
 
 # ---------------------------------------------------------------------------
 # Column matching. Each role lists candidate name fragments, best first.
@@ -220,8 +232,35 @@ def load(path, cols):
     return df.reset_index(drop=True)
 
 
-def first_order(t, T_inf, T_0, tau):
-    return T_inf + (T_0 - T_inf) * np.exp(-t / tau)
+def fit_first_order(t, T):
+    """Fit T = T_inf + (T_0 - T_inf)·exp(-t/tau), NumPy only.
+
+    For a fixed tau the model is linear in T_inf and T_0, so this scans tau
+    on a log grid, solves each case by least squares, then refines around
+    the best value. Returns (T_inf, T_0, tau), or NaNs if it cannot fit."""
+    t = np.asarray(t, float)
+    T = np.asarray(T, float)
+    ok = np.isfinite(t) & np.isfinite(T)
+    t, T = t[ok], T[ok]
+    if len(t) < 5 or t[-1] <= 0:
+        return np.nan, np.nan, np.nan
+
+    def solve(tau):
+        e = np.exp(-t / tau)
+        A = np.column_stack([1.0 - e, e])          # T = T_inf·(1-e) + T_0·e
+        coef, *_ = np.linalg.lstsq(A, T, rcond=None)
+        return float(np.sum((A @ coef - T) ** 2)), coef
+
+    span = t[-1]
+    grid = np.geomspace(max(span / 1000, 1e-3), span * 20, 120)
+    for _ in range(3):                             # coarse scan, then zoom in twice
+        sse = [solve(tau)[0] for tau in grid]
+        i = int(np.argmin(sse))
+        lo, hi = grid[max(i - 1, 0)], grid[min(i + 1, len(grid) - 1)]
+        grid = np.geomspace(lo, hi, 40)
+    tau = float(grid[int(np.argmin([solve(x)[0] for x in grid]))])
+    (T_inf, T_0) = solve(tau)[1]
+    return float(T_inf), float(T_0), tau
 
 
 def fit_steps(df, cols, ambient):
@@ -237,9 +276,8 @@ def fit_steps(df, cols, ambient):
         t = seg.t.values - seg.t.values[0]
         T = seg[cols["temp"]].values
         try:
-            (T_inf, _T0, tau), _ = curve_fit(
-                first_order, t, T, p0=[T[-1], T[0], 150.0], maxfev=20000)
-        except (RuntimeError, TypeError):
+            T_inf, _T0, tau = fit_first_order(t, T)
+        except (np.linalg.LinAlgError, ValueError):
             T_inf, tau = np.nan, np.nan
         # Reject runaway fits: a segment shorter than its own time constant
         # cannot constrain the asymptote.
