@@ -5,10 +5,21 @@ TE_PLOTTER.py
 Plot and characterise a TE-Valve sensor log.
 
 Panels (only those whose data is present are drawn):
-  A  Temperature and heater duty vs time, with fitted step responses
-  B  Chamber pressure vs time (log)
-  C  Upstream pressure vs time, with decay rate per segment
-  D  Chamber pressure vs temperature (log y), with exponential fit
+  A  Supporting traces vs time, each on its own y-axis:
+       upstream P20 (light green), heater current (orange),
+       heater duty (yellow)
+       upstream P20 is the upstream pressure referred to 20 °C,
+       P20 = P * 293.15 K / T_Keller, which is proportional to the amount
+       of gas. Falls back to raw upstream pressure if no Keller temperature.
+  B  Main plot, larger, same time axis: chamber pressure (blue, log,
+     left axis) and TE temperature (red, right axis)
+
+Valve open/close times are detected from the chamber pressure: the valve
+counts as open while the pressure sits clearly above its fitted baseline
+(dotted blue). Both plots get dashed vertical lines at those times.
+
+Step-response fits, upstream decay rates (of P20 when available) and the
+outgassing fit are printed to the terminal.
 
 Column names are matched loosely, so logs from different driver versions
 work without editing this file. Whatever it matched is printed at the top
@@ -26,6 +37,7 @@ import traceback
 
 import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.transforms
 import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit
@@ -43,7 +55,13 @@ COLUMN_ALIASES = {
                  "chamber", "vacuummbar", "ionguage", "iongauge"],
     "upstream": ["kellerpressure", "upstreampressure", "upstreambar",
                  "keller", "upstream", "inletpressure"],
+    "keller_temp": ["kellertemperature", "upstreamtemperature",
+                    "inlettemperature", "kellertemp"],
     "duty":     ["heaterduty", "duty", "pwm", "heateroutput"],
+    # current: measured is preferred, calculated is the fallback (see load)
+    "current_meas": ["heaterimeanmeas", "currentmeas", "imeas"],
+    "current_calc": ["heaterimeancalc", "currentcalc", "icalc",
+                     "heatercurrent", "current"],
     "fault":    ["tcfault", "fault"],
     "mode":     ["heatermode", "mode"],
 }
@@ -54,8 +72,32 @@ COLUMN_EXCLUDE = {
     "temp":     ["keller", "setpoint", "samples", "count", "ambient"],
     "chamber":  ["temperature", "samples", "count", "setpoint"],
     "upstream": ["temperature", "samples", "count", "setpoint"],
-    "duty":     ["setpoint", "samples", "count"],
+    "keller_temp": ["samples", "count", "setpoint"],
+    "duty":     ["setpoint", "samples", "count", "cmd"],
+    "current_calc": ["meas"],
 }
+
+# Trace colours for the combined chart. Yellow and light green are the
+# darker ends of those shades so they stay readable on a white background.
+COLOURS = {
+    "temp":     "#e01b1b",   # red
+    "chamber":  "#1f4fe0",   # blue
+    "current":  "#ff8c00",   # orange
+    "duty":     "#e6c000",   # yellow
+    "upstream": "#6fd04a",   # light green
+    "p20":      "#6fd04a",   # light green (replaces raw upstream when available)
+}
+P20_REF_K = 293.15         # reference temperature for P20
+KELVIN = 273.15
+AXIS_OFFSET_PT = 62        # spacing between stacked y-axes on the same side
+
+# Valve open/close detection on chamber pressure (all in log10 decades)
+VALVE_MIN_RISE_DEC = 0.03  # smallest rise above baseline counted as open (≈ 7 %)
+VALVE_NOISE_SIGMAS = 6.0   # ...or this many noise sigmas, whichever is larger
+VALVE_MIN_OPEN_S = 3.0     # ignore excursions shorter than this
+VALVE_MERGE_GAP_S = 3.0    # join excursions separated by a shorter dip
+VALVE_BASELINE_DEG = 1     # polynomial order of the baseline drift (1 = linear)
+VALVE_LINE_COLOUR = "0.15"
 
 MIN_STEP_SAMPLES = 120     # ignore duty segments shorter than this
 JUMP_BAR = 0.02            # upstream step that marks a refill/adjustment
@@ -157,9 +199,22 @@ def load(path, cols):
         df["t"] = np.arange(len(df), dtype=float)
         print("  note: no usable timestamp column, using sample index as time")
 
-    for role in ("temp", "chamber", "upstream", "duty"):
+    for role in ("temp", "chamber", "upstream", "duty", "keller_temp",
+                 "current_meas", "current_calc"):
         if cols[role]:
             df[cols[role]] = numeric(df, cols[role])
+
+    # The driver leaves the measured current blank unless a sense input is
+    # wired, so use it only if it actually holds data.
+    meas, calc = cols["current_meas"], cols["current_calc"]
+    cols["current"] = meas if meas and df[meas].notna().any() else calc
+
+    # Temperature-corrected upstream pressure (ideal gas, fixed volume).
+    cols["p20"] = None
+    kt = cols["keller_temp"]
+    if cols["upstream"] and kt and df[kt].notna().any():
+        df["p20_bar"] = df[cols["upstream"]] * P20_REF_K / (df[kt] + KELVIN)
+        cols["p20"] = "p20_bar"
 
     if cols["temp"]:
         df = df.dropna(subset=[cols["temp"]])
@@ -203,16 +258,18 @@ def fit_steps(df, cols, ambient):
 
 
 def upstream_segments(df, cols):
-    """Split the upstream trace at refills and fit a decay rate to each piece."""
-    if not cols["upstream"]:
+    """Split the upstream trace at refills and fit a decay rate to each piece.
+    Uses P20 when available, so rates are free of gas-temperature drift."""
+    col = cols["p20"] or cols["upstream"]
+    if not col:
         return []
-    p = df[cols["upstream"]]
+    p = df[col]
     segs = []
     for _, seg in df.groupby((p.diff().abs() > JUMP_BAR).cumsum()):
-        seg = seg.dropna(subset=[cols["upstream"]])
+        seg = seg.dropna(subset=[col])
         if len(seg) < 120:
             continue
-        slope = np.polyfit(seg.t, seg[cols["upstream"]], 1)[0]
+        slope = np.polyfit(seg.t, seg[col], 1)[0]
         segs.append(dict(
             t0=seg.t.iloc[0], t1=seg.t.iloc[-1],
             rate_mbar_min=slope * 60 * 1000,
@@ -242,120 +299,194 @@ def fit_outgassing(df, cols, baseline_T=70.0):
     return base, np.exp(intercept), 1.0 / slope, np.log(2) / slope
 
 
+def detect_valve_events(df, cols):
+    """Find when the chamber pressure leaves and returns to its baseline.
+
+    The baseline is a low-order fit of log10(p) against time, refitted with
+    the elevated points excluded until it settles, so a slow pump-down drift
+    is followed. The valve counts as open while log10(p) is more than
+    max(VALVE_MIN_RISE_DEC, VALVE_NOISE_SIGMAS * noise) above it.
+
+    Returns (baseline_mbar as a Series aligned to df, or None,
+             list of dicts with t_open / t_close; None = outside the log)."""
+    col = cols["chamber"]
+    if not col:
+        return None, []
+    p = df[col]
+    ok = (p > 0).to_numpy() & p.notna().to_numpy()
+    if ok.sum() < 20:
+        return None, []
+    t = df.t.to_numpy()[ok]
+    y = np.log10(p.to_numpy()[ok])
+
+    quiet = np.ones(len(y), bool)
+    for _ in range(10):
+        coef = np.polyfit(t[quiet], y[quiet], VALVE_BASELINE_DEG)
+        resid = y - np.polyval(coef, t)
+        r = resid[quiet]
+        sigma = 1.4826 * np.median(np.abs(r - np.median(r)))
+        thresh = max(VALVE_MIN_RISE_DEC, VALVE_NOISE_SIGMAS * sigma)
+        new_quiet = resid < thresh / 2      # keep the tails out of the fit too
+        if new_quiet.sum() < 10 or np.array_equal(new_quiet, quiet):
+            break
+        quiet = new_quiet
+
+    baseline = pd.Series(10 ** np.polyval(coef, df.t.to_numpy()), index=df.index)
+
+    # Runs of samples above threshold -> (start index, end index exclusive)
+    above = resid > thresh
+    edges = np.flatnonzero(np.diff(np.r_[0, above.astype(int), 0]))
+    runs = [[a, b] for a, b in zip(edges[::2], edges[1::2])]
+    merged = []
+    for a, b in runs:
+        if merged and t[a] - t[merged[-1][1] - 1] < VALVE_MERGE_GAP_S:
+            merged[-1][1] = b
+        else:
+            merged.append([a, b])
+
+    events = []
+    for a, b in merged:
+        if t[b - 1] - t[a] < VALVE_MIN_OPEN_S:
+            continue
+        events.append(dict(
+            t_open=None if a == 0 else float(t[a]),
+            t_close=None if b >= len(t) else float(t[b]),
+            peak=float(10 ** y[a:b].max()),
+            base=float(10 ** np.polyval(coef, t[a])),
+            thresh_pct=100 * (10 ** thresh - 1)))
+    return baseline, events
+
+
+def mark_valve_events(axes, events, label_ax):
+    """Dashed vertical lines at valve open/close; labels on label_ax."""
+    trans = matplotlib.transforms.blended_transform_factory(
+        label_ax.transData, label_ax.transAxes)
+    for ev in events:
+        for key, word in (("t_open", "valve open"), ("t_close", "valve closed")):
+            x = ev[key]
+            if x is None:
+                continue
+            for ax in axes:
+                ax.axvline(x, ls="--", lw=1.2, color=VALVE_LINE_COLOUR, zorder=5)
+            label_ax.text(x, 0.98, f" {word} {x:.1f} s ", transform=trans,
+                          rotation=90, ha="right", va="top", fontsize=8,
+                          color=VALVE_LINE_COLOUR, zorder=6)
+
+
 # ---------------------------------------------------------------------------
 # Panels
 # ---------------------------------------------------------------------------
-def panel_temperature(ax, df, cols, steps):
-    ax.plot(df.t, df[cols["temp"]], lw=1.2, color="#c1272d")
-    for s in steps.itertuples():
-        if np.isfinite(s.tau):
-            ax.hlines(s.T_inf, s.t0, s.t1, ls="--", lw=1, color="0.35")
-            ax.annotate(f"{s.T_inf:.1f} °C\nτ={s.tau:.0f} s",
-                        xy=((s.t0 + s.t1) / 2, s.T_inf), xytext=(0, 6),
-                        textcoords="offset points", ha="center",
-                        fontsize=8, color="0.25")
+def panel_timeseries(ax, df, cols, roles=None, sides=None):
+    """Time series on one chart, each on its own colour-coded y-axis.
+    roles: optional trace roles to draw, in this order (default: all present).
+    sides: optional {role: "left"/"right"} overriding the default axis side.
+
+    The first trace present uses the host axis on the left; the rest get
+    twin axes, stacked outward on the left or right side."""
+    if cols.get("p20"):
+        upstream = ("p20", "upstream P20 (bar, at 20 °C)", 1, "left", "line")
+    else:
+        upstream = ("upstream", "upstream pressure (bar)", 1, "left", "line")
+    series = [  # role, axis label, scale, side, style
+        ("temp",     "TE temperature (°C)",          1,   "left",  "line"),
+        upstream,
+        ("chamber",  "chamber pressure (mbar)",      1,   "right", "log"),
+        ("current",  "heater current (A)",           1,   "right", "line"),
+        ("duty",     "heater duty (%)",              100, "right", "step"),
+    ]
+    if roles is not None:
+        by_role = {s[0]: s for s in series}
+        series = [by_role[r] for r in roles if r in by_role]
+    sides = sides or {}
+    series = [(r, lab, k, sides.get(r, side), sty)
+              for r, lab, k, side, sty in series]
+    present = [s for s in series if cols.get(s[0])]
+    used = {"left": 0, "right": 0}
+    handles = []
+    axes_by_role = {}
+
+    for i, (role, label, scale, side, style) in enumerate(present):
+        colour = COLOURS[role]
+        if i == 0:
+            a, side = ax, "left"
+        else:
+            a = ax.twinx()
+            if side == "left":
+                a.yaxis.tick_left()
+                a.yaxis.set_label_position("left")
+                a.spines["right"].set_visible(False)
+            a.spines[side].set_position(
+                ("outward", AXIS_OFFSET_PT * used[side]))
+        used[side] += 1
+
+        y = df[cols[role]] * scale
+        if style == "log":
+            y = y.where(y > 0)
+            a.set_yscale("log")
+        if style == "step":
+            (h,) = a.step(df.t, y, where="post", lw=1.4, color=colour)
+            a.set_ylim(0, 105)
+        else:
+            (h,) = a.plot(df.t, y, lw=1.4, color=colour)
+        h.set_label(label.split(" (")[0])
+        handles.append(h)
+        axes_by_role[role] = a
+
+        a.set_ylabel(label, color=colour)
+        a.tick_params(axis="y", colors=colour)
+        a.spines[side].set_color(colour)
+        a.spines[side].set_linewidth(1.5)
+
     ax.set_xlabel("time (s)")
-    ax.set_ylabel("TE temperature (°C)")
-    ax.set_title("A — Temperature and heater duty", fontsize=10, loc="left")
+    ax.set_xlim(df.t.iloc[0], df.t.iloc[-1])
     ax.grid(alpha=0.3)
-    if cols["duty"]:
-        ax_d = ax.twinx()
-        ax_d.step(df.t, df[cols["duty"]] * 100, where="post",
-                  lw=1, color="#1f6feb", alpha=0.6)
-        ax_d.set_ylabel("heater duty (%)", color="#1f6feb")
-        ax_d.tick_params(axis="y", colors="#1f6feb")
-        ax_d.set_ylim(0, 105)
+    ax.legend(handles=handles, loc="lower left", bbox_to_anchor=(0, 1.01),
+              ncol=len(handles), frameon=False, fontsize=9,
+              handlelength=1.8, borderaxespad=0)
+    return axes_by_role
 
 
-def panel_chamber(ax, df, cols, base):
-    ax.semilogy(df.t, df[cols["chamber"]], lw=1.2, color="#2e7d32")
-    if base is not None and np.isfinite(base):
-        ax.axhline(base, ls=":", lw=1, color="0.4")
-        ax.annotate(f"cold baseline {base:.2e} mbar",
-                    xy=(df.t.iloc[-1], base), xytext=(-4, 5),
-                    textcoords="offset points", ha="right",
-                    fontsize=8, color="0.35")
-    ax.set_xlabel("time (s)")
-    ax.set_ylabel("chamber pressure (mbar)")
-    ax.set_title("B — Chamber pressure", fontsize=10, loc="left")
-    ax.grid(alpha=0.3, which="both")
+MAIN_ROLES = ("chamber", "temp")                      # lower, larger plot
+MAIN_SIDES = {"chamber": "left", "temp": "right"}
+TOP_ROLES = ("p20", "upstream", "current", "duty")      # upper overview
 
 
-def panel_upstream(ax, df, cols, segs):
-    ax.plot(df.t, df[cols["upstream"]], lw=1.2, color="#6a1b9a")
-    for s in segs:
-        seg = s["data"]
-        fit = np.poly1d(np.polyfit(seg.t, seg[cols["upstream"]], 1))
-        ax.plot(seg.t, fit(seg.t), ls="--", lw=1.2, color="k", alpha=0.8)
-        mid = seg.t.iloc[len(seg) // 2]
-        label = f"{s['rate_mbar_min']:+.2f} mbar/min"
-        if np.isfinite(s["mean_T"]):
-            label += f"\n(mean T {s['mean_T']:.0f} °C)"
-        ax.annotate(label, xy=(mid, fit(mid)), xytext=(0, -28),
-                    textcoords="offset points", ha="center", fontsize=8)
-    ax.set_xlabel("time (s)")
-    ax.set_ylabel("upstream pressure (bar)")
-    ax.set_title("C — Upstream pressure (steps = refill/adjustment)",
-                 fontsize=10, loc="left")
-    ax.grid(alpha=0.3)
+def make_figure(df, cols, steps, segs, outgas, title, valve=(None, [])):
+    """Supporting traces on top; larger chamber + temperature plot below.
+    Both share one time axis."""
+    has_main = any(cols.get(r) for r in MAIN_ROLES)
+    has_top = any(cols.get(r) for r in TOP_ROLES)
+    if has_main and has_top:
+        fig, (ax_t, ax_m) = plt.subplots(
+            2, 1, figsize=(14, 12), sharex=True,
+            gridspec_kw={"height_ratios": [1, 1.7]})
+    else:
+        fig, ax = plt.subplots(figsize=(14, 7 if has_main else 5.5))
+        ax_t, ax_m = (None, ax) if has_main else (ax, None)
+    fig.suptitle(title, fontsize=12, y=0.99)
 
+    if ax_t is not None:
+        panel_timeseries(ax_t, df, cols, roles=TOP_ROLES)
+        if ax_m is not None:
+            ax_t.set_xlabel("")          # shared axis: label the bottom plot only
+    main_axes = {}
+    if ax_m is not None:
+        main_axes = panel_timeseries(ax_m, df, cols, roles=MAIN_ROLES,
+                                     sides=MAIN_SIDES)
 
-def panel_chamber_vs_temp(fig, ax, df, cols, outgas):
-    base, pre, T_scale, doubling = outgas
-    sc = ax.scatter(df[cols["temp"]], df[cols["chamber"]], s=5,
-                    c=df.t, cmap="viridis", alpha=0.75)
-    ax.set_yscale("log")
-    if base is not None and np.isfinite(base):
-        ax.axhline(base, ls=":", lw=1, color="0.4")
-    if pre is not None:
-        Tg = np.linspace(df[cols["temp"]].min(), df[cols["temp"]].max(), 200)
-        ax.plot(Tg, base + pre * np.exp(Tg / T_scale), "r--", lw=1.4,
-                label=f"baseline + exp(T/{T_scale:.1f} K)\n"
-                      f"doubles every {doubling:.1f} K")
-        ax.legend(fontsize=8, loc="upper left")
-    ax.set_xlabel("TE temperature (°C)")
-    ax.set_ylabel("chamber pressure (mbar)")
-    ax.set_title("D — Chamber pressure vs temperature", fontsize=10, loc="left")
-    ax.grid(alpha=0.3, which="both")
-    fig.colorbar(sc, ax=ax, pad=0.02).set_label("time (s)", fontsize=8)
+    baseline, events = valve
+    if baseline is not None and "chamber" in main_axes:
+        main_axes["chamber"].plot(df.t, baseline, ls=":", lw=1.2,
+                                  color=COLOURS["chamber"], alpha=0.7)
+    if events:
+        hosts = [a for a in (ax_t, ax_m) if a is not None]
+        mark_valve_events(hosts, events, ax_m if ax_m is not None else ax_t)
 
-
-def make_figure(df, cols, steps, segs, outgas, title):
-    """Build a figure from whichever panels the log can support."""
-    wanted = []
-    if cols["temp"]:
-        wanted.append("A")
-    if cols["chamber"]:
-        wanted.append("B")
-    if cols["upstream"]:
-        wanted.append("C")
-    if cols["temp"] and cols["chamber"]:
-        wanted.append("D")
-
-    n = len(wanted)
-    rows, ncols = (1, 1) if n == 1 else (1, 2) if n == 2 else (2, 2)
-    fig, axes = plt.subplots(rows, ncols,
-                             figsize=(6.8 * ncols, 4.3 * rows), squeeze=False)
-    flat = axes.ravel()
-    fig.suptitle(title, fontsize=12, y=0.98)
-
-    for ax, which in zip(flat, wanted):
-        if which == "A":
-            panel_temperature(ax, df, cols, steps)
-        elif which == "B":
-            panel_chamber(ax, df, cols, outgas[0])
-        elif which == "C":
-            panel_upstream(ax, df, cols, segs)
-        elif which == "D":
-            panel_chamber_vs_temp(fig, ax, df, cols, outgas)
-    for ax in flat[n:]:
-        ax.axis("off")
-
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
     return fig
 
 
-def report(path, df, cols, steps, segs, outgas, ambient):
+def report(path, df, cols, steps, segs, outgas, ambient, valve=(None, [])):
     print(f"\nfile      : {path}")
     print(f"duration  : {df.t.iloc[-1]:.0f} s   samples: {len(df)}")
     if cols["temp"]:
@@ -381,7 +512,8 @@ def report(path, df, cols, steps, segs, outgas, ambient):
                   "(thermal resistance falling as the element gets hotter)")
 
     if segs:
-        print("\nupstream segments")
+        which = "P20, referred to 20 °C" if cols["p20"] else "raw pressure"
+        print(f"\nupstream segments ({which})")
         for s in segs:
             T = f"{s['mean_T']:5.1f} °C" if np.isfinite(s["mean_T"]) else "  n/a"
             print(f"  t {s['t0']:6.0f}-{s['t1']:<6.0f}s  "
@@ -400,6 +532,28 @@ def report(path, df, cols, steps, segs, outgas, ambient):
         print(f"excess fits exp(T/{T_scale:.1f} K), doubling every {doubling:.1f} K")
         print("  exponential in T => thermal desorption; a conductance gap "
               "opening would give a power law in (T - T_onset)")
+
+    _, events = valve
+    if cols["chamber"]:
+        print("\nvalve events (chamber pressure above fitted baseline)")
+        if not events:
+            print("  none detected")
+        for ev in events:
+            o = f"{ev['t_open']:7.1f} s" if ev["t_open"] is not None else "  (before log)"
+            c = f"{ev['t_close']:7.1f} s" if ev["t_close"] is not None else "  (after log)"
+            dur = (f"{ev['t_close'] - ev['t_open']:6.1f} s"
+                   if ev["t_open"] is not None and ev["t_close"] is not None else "    n/a")
+            print(f"  open {o}   closed {c}   open for {dur}   "
+                  f"peak {ev['peak']:.2e} mbar (baseline {ev['base']:.2e}, "
+                  f"threshold +{ev['thresh_pct']:.0f} %)")
+            if cols["temp"]:
+                temps = []
+                for key, word in (("t_open", "opened"), ("t_close", "closed")):
+                    if ev[key] is not None:
+                        i = (df.t - ev[key]).abs().idxmin()
+                        temps.append(f"{word} at {df[cols['temp']][i]:.1f} °C")
+                if temps:
+                    print("    valve temperature: " + ", ".join(temps))
 
 
 def main():
@@ -429,11 +583,9 @@ def main():
         fail(f"Could not read {args.logfile}:\n{exc}")
 
     cols = resolve_columns(raw)
-    print("\ncolumns matched")
-    for role in ("time", "temp", "chamber", "upstream", "duty"):
-        print(f"  {role:<9} -> {cols[role] or '(not found — panel skipped)'}")
 
-    if not any(cols[r] for r in ("temp", "chamber", "upstream")):
+    if not any(cols[r] for r in ("temp", "chamber", "upstream", "duty",
+                                 "current_meas", "current_calc")):
         fail("None of the expected data columns were found in this file.\n\n"
              f"Columns present:\n  {', '.join(raw.columns)}\n\n"
              "If a column simply has a new name, add a fragment of it to "
@@ -443,16 +595,25 @@ def main():
     if df.empty:
         fail("The file parsed but contains no usable rows.")
 
+    print("\ncolumns matched")
+    for role in ("time", "temp", "chamber", "upstream", "keller_temp",
+                 "current", "duty"):
+        print(f"  {role:<11} -> {cols[role] or '(not found — trace skipped)'}")
+    print(f"  {'p20':<11} -> " + ("computed from upstream / keller_temp"
+          if cols["p20"] else "(not available — raw upstream plotted)"))
+
     ambient = (df.loc[df.t < AMBIENT_WINDOW_S, cols["temp"]].mean()
                if cols["temp"] else np.nan)
     steps = fit_steps(df, cols, ambient)
     segs = upstream_segments(df, cols)
     outgas = fit_outgassing(df, cols)
 
-    report(args.logfile, df, cols, steps, segs, outgas, ambient)
+    valve = detect_valve_events(df, cols)
+
+    report(args.logfile, df, cols, steps, segs, outgas, ambient, valve)
 
     fig = make_figure(df, cols, steps, segs, outgas,
-                      args.logfile.replace("\\", "/").split("/")[-1])
+                      args.logfile.replace("\\", "/").split("/")[-1], valve)
     out = args.output or args.logfile.rsplit(".", 1)[0] + ".png"
     fig.savefig(out, dpi=150)
     print(f"\nfigure written to {out}\n")

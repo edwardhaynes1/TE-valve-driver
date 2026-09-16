@@ -110,6 +110,7 @@ import time
 import csv
 import os
 import math
+import re
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -149,10 +150,15 @@ VACUUM_INTERCEPT      = -12.75     # log10(p / mbar) at 0 V (IKR 270, mbar)
 VACUUM_GAUGE_ERROR_V  = 0.5        # gauge side: below = sensor error / no supply
 VACUUM_GAUGE_MIN_V    = 1.96       # gauge side: below = underrange (<5e-11 mbar) or not ignited
 VACUUM_GAUGE_MAX_V    = 8.6        # gauge side: above = overrange (>1e-2 mbar)
-LABJACK_AIN_SAT_V     = 2.40       # U3-LV single-ended FIO range is 0-2.44 V. A reading at
-                                   # or above this is CLIPPED, not a pressure. With the
-                                   # divider above that is ≈ 9e-4 mbar, well below the
-                                   # gauge's own 1e-2 mbar overrange. None = don't check.
+VACUUM_AIN_SPECIAL    = True       # read FIO2 on the U3-LV "special" 0-3.6 V range
+                                   # (negative channel 32) instead of the normal
+                                   # 0-2.44 V. With the 3.235 divider the gauge's full
+                                   # 8.6 V maps to 2.66 V: the normal range clips it at
+                                   # ≈ 1-2e-3 mbar, the special range doesn't.
+                                   # Cost: ~2× coarser steps (≈ 1 % in pressure).
+LABJACK_AIN_SAT_V     = 3.55 if VACUUM_AIN_SPECIAL else 2.40
+                                   # at or above this the reading is CLIPPED, not a
+                                   # pressure. None = don't check.
 
 # MAX31856 thermocouple (SPI on FIO4-7)
 TC_FIO_SDO = 4    # MAX31856 SDO  → LabJack MISO
@@ -191,6 +197,7 @@ HEATER_SENSE_TICKS    = 20         # consecutive implausible ticks before acting
 TEMP_TRIP_C           = 160.0      # latch off above this valve temperature
 HEATER_MAX_RUN_S      = 3600       # auto-disarm after this long armed (s)
 TC_BAD_READS_TO_TRIP  = 3          # consecutive bad TC reads before tripping
+TC_RETRY_S            = 5.0        # re-initialise a non-responding MAX31856 this often
 LJ_WATCHDOG_S         = 10         # U3 firmware watchdog → FIO0 low if we die
 
 # ─── Closed-loop temperature control (mode 'auto') ───────────────────────────
@@ -241,6 +248,8 @@ KELLER_PORT        = None       # None = auto-detect
 KELLER_TIMEOUT     = 0.3
 KELLER_ECHO        = True       # K-114 adapter echoes TX
 KELLER_POLL_HZ     = 4          # Keller read rate
+P20_REF_K          = 293.15     # P20 = P * P20_REF_K / T_keller — upstream pressure
+                                # referred to 20 °C, proportional to the amount of gas
 
 LOG_INTERVAL_S     = 0.5        # seconds between logged rows (drift-free)
 CHART_SECONDS      = 300        # strip-chart window for all live graphs (s)
@@ -254,7 +263,7 @@ VAC_ERROR       = "sensor error / no supply"
 VAC_UNDER       = "underrange or not yet ignited"
 VAC_OVER        = "overrange (>1e-2 mbar)"
 VAC_SATURATED   = (f"LabJack input saturated (>~{_SAT_MBAR:.0e} mbar)"
-                   if _SAT_MBAR else "LabJack input saturated")
+                   if _SAT_MBAR and _SAT_MBAR < 1e-2 else "LabJack input saturated")
 VAC_HIGH_STATES = (VAC_OVER, VAC_SATURATED)   # "pressure is too high to read"
 
 # MAX31856 register map
@@ -339,13 +348,14 @@ def _make_log_path():
 LOG_FILE = _make_log_path()
 
 # ─── Shared state ─────────────────────────────────────────────────────────────
-_lock        = threading.Lock()        # protects _state / _events / _chart
+_lock        = threading.Lock()        # protects _state / _events / chart buffers
 _stop        = threading.Event()
 _state       = dict(
     keller_pressure_samples     = [],    # accumulated between log rows, then averaged
     keller_temperature_samples  = [],    # accumulated between log rows, then averaged
     vacuum_chamber_mbar         = None,  # latest single reading
     vacuum_status               = None,  # None = valid, else VAC_* reason string
+    vacuum_gauge_V              = None,  # gauge-side signal voltage, V
     te_temperature_degC         = None,  # latest MAX31856 reading
     tc_fault                    = None,  # latest fault register (0 = OK, None = no read)
 )
@@ -384,8 +394,7 @@ _heater = dict(
     p_pinned_warned = False,
 )
 _events      = deque(maxlen=200)                            # (timestamp, text)
-_chart       = deque(maxlen=CHART_SECONDS * KELLER_POLL_HZ)     # recent upstream pressures
-_kt_chart    = deque(maxlen=CHART_SECONDS * KELLER_POLL_HZ)     # recent Keller (upstream) temperatures
+_p20_chart   = deque(maxlen=CHART_SECONDS * KELLER_POLL_HZ)     # recent upstream P20 (bar at 20 °C)
 _vac_chart   = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)  # recent vacuum readings
 _te_chart    = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)  # recent TE temperatures
 _heat_chart  = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)  # recent heater current (period mean)
@@ -509,10 +518,10 @@ def keller_thread(initial_port: str, initial_bus):
                 with _lock:
                     if p1 is not None:
                         _state['keller_pressure_samples'].append(round(p1, 4))
-                        _chart.append(p1)
                     if tob1 is not None:
                         _state['keller_temperature_samples'].append(round(tob1, 2))
-                        _kt_chart.append(tob1)
+                    if p1 is not None and tob1 is not None:
+                        _p20_chart.append(p1 * P20_REF_K / (tob1 + 273.15))
                 _stop.wait(timeout=max(0.0, interval - (time.time() - t0)))
 
         except Exception as e:
@@ -593,9 +602,20 @@ CR0_VALUE = 0x80 | 0x10 | 0x01      # = 0x91
 CR1_VALUE = 0x03                     # AVGSEL = 1 sample, TC type = K
 
 
+def _tc_readback_hint(cr0, cr1):
+    """Turn a failed CR0/CR1 readback into a likely cause."""
+    if cr0 == 0x00 and cr1 == 0x00:
+        return "reads all-zero: MAX31856 unpowered, or SDO (FIO4) not connected / shorted to GND"
+    if cr0 == 0xFF and cr1 == 0xFF:
+        return "reads all-ones: SDO (FIO4) floating or pulled high — chip absent or unpowered"
+    return "reads garbage: check SCK/SDI/CS (FIO5-7) wiring, connector seating and ground"
+
+
 def _tc_init(lj):
-    """Configure MAX31856 for automatic conversion, Type-K. Returns True if the
-    register readback confirms SPI communication is working.
+    """Configure MAX31856 for automatic conversion, Type-K.
+
+    Returns (ok, cr0, cr1): ok is True if the register readback confirms SPI
+    communication is working; cr0/cr1 are what was read back.
 
     Open-circuit fault detection is deliberately ENABLED here. Without it a
     detached thermocouple returns a plausible-looking number rather than a
@@ -606,7 +626,26 @@ def _tc_init(lj):
     time.sleep(0.3)                    # allow first conversion + OC check
     cr0 = _tc_read_reg(lj, REG_CR0)
     cr1 = _tc_read_reg(lj, REG_CR1)
-    return (cr0 == CR0_VALUE and cr1 == CR1_VALUE)
+    return (cr0 == CR0_VALUE and cr1 == CR1_VALUE), cr0, cr1
+
+
+def _tc_try_init(lj, announce_failure):
+    """Initialise the MAX31856, logging the outcome. Returns True on success.
+    Failures are logged only if announce_failure, so retries don't spam."""
+    try:
+        ok, cr0, cr1 = _tc_init(lj)
+    except Exception as e:
+        if announce_failure:
+            log_event(f"MAX31856 init error: {e} — retrying every {TC_RETRY_S:g} s")
+        return False
+    if ok:
+        log_event("MAX31856 thermocouple init OK")
+        return True
+    if announce_failure:
+        log_event(f"MAX31856 not responding: CR0=0x{cr0:02X} CR1=0x{cr1:02X} "
+                  f"(expected 0x{CR0_VALUE:02X}/0x{CR1_VALUE:02X}) — "
+                  f"{_tc_readback_hint(cr0, cr1)}. Retrying every {TC_RETRY_S:g} s")
+    return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -927,7 +966,8 @@ def labjack_thread():
             sense = "".join(f" · FIO{ch} {nm}" for nm, ch in
                             (("V-sense", HEATER_V_AIN), ("I-sense", HEATER_I_AIN))
                             if ch is not None)
-            log_event(f"LabJack connected  FIO0 heater · FIO2 analog{sense} · FIO4-7 SPI")
+            rng = "0-3.6 V" if VACUUM_AIN_SPECIAL else "0-2.44 V"
+            log_event(f"LabJack connected  FIO0 heater · FIO2 analog ({rng}){sense} · FIO4-7 SPI")
         except Exception as e:
             _labjack_ok = False
             _tc_ok = False
@@ -936,16 +976,9 @@ def labjack_thread():
             continue
 
         # ── initialise the thermocouple IC ─────────────────────────────────
-        try:
-            if _tc_init(lj):
-                _tc_ok = True
-                log_event("MAX31856 thermocouple init OK")
-            else:
-                _tc_ok = False
-                log_event("MAX31856 did not respond — check FIO4-7 wiring")
-        except Exception as e:
-            _tc_ok = False
-            log_event(f"MAX31856 init error: {e}")
+        _tc_ok       = _tc_try_init(lj, announce_failure=True)
+        tc_announced = not _tc_ok      # failure already logged
+        tc_next_try  = time.time() + TC_RETRY_S
 
         # ── tick loop — breaks on error to trigger reconnect ───────────────
         next_sensor  = 0.0          # time.time() of the next sensor read
@@ -1016,7 +1049,8 @@ def labjack_thread():
 
                     # vacuum gauge (analogue)
                     try:
-                        raw  = lj.getAIN(LABJACK_FIO2_CHANNEL)
+                        raw  = lj.getAIN(LABJACK_FIO2_CHANNEL,
+                                         32 if VACUUM_AIN_SPECIAL else 31)
                         mbar = _voltage_to_vacuum_mbar(raw)
                         status = _vacuum_gauge_status(raw)
                         if status != vac_status:
@@ -1030,12 +1064,23 @@ def labjack_thread():
                         with _lock:
                             _state['vacuum_chamber_mbar'] = mbar
                             _state['vacuum_status']       = status
+                            _state['vacuum_gauge_V']      = raw * VACUUM_DIVIDER_RATIO
                             _vac_chart.append(mbar)
                         bad_vac_reads = 0 if mbar is not None else bad_vac_reads + 1
                         _labjack_ok = True
                     except Exception as e:
                         log_event(f"LabJack vacuum read error: {e}")
                         break   # reconnect the whole device
+
+                    # thermocouple not talking: retry init periodically.
+                    # (_tc_init blocks ~0.3 s; harmless, as the heater is
+                    # already forced off whenever the thermocouple is down.)
+                    if not _tc_ok and t0 >= tc_next_try:
+                        tc_next_try = t0 + TC_RETRY_S
+                        _tc_ok = _tc_try_init(lj, announce_failure=not tc_announced)
+                        tc_announced = not _tc_ok
+                        if _tc_ok:
+                            bad_tc_reads = 0
 
                     # thermocouple (SPI) — only if init succeeded
                     if _tc_ok:
@@ -1055,7 +1100,10 @@ def labjack_thread():
                             with _lock:
                                 _state['te_temperature_degC'] = None
                                 _state['tc_fault'] = None
-                            log_event(f"MAX31856 read error: {e}")
+                            log_event(f"MAX31856 read error: {e} — "
+                                      f"re-initialising every {TC_RETRY_S:g} s")
+                            tc_announced = True
+                            tc_next_try  = t0 + TC_RETRY_S
 
                     # ── control law ────────────────────────────────────────
                     with _lock:
@@ -1101,6 +1149,7 @@ def labjack_thread():
                 _state['te_temperature_degC']   = None
                 _state['tc_fault']              = None
                 _state['vacuum_status']         = None
+                _state['vacuum_gauge_V']        = None
             with _heater_lock:
                 _heater['armed']       = False
                 _heater['duty_cmd']    = 0.0
@@ -1257,6 +1306,9 @@ BORDER = "#2a2a2a"
 WARN   = "#ff4040"
 GRID   = "#1a1a1a"
 REF    = "#8a8a8a"   # dashed target / setpoint lines
+TEMP_LINE = "#ff2a2a"   # TE valve temperature curve (red)
+VAC_LINE  = "#2f8cff"   # vacuum chamber pressure curve (blue)
+P20_LINE  = "#7ed957"   # upstream P20 curve (light green)
 
 # Operator-facing mode names. Internal values (and the CSV heater_mode
 # column) stay 'manual' / 'auto' / 'pressure'.
@@ -1271,7 +1323,9 @@ class TEGui:
         self.root = tk.Tk()
         self.root.title("TE Valve — Live Log")
         self.root.configure(bg=BG)
-        self.root.geometry("800x1100")
+        screen_h = self.root.winfo_screenheight()
+        self.root.geometry(f"800x{max(600, min(1100, screen_h - 90))}+20+10")
+        self.root.minsize(700, 600)
         self.root.protocol("WM_DELETE_WINDOW", self.shutdown)
 
         M = ("Consolas", "Menlo", "Courier New", "DejaVu Sans Mono", "monospace")
@@ -1286,11 +1340,15 @@ class TEGui:
         return tkfont.Font(family=fam, size=size, weight=weight)
 
     def _chart(self, parent, title):
-        tk.Label(parent, text=f"─── {title}  last {CHART_SECONDS}s",
-                 font=self.f, fg=DIM, bg=BG, anchor="w").pack(fill="x")
-        c = tk.Canvas(parent, bg=BG, height=90,
+        # Title is drawn inside the graph (saves a text row per graph). Small
+        # requested height + expand: the graphs share whatever height the
+        # window has left, instead of pushing the event log off-screen.
+        row = len(parent.grid_slaves())
+        c = tk.Canvas(parent, bg=BG, height=30,
                       highlightbackground=BORDER, highlightthickness=1)
-        c.pack(fill="both", expand=True)
+        c.grid(row=row, column=0, sticky="nsew", pady=(0, 3))
+        parent.rowconfigure(row, weight=1, uniform="charts")   # equal share, shrink evenly
+        c.title = f"{title}  ·  last {CHART_SECONDS}s"
         return c
 
     def _build_log_window(self):
@@ -1298,7 +1356,7 @@ class TEGui:
         outer.pack(fill="both", expand=True, padx=8, pady=8)
 
         self.status_text = tk.Text(outer, bg=BG, fg=TEXT, font=self.f,
-                                   height=11, bd=0, highlightthickness=0,
+                                   height=12, bd=0, highlightthickness=0,
                                    state="disabled", wrap="none", cursor="arrow")
         self.status_text.pack(fill="x")
         self.status_text.tag_config("bright", foreground=BRIGHT)
@@ -1308,23 +1366,25 @@ class TEGui:
 
         self._build_heater_panel(outer)
 
-        i_src = "measured" if HEATER_I_AIN is not None else "calculated"
-        self.canvas     = self._chart(outer, "upstream pressure (bar)")
-        self.kt_canvas  = self._chart(outer, "upstream temperature (Keller, °C)")
-        self.vac_canvas = self._chart(outer, "vacuum chamber (mbar, log)   dashed = target")
-        self.te_canvas  = self._chart(outer, "TE valve temperature (°C)   dashed = setpoint")
-        self.heat_canvas = self._chart(
-            outer, f"heater current (A, {i_src}, {HEATER_PWM_PERIOD_S:g} s mean)")
-
-        tk.Label(outer, text="─── event log",
-                 font=self.f, fg=DIM, bg=BG, anchor="w").pack(fill="x")
-        self.logtext = tk.Text(outer, bg=BG, fg=TEXT, font=self.f,
-                               height=6, bd=0, highlightthickness=0,
-                               state="disabled", wrap="none", cursor="arrow")
-        self.logtext.pack(fill="both", expand=True)
-
+        # Bottom block is packed BEFORE the graphs so it always keeps its space.
         tk.Label(outer, text=f"─── log: {LOG_FILE}",
-                 font=self.f, fg=DIM, bg=BG, anchor="w").pack(fill="x")
+                 font=self.f, fg=DIM, bg=BG, anchor="w").pack(side="bottom", fill="x")
+        self.logtext = tk.Text(outer, bg=BG, fg=TEXT, font=self.f,
+                               height=7, bd=0, highlightthickness=0,
+                               state="disabled", wrap="word", cursor="arrow")
+        self.logtext.pack(side="bottom", fill="x")
+        tk.Label(outer, text="─── event log",
+                 font=self.f, fg=DIM, bg=BG, anchor="w").pack(side="bottom", fill="x")
+
+        charts = tk.Frame(outer, bg=BG)
+        charts.pack(fill="both", expand=True)
+        charts.columnconfigure(0, weight=1)
+        i_src = "measured" if HEATER_I_AIN is not None else "calculated"
+        self.p20_canvas = self._chart(charts, "upstream P20 (bar, referred to 20 °C)")
+        self.vac_canvas = self._chart(charts, "vacuum chamber (mbar, log)   dashed = target")
+        self.te_canvas  = self._chart(charts, "TE valve temperature (°C)   dashed = setpoint")
+        self.heat_canvas = self._chart(
+            charts, f"heater current (A, {i_src}, {HEATER_PWM_PERIOD_S:g} s mean)")
 
     # ── heater panel ──────────────────────────────────────────────────────
     def _entry(self, parent, label, initial, width=8):
@@ -1497,7 +1557,8 @@ class TEGui:
             log_event(f"Heater update — no change ({self._active_summary()})")
 
     def _draw_chart(self, canvas, data, fmt="{:.3f}", log=False,
-                    ref=None, floor=None):
+                    ref=None, floor=None, min_span=None,
+                    color=BRIGHT, width=1):
         """Draw a strip chart on *canvas*.
 
         data  : sequence of values (oldest → newest)
@@ -1507,16 +1568,26 @@ class TEGui:
         ref   : optional reference value (target / setpoint), drawn dashed and
                 always kept inside the y-range
         floor : optional (lo, hi) the y-range will always include
+        min_span : smallest y-range shown (plot units; decades if log), so
+                sensor quantisation isn't magnified into apparent swings.
+                Tick labels gain decimals automatically if they'd repeat.
+        color : line colour of the data curve
+        width : line width of the data curve, px
         """
         c = canvas
         c.delete("all")
         w = c.winfo_width() or 580
         h = c.winfo_height() or 90
-        pad_l, pad_r, pad_y = 74, 8, 6
+        pad_l, pad_r, pad_y = 74, 8, 8
+        n_div = 4 if h >= 110 else (2 if h >= 55 else 1)   # label rows that fit
 
-        for i in range(1, 4):
-            y = pad_y + (h - 2 * pad_y) * i / 4
+        for i in range(1, n_div):
+            y = pad_y + (h - 2 * pad_y) * i / n_div
             c.create_line(pad_l, y, w - pad_r, y, fill=GRID)
+        title = getattr(c, "title", "")
+        if title:
+            c.create_text(pad_l + 6, 2, text=title, fill=DIM, font=self.f,
+                          anchor="nw", tags="title")
 
         if log:
             plot_vals = [math.log10(v) for v in data if v is not None and v > 0]
@@ -1548,20 +1619,28 @@ class TEGui:
             lo, hi = min(lo, ref_p), max(hi, ref_p)
         if floor is not None:
             lo, hi = min(lo, floor[0]), max(hi, floor[1])
-        if hi - lo < 1e-9:
-            lo -= 0.5
-            hi += 0.5
+        need = max(min_span or 0.0, 1e-9)
+        if hi - lo < need:
+            mid = (hi + lo) / 2
+            lo, hi = mid - need / 2, mid + need / 2
         span = hi - lo
         n = len(plot_vals)
 
         def ypix(v):
             return (h - pad_y) - (h - 2 * pad_y) * (v - lo) / span
 
-        for i in range(5):
-            frac = i / 4
-            plot_val = lo + span * frac
-            real_val = (10 ** plot_val) if log else plot_val
-            c.create_text(pad_l - 4, ypix(plot_val), text=fmt.format(real_val),
+        ticks = [lo + span * i / n_div for i in range(n_div + 1)]
+        reals = [(10 ** v) if log else v for v in ticks]
+        m = re.search(r"\.(\d+)([fe])", fmt)
+        labels = [fmt.format(v) for v in reals]
+        if m:
+            for extra in range(1, 4):              # add digits until labels differ
+                if len(set(labels)) == len(labels):
+                    break
+                f2 = "{:." + str(int(m.group(1)) + extra) + m.group(2) + "}"
+                labels = [f2.format(v) for v in reals]
+        for v, text in zip(ticks, labels):
+            c.create_text(pad_l - 4, ypix(v), text=text,
                           fill=DIM, font=self.f, anchor="e")
 
         if ref_p is not None:
@@ -1571,7 +1650,8 @@ class TEGui:
         pts = []
         for i, v in enumerate(plot_vals):
             pts.extend((pad_l + (w - pad_l - pad_r) * i / (n - 1), ypix(v)))
-        c.create_line(*pts, fill=BRIGHT, width=1)
+        c.create_line(*pts, fill=color, width=width)
+        c.tag_raise("title")
 
     def _heater_vi_lines(self, h):
         """Return [(label, value, note, value_tag)] for the V and I readouts."""
@@ -1612,10 +1692,10 @@ class TEGui:
             t       = (sum(t_samp) / len(t_samp)) if t_samp else None
             vac     = _state['vacuum_chamber_mbar']
             vac_st  = _state['vacuum_status']
+            vac_u   = _state['vacuum_gauge_V']
             te_temp = _state['te_temperature_degC']
             fault   = _state['tc_fault']
-            chart      = list(_chart)
-            kt_chart   = list(_kt_chart)
+            p20_chart  = list(_p20_chart)
             vac_chart  = list(_vac_chart)
             te_chart   = list(_te_chart)
             heat_chart = list(_heat_chart)
@@ -1627,7 +1707,10 @@ class TEGui:
         t_s  = f"{t:.1f} °C"       if t       is not None else "---"
         v_s  = f"{vac:.2e} mbar"   if vac     is not None else "---"
         te_s = f"{te_temp:.2f} °C" if te_temp is not None else "---"
+        p20  = p * P20_REF_K / (t + 273.15) if (p is not None and t is not None) else None
+        p20_s = f"{p20:.4f} bar" if p20 is not None else "---"
         vac_note = f"  [{vac_st}]" if (vac is None and vac_st) else ""
+        vac_volt = f"  ({vac_u:.2f} V at gauge)" if vac_u is not None else ""
 
         # thermocouple fault annotation
         fault_note = ""
@@ -1653,9 +1736,12 @@ class TEGui:
                   "bright" if p is not None else "dim")
         st.insert("end", "UPSTREAM T   ", "dim") ; st.insert("end", t_s + "\n",
                   "bright" if t is not None else "dim")
+        st.insert("end", "UPSTREAM P20 ", "dim") ; st.insert("end", p20_s, "bright" if p20 is not None else "dim")
+        st.insert("end", "  (at 20 °C)\n", "dim")
         st.insert("end", "VACUUM       ", "dim")
         st.insert("end", v_s, "bright" if vac is not None else "dim")
-        st.insert("end", vac_note + "\n", "err" if vac_note else "dim")
+        st.insert("end", vac_note, "err")
+        st.insert("end", vac_volt + "\n", "dim")
         st.insert("end", "TE VALVE T   ", "dim")
         st.insert("end", te_s, "bright" if te_temp is not None else "dim")
         st.insert("end", fault_note + "\n", "err" if fault_note else "dim")
@@ -1706,10 +1792,12 @@ class TEGui:
         te_ref  = h['setpoint_C'] if (h['armed'] and mode != 'manual') else None
         i_full  = HEATER_V_RAIL / HEATER_R_OHM
 
-        self._draw_chart(self.canvas,      chart,      fmt="{:.3f}")
-        self._draw_chart(self.kt_canvas,   kt_chart,   fmt="{:.1f}")
-        self._draw_chart(self.vac_canvas,  vac_chart,  fmt="{:.1e}", log=True, ref=vac_ref)
-        self._draw_chart(self.te_canvas,   te_chart,   fmt="{:.1f}", ref=te_ref)
+        self._draw_chart(self.p20_canvas,  p20_chart,  fmt="{:.3f}", min_span=0.005,
+                         color=P20_LINE, width=2)
+        self._draw_chart(self.vac_canvas,  vac_chart,  fmt="{:.1e}", log=True, ref=vac_ref,
+                         min_span=0.05, color=VAC_LINE, width=2)
+        self._draw_chart(self.te_canvas,   te_chart,   fmt="{:.1f}", ref=te_ref, min_span=0.5,
+                         color=TEMP_LINE, width=2)
         self._draw_chart(self.heat_canvas, heat_chart, fmt="{:.3f}",
                          floor=(0.0, 1.05 * i_full))
 
