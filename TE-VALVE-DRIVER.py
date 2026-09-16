@@ -339,6 +339,22 @@ PRESSURE_FF_EFOLD_K     = 3.2      # K per e-fold (×2 every 2.2 K)
 PRESSURE_FF_FRACTION    = 0.8      # aim for this share of the rise
 PRESSURE_FF_MAX_C       = 55.0     # never aim the seek higher than this
 
+# Upstream-pressure shift. Upstream pressure pushes the seat open, so every
+# temperature pressure mode uses (seek start and goal, the parking and
+# floor temperatures) moves down as upstream pressure rises:
+#     shift = −PRESSURE_UP_K_PER_BAR · (P_upstream − PRESSURE_UP_REF_BAR)
+# Evidence: the 6 May 2026 test (Thermo-LeakvalveV2, fixed flow) fitted
+# T ≈ 136 °C − 60 K·ln(P/bar), i.e. −21 K/bar near 2.8 bar; on 16 Sept 2026
+# the opening temperature rose from ~40.3 °C (2.87 bar, morning) to
+# ~41.3 °C (2.77 bar, afternoon), i.e. ~−10 K/bar on this setup. 12 K/bar is
+# used until a test at deliberately different upstream pressures pins it
+# down. Uses the raw Keller pressure (absolute), not P20.
+PRESSURE_UP_ENABLE      = True
+PRESSURE_UP_REF_BAR     = 2.76     # upstream pressure the map and temperatures above refer to
+PRESSURE_UP_K_PER_BAR   = 12.0     # K of shift per bar
+PRESSURE_UP_MAX_SHIFT_K = 10.0     # clamp: the correction is only a local fit
+PRESSURE_UP_MAX_AGE_S   = 5.0      # ignore Keller readings older than this
+
 # Burst — from a cool start, heat at full power until the TC reaches
 # PRESSURE_BURST_BRAKE_K below the seek goal, then coast (heater off) until
 # the TC peaks, then seek.
@@ -498,6 +514,8 @@ _state       = dict(
     vacuum_gauge_V              = None,  # gauge-side signal voltage, V
     te_temperature_degC         = None,  # latest MAX31856 reading
     tc_fault                    = None,  # latest fault register (0 = OK, None = no read)
+    keller_pressure_bar         = None,  # latest single upstream reading (absolute)
+    keller_pressure_t           = None,  # time of that reading
 )
 
 # ─── Heater command / status (protected by _heater_lock) ──────────────────────
@@ -537,6 +555,9 @@ _heater = dict(
     p_band_since    = None,    # seek: when the TC first reached the seek band
     p_creep         = 0.0,     # seek: °C added by the creep on top of the goal
     p_goal          = None,    # seek: current goal temperature (for display/logging)
+    p_shift         = 0.0,     # upstream-pressure shift applied to all temperatures, K
+    p_shift_logged  = None,    # last shift reported in the event log
+    p_up_bar        = None,    # upstream pressure the shift was computed from
     p_burst         = None,    # seek: None, 'burst', 'coast'
     t_check         = False,   # auto: re-evaluate a burst (armed / setpoint changed)
     t_burst         = None,    # auto: None, 'burst', 'coast'
@@ -677,6 +698,8 @@ def keller_thread(initial_port: str, initial_bus):
                 with _lock:
                     if p1 is not None:
                         _state['keller_pressure_samples'].append(round(p1, 4))
+                        _state['keller_pressure_bar'] = p1
+                        _state['keller_pressure_t']   = t0
                     if tob1 is not None:
                         _state['keller_temperature_samples'].append(round(tob1, 2))
                     if p1 is not None and tob1 is not None:
@@ -691,6 +714,7 @@ def keller_thread(initial_port: str, initial_bus):
         with _lock:
             _state['keller_pressure_samples']    = []
             _state['keller_temperature_samples'] = []
+            _state['keller_pressure_bar']        = None
 
         if _stop.is_set():
             break
@@ -1032,14 +1056,27 @@ def _pressure_outer_loop(vac, temp, dt):
     tsp_hi = min(PRESSURE_TSP_MAX_C, TEMP_TRIP_C - 5.0)
     now    = time.time()
     msgs   = []
+    with _lock:                         # never held together with _heater_lock
+        p_up, p_up_t = _state['keller_pressure_bar'], _state['keller_pressure_t']
+    if p_up is not None and (p_up_t is None or now - p_up_t > PRESSURE_UP_MAX_AGE_S):
+        p_up = None
+    shift = _upstream_shift(p_up)
 
     with _heater_lock:
         h = _heater
+        h['p_shift'], h['p_up_bar'] = shift, p_up
+        starting = h['p_init'] or h['p_filt'] is None     # start-up logs it itself
+        if PRESSURE_UP_ENABLE and not starting and (
+                h['p_shift_logged'] is None or abs(shift - h['p_shift_logged']) >= 0.5):
+            h['p_shift_logged'] = shift
+            msgs.append(f"Pressure loop: upstream {p_up:.3f} bar → temperatures shifted "
+                        f"{shift:+.1f} K" if p_up is not None else
+                        "Pressure loop: no upstream pressure reading — no upstream shift")
 
         # ── (re)start: always begin by seeking ────────────────────────────
         if h['p_init'] or h['p_filt'] is None:
-            warm  = temp > PRESSURE_SEEK_START_C + PRESSURE_SEEK_BAND_C
-            start = min(tsp_hi, max(PRESSURE_SEEK_START_C, temp))
+            warm  = temp > PRESSURE_SEEK_START_C + shift + PRESSURE_SEEK_BAND_C
+            start = min(tsp_hi, max(PRESSURE_SEEK_START_C + shift, temp))
             h['p_hist'].clear()
             h['p_hist'].append((now, y))
             burst = PRESSURE_BURST_ENABLE and temp <= PRESSURE_BURST_MAX_START_C
@@ -1052,6 +1089,11 @@ def _pressure_outer_loop(vac, temp, dt):
                      p_seek_capped=False, p_base=None,
                      p_warned_target=None,
                      p_pinned_since=None, p_pinned_warned=False)
+            if PRESSURE_UP_ENABLE:
+                msgs.append("Pressure loop: upstream "
+                            + (f"{p_up:.3f} bar → temperatures shifted {shift:+.1f} K"
+                               if p_up is not None else "pressure unavailable — no shift"))
+                h['p_shift_logged'] = shift
             if h['p_burst']:
                 msgs.append(f"Pressure loop: full power until "
                             f"{PRESSURE_BURST_BRAKE_K:g} K below the goal (≥ {start:.1f} °C, "
@@ -1063,7 +1105,7 @@ def _pressure_outer_loop(vac, temp, dt):
             if warm:
                 msgs.append(f"Pressure loop: valve already at {temp:.1f} °C — if it is "
                             f"open, the baseline will include flow. Let it cool below "
-                            f"{PRESSURE_SEEK_START_C:g} °C for a clean baseline")
+                            f"{PRESSURE_SEEK_START_C + shift:.1f} °C for a clean baseline")
         else:
             h['p_filt'] += dt / (PRESSURE_FILTER_S + dt) * (y - h['p_filt'])
 
@@ -1095,7 +1137,7 @@ def _pressure_outer_loop(vac, temp, dt):
                     # it, so park safely below the cracking point (resumes if raised).
                     if h['p_burst']:
                         h.update(p_burst=None, p_override=None)
-                    h.update(setpoint_C=min(tsp, PRESSURE_HOLD_SHUT_C), p_creep=0.0,
+                    h.update(setpoint_C=min(tsp, PRESSURE_HOLD_SHUT_C + shift), p_creep=0.0,
                              p_ramping=False, p_band_since=None)
                 else:
                     goal = min(tsp_hi, _seek_goal(h))
@@ -1137,16 +1179,25 @@ def _pressure_outer_loop(vac, temp, dt):
     return tsp
 
 
+def _upstream_shift(p_up):
+    """Temperature shift for upstream pressure p_up (bar abs.), K."""
+    if not PRESSURE_UP_ENABLE or p_up is None:
+        return 0.0
+    shift = -PRESSURE_UP_K_PER_BAR * (p_up - PRESSURE_UP_REF_BAR)
+    return max(-PRESSURE_UP_MAX_SHIFT_K, min(PRESSURE_UP_MAX_SHIFT_K, shift))
+
+
 def _seek_goal(h):
     """Seek goal temperature: PRESSURE_SEEK_START_C, raised by the feedforward
-    map for targets above the minimum flow (caller holds _heater_lock)."""
+    map for larger targets, plus the upstream-pressure shift
+    (caller holds _heater_lock)."""
     goal = PRESSURE_SEEK_START_C
     if PRESSURE_FF_ENABLE and h['p_base'] is not None:
         rise = h['p_target_mbar'] - 10 ** h['p_base']
         if rise > 0:
             goal = max(goal, PRESSURE_FF_REF_C + PRESSURE_FF_EFOLD_K * math.log(
                 PRESSURE_FF_FRACTION * rise / PRESSURE_FF_REF_RISE_MBAR))
-    return min(goal, PRESSURE_FF_MAX_C)
+    return min(goal + h['p_shift'], PRESSURE_FF_MAX_C)
 
 
 def _burst_step(h, temp, tsp, now, msgs):
@@ -1190,19 +1241,19 @@ def _check_target(h, msgs):
         if tgt <= base and h['p_phase'] == 'seek':
             msgs.append(f"Pressure loop: target {tgt:.2e} mbar is at or below the "
                         f"chamber baseline {base:.2e} mbar — keeping the valve shut "
-                        f"at {PRESSURE_HOLD_SHUT_C:g} °C. "
+                        f"at {PRESSURE_HOLD_SHUT_C + h['p_shift']:.1f} °C. "
                         f"The lowest holdable pressure is ≈ {lowest:.1e} mbar")
         else:
             msgs.append(f"Pressure loop: target {tgt:.2e} mbar is below the lowest "
                         f"pressure the valve can hold once open (baseline {base:.2e} + "
                         f"step ~{PRESSURE_MIN_STEP_MBAR:.1e} ≈ {lowest:.1e} mbar) — "
                         f"expect it to sit above target at the "
-                        f"{PRESSURE_OPEN_FLOOR_C:g} °C floor")
+                        f"{PRESSURE_OPEN_FLOOR_C + h['p_shift']:.1f} °C floor")
 
 
 def _pressure_track(h, s, tsp_hi, now, dt, msgs):
     """TRACK step of the outer loop (caller holds _heater_lock)."""
-    tsp_lo = max(PRESSURE_TSP_MIN_C, PRESSURE_OPEN_FLOOR_C)
+    tsp_lo = max(PRESSURE_TSP_MIN_C, PRESSURE_OPEN_FLOOR_C + h['p_shift'])
     r   = math.log10(h['p_target_mbar'])
     err = r - h['p_filt']
     h['p_err'] = err
@@ -2229,19 +2280,20 @@ class TEGui:
             else:
                 step = "heating"
             self.loop_status.configure(
-                text=f"auto (P) seeking · valve shut · {step} · goal {h['p_goal']:.1f} · "
+                text=f"auto (P) seeking · valve shut · {step} · goal {h['p_goal']:.1f} "
+                     f"(upstream shift {h['p_shift']:+.1f} K) · "
                      f"T_sp {h['setpoint_C']:.2f} °C · "
                      f"baseline {base} · target {h['p_target_mbar']:.2e} mbar{low}",
                 fg=WARN if (h['p_seek_capped'] or low) else BRIGHT)
         else:
             tsp_hi = min(PRESSURE_TSP_MAX_C, TEMP_TRIP_C - 5.0)
-            floor  = max(PRESSURE_TSP_MIN_C, PRESSURE_OPEN_FLOOR_C)
+            floor  = max(PRESSURE_TSP_MIN_C, PRESSURE_OPEN_FLOOR_C + h['p_shift'])
             lowest = 10 ** h['p_base'] + PRESSURE_MIN_STEP_MBAR
             if h['p_target_mbar'] < lowest:
                 self.loop_status.configure(
                     text=f"auto (P) · target {h['p_target_mbar']:.2e} is BELOW the lowest "
                          f"holdable ≈ {lowest:.1e} (baseline {10 ** h['p_base']:.2e} + "
-                         f"min. flow) — holding minimum flow at the {floor:g} °C floor · "
+                         f"min. flow) — holding minimum flow at the {floor:.1f} °C floor · "
                          f"now {10 ** h['p_filt']:.2e}",
                     fg=WARN)
             else:
@@ -2249,7 +2301,7 @@ class TEGui:
                     text=f"auto (P) · target {h['p_target_mbar']:.2e} · "
                          f"baseline {10 ** h['p_base']:.2e} · "
                          f"filt {10 ** h['p_filt']:.2e} · err {h['p_err']:+.2f} dec · "
-                         f"T_sp {floor:g}-{tsp_hi:g} °C",
+                         f"T_sp {floor:.1f}-{tsp_hi:g} °C · upstream shift {h['p_shift']:+.1f} K",
                     fg=WARN if h['p_pinned_since'] else BRIGHT)
 
         vac_ref = h['p_target_mbar'] if mode == 'pressure' else None
