@@ -302,10 +302,12 @@ def fit_outgassing(df, cols, baseline_T=70.0):
 def detect_valve_events(df, cols):
     """Find when the chamber pressure leaves and returns to its baseline.
 
-    The baseline is a low-order fit of log10(p) against time, refitted with
-    the elevated points excluded until it settles, so a slow pump-down drift
-    is followed. The valve counts as open while log10(p) is more than
-    max(VALVE_MIN_RISE_DEC, VALVE_NOISE_SIGMAS * noise) above it.
+    The baseline is a low-order fit of log10(p) against time. It starts from
+    the lowest quarter of the trace and is refitted with the elevated points
+    excluded until it settles, so a slow pump-down drift is followed even if
+    the valve is open for most of the log. Noise comes from sample-to-sample
+    differences. The valve counts as open while log10(p) is more than
+    max(VALVE_MIN_RISE_DEC, VALVE_NOISE_SIGMAS * noise) above the baseline.
 
     Returns (baseline_mbar as a Series aligned to df, or None,
              list of dicts with t_open / t_close; None = outside the log)."""
@@ -319,13 +321,19 @@ def detect_valve_events(df, cols):
     t = df.t.to_numpy()[ok]
     y = np.log10(p.to_numpy()[ok])
 
-    quiet = np.ones(len(y), bool)
-    for _ in range(10):
+    # Noise from sample-to-sample differences: a valve opening is a handful
+    # of large steps among many small ones, so it barely moves this estimate
+    # even when the valve is open for most of the log.
+    d = np.diff(y)
+    sigma = 1.4826 * np.median(np.abs(d - np.median(d))) / np.sqrt(2)
+    thresh = max(VALVE_MIN_RISE_DEC, VALVE_NOISE_SIGMAS * sigma)
+
+    # Start from the lowest part of the trace (the valve only adds gas),
+    # then refit with everything clearly above the baseline left out.
+    quiet = y <= np.percentile(y, 25)
+    for _ in range(20):
         coef = np.polyfit(t[quiet], y[quiet], VALVE_BASELINE_DEG)
         resid = y - np.polyval(coef, t)
-        r = resid[quiet]
-        sigma = 1.4826 * np.median(np.abs(r - np.median(r)))
-        thresh = max(VALVE_MIN_RISE_DEC, VALVE_NOISE_SIGMAS * sigma)
         new_quiet = resid < thresh / 2      # keep the tails out of the fit too
         if new_quiet.sum() < 10 or np.array_equal(new_quiet, quiet):
             break
@@ -370,7 +378,8 @@ def mark_valve_events(axes, events, label_ax):
                 ax.axvline(x, ls="--", lw=1.2, color=VALVE_LINE_COLOUR, zorder=5)
             label_ax.text(x, 0.98, f" {word} {x:.1f} s ", transform=trans,
                           rotation=90, ha="right", va="top", fontsize=8,
-                          color=VALVE_LINE_COLOUR, zorder=6)
+                          color=VALVE_LINE_COLOUR, zorder=6,
+                          bbox=dict(fc="white", ec="none", alpha=0.8, pad=1))
 
 
 # ---------------------------------------------------------------------------

@@ -208,8 +208,17 @@ LJ_WATCHDOG_S         = 10         # U3 firmware watchdog → FIO0 low if we die
 # These gains were chosen by simulation across ±30-40 % plant variation,
 # thermocouple lag up to 20 s and 2.5× sensor noise: overshoot ≤ 0.4 °C,
 # 30 °C step settled to ±1 °C in ~1.5 min nominal, ≤ 3 min worst case.
-PID_KP                = 0.050      # duty per °C of error
-PID_KI                = 0.0010     # duty per °C·s of accumulated error (Ti = 50 s)
+#
+# Retuned 16 Sept 2026 from log te-sensor_20260916_100306 (11 °C step to
+# ~43 °C). A two-node model (element 45 s + body 150 s, ~50/50, thermocouple
+# lag ~4 s) matched that run within ~0.7 K. Kp and Ki raised by 30 %, Ti kept
+# at 50 s. Simulated: within 1 K in 23 s (was 33 s), within ±0.3 K in 45 s
+# (was 62 s), overshoot ~0.05 K nominal, ~0.7 K if the thermocouple is twice
+# as laggy. Kp 0.08 was faster still but reached ~1.1 K overshoot in that
+# case — too much when the setpoint sits near the valve's cracking point.
+# Previous values: Kp 0.050, Ki 0.0010. Verify with a test step.
+PID_KP                = 0.065      # duty per °C of error
+PID_KI                = 0.0013     # duty per °C·s of accumulated error (Ti = 50 s)
 PID_KD                = 0.0        # duty per °C/s, acts on the MEASUREMENT (no
                                    # setpoint kick). 0 = PI, recommended here: in
                                    # simulation D bought a few seconds of settling
