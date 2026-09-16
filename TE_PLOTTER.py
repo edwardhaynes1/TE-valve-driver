@@ -6,8 +6,7 @@ Plot and characterise a TE-Valve sensor log.
 
 Panels (only those whose data is present are drawn):
   A  Supporting traces vs time, each on its own y-axis:
-       upstream P20 (light green), heater current (orange),
-       heater duty (yellow)
+       upstream P20 (light green) and heater current (orange)
        upstream P20 is the upstream pressure referred to 20 °C,
        P20 = P * 293.15 K / T_Keller, which is proportional to the amount
        of gas. Falls back to raw upstream pressure if no Keller temperature.
@@ -457,7 +456,8 @@ def panel_timeseries(ax, df, cols, roles=None, sides=None):
 
 MAIN_ROLES = ("chamber", "temp")                      # lower, larger plot
 MAIN_SIDES = {"chamber": "left", "temp": "right"}
-TOP_ROLES = ("p20", "upstream", "current", "duty")      # upper overview
+TOP_ROLES = ("p20", "upstream", "current")              # upper overview (duty
+                                                       # omitted: current tracks it)
 
 
 def make_figure(df, cols, steps, segs, outgas, title, valve=(None, [])):
