@@ -20,10 +20,12 @@ HEATER CONTROL is included (FIO0). See the safety notes below. Three modes:
   auto (T)  PI loop (optional D) holding the valve at a temperature setpoint
   auto (P)  cascade: an outer loop on chamber pressure moves the temperature
             setpoint, and the auto-mode PI holds the valve there. It first
-            SEEKS (setpoint straight to 39 °C, then a slow creep upwards while
+            SEEKS (from a cool start a full-power BURST, then a coast with the
+            heater off; then setpoint 40 °C and a slow creep upwards while
             the valve is shut, measuring the chamber baseline), and once the
-            pressure snaps up it TRACKS a target given as Δp above that
-            baseline, with a PI on log10(pressure)
+            pressure snaps up it TRACKS the absolute pressure target with a
+            PI on log10(pressure). The baseline is used to detect the opening
+            and to warn about targets the valve cannot hold
 
 HEATER VOLTAGE / CURRENT are shown live (instantaneous and mean over one
 switching period). By default they are CALCULATED from the gate state, rail
@@ -221,8 +223,16 @@ LJ_WATCHDOG_S         = 10         # U3 firmware watchdog → FIO0 low if we die
 # as laggy. Kp 0.08 was faster still but reached ~1.1 K overshoot in that
 # case — too much when the setpoint sits near the valve's cracking point.
 # Previous values: Kp 0.050, Ki 0.0010. Verify with a test step.
-PID_KP                = 0.065      # duty per °C of error
-PID_KI                = 0.0013     # duty per °C·s of accumulated error (Ti = 50 s)
+#
+# REVERTED later on 16 Sept 2026. On real hardware the 0.065 / 0.0013 gains
+# overshot by 0.7-1.1 K on ~8-11 K steps that don't saturate the heater
+# (11:08 run 31.5 → 39 °C: +1.1 K; 12:38 and 12:58 pressure-mode runs,
+# jump to 39 °C: +0.7 and +1.0 K), where the model had predicted ~0.05 K.
+# The old gains showed no overshoot on comparable steps (10:03, 10:11).
+# Near the valve's cracking point (~40-40.5 °C) a 1 K overshoot can open
+# the valve by accident, so the ~10 s speed gain is not worth it.
+PID_KP                = 0.050      # duty per °C of error
+PID_KI                = 0.0010     # duty per °C·s of accumulated error (Ti = 50 s)
 PID_KD                = 0.0        # duty per °C/s, acts on the MEASUREMENT (no
                                    # setpoint kick). 0 = PI, recommended here: in
                                    # simulation D bought a few seconds of settling
@@ -234,30 +244,46 @@ PID_SETPOINT_DEFAULT  = 60.0       # °C
 # ─── Closed-loop PRESSURE control (mode 'pressure') ──────────────────────────
 # Cascade: outer PI on log10(chamber pressure) → valve temperature setpoint →
 # the inner PI above → duty. Gains are STARTING VALUES — tune on the bench.
-# The operator's target is Δp: chamber pressure ABOVE the baseline measured
-# while the valve is still shut. The baseline drifts through the day as the
-# chamber pumps down (0.86–1.43e-6 mbar on 16 Sept 2026), so an absolute
-# target would mean something different every run.
-PRESSURE_TARGET_DEFAULT = 5e-7     # mbar above baseline
-PRESSURE_TARGET_MIN     = 1e-10    # mbar above baseline (entry lower limit)
-PRESSURE_MIN_STEP_MBAR  = 3e-7     # the valve snaps open by about this much (16 Sept 2026
-                                   # data: 0.27–0.34e-6); smaller Δp targets can't be held
+# The operator's target is ABSOLUTE chamber pressure. The baseline (valve
+# shut) drifts through the day as the chamber pumps down (0.56–1.43e-6 mbar
+# on 16 Sept 2026), so the lowest target the valve can hold moves too: the
+# driver measures the baseline and warns when a target is below it.
+PRESSURE_TARGET_DEFAULT = 1.5e-6   # mbar
+PRESSURE_TARGET_MIN     = 5e-11    # mbar, IKR 270 lower measuring limit
+PRESSURE_MIN_STEP_MBAR  = 2.5e-7   # lowest rise above baseline the valve holds once open.
+                                   # 16 Sept 2026: it snaps open by 0.27-0.34e-6, then
+                                   # settled at +0.26e-6 with the setpoint at the
+                                   # 39.5 °C floor (12:58 run). Targets below
+                                   # baseline + this cannot be held
 PRESSURE_HEAT_OPENS     = True     # True: hotter valve → more flow → higher chamber p
 # Gains set 16 Sept 2026 by simulating this code against a valve model built
 # from that day's runs (snap-open at ~40.3 °C, ~1 K closing hysteresis, body
 # lag 150-250 s, flow gain 0.2-0.8e-6 mbar/K, flow lag 5-60 s; 72 cases).
 # KI 0.05 → 0.1 halved the settling time after opening (median 430 → 215 s)
-# and stopped a slow ±0.4 K setpoint wander; overshoot ≤ +9 % of Δp.
+# and stopped a slow ±0.4 K setpoint wander; overshoot ≤ +9 % of the rise
+# above baseline.
+#
+# Retuned again 16 Sept 2026 after the 13:36 full-power run, with a lumped
+# model fitted to it (heater lag ~5 s, ~6 J/K local, ~80 s to ~27 °C ambient;
+# valve follows the TC within ~2-6 s, plus some slow soak). 240 cases (valve
+# lag/soak, start temperature, target, flow slope 0.3-2.5e-7 mbar/K, cracking
+# point 40.0-40.6 °C): KI 0.1 → 0.2 cut the median time to target from
+# ~420 s to ~270 s with no hunting (smoothed ripple ≤ 4 %); 0.3-0.4 were
+# faster still but with less margin.
 PRESSURE_KP             = 10.0     # °C per decade — acts on the MEASUREMENT (damping), not the error
-PRESSURE_KI             = 0.10     # °C per (decade·s) — was 0.05
+# With the feedforward goal (below) doing most of the heating, KI 0.2 → 0.3
+# cut the median time to target from ~210 to ~170 s (p90 530 → 360 s) with
+# the same overshoot; smoothed steady ripple ≤ 12 % (≤ 8 % at 0.2). KP 20
+# hunted in the same tests, so KP stays at 10.
+PRESSURE_KI             = 0.30     # °C per (decade·s) — was 0.20, 0.10, 0.05
 PRESSURE_DEADBAND_DEC   = 0.01     # ±decades (≈ ±2.3 %) in which the integrator rests — was 0.02,
-                                   # which left Δp up to ~10 % off target
+                                   # which left the rise above baseline up to ~10 % off
 PRESSURE_FILTER_S       = 2.0      # EMA time constant on log10(p), s
 PRESSURE_TSP_MIN_C      = 20.0     # lowest temperature setpoint the loop may request
 PRESSURE_TSP_MAX_C      = 140.0    # highest (also capped at TEMP_TRIP_C − 5 °C)
 PRESSURE_ERR_CLAMP_DEC  = 1.0      # integrator sees at most ±this error (decades), so the
                                    # integral path moves the setpoint ≤ KI × clamp
-                                   # (0.1 × 1 × 60 = 6 °C/min) however far off target
+                                   # (0.3 × 1 × 60 = 18 °C/min) however far off target
 PRESSURE_TRIP_MBAR      = 5e-4     # latch heater off above this chamber pressure
 PRESSURE_TRIP_ALL_MODES = False    # True: apply the over-pressure trip in manual/auto too
 PRESSURE_BAD_READS_TO_TRIP = 8     # consecutive invalid gauge reads (2 s at 4 Hz)
@@ -267,16 +293,62 @@ PRESSURE_NO_AUTHORITY_S = 600      # warn if the setpoint sits on a limit this l
 # for 18 min at a 39 °C setpoint, opened near 40.1–40.6 °C, snapped open
 # rather than throttling, and closed again ~1 K below where it opened.
 # Assumes PRESSURE_HEAT_OPENS = True.
-PRESSURE_SEEK_START_C   = 39.0     # setpoint jumps straight here when pressure mode starts
-PRESSURE_SEEK_BAND_C    = 0.3      # creep starts once the TC is within this of the setpoint
-PRESSURE_SEEK_RATE_C_MIN = 0.3     # creep rate while the valve is shut, °C per minute.
-                                   # Simulated: opens 5-9 min after start; 0.4 was ~1 min
-                                   # faster but overshot Δp by up to 20 %
+PRESSURE_SEEK_START_C   = 40.5     # lowest seek goal: at the estimated cracking point
+                                   # (40.1-40.6 °C). Was 39 then 40. Opening early is harmless:
+                                   # it only gives the minimum flow, which any target above
+                                   # baseline + PRESSURE_MIN_STEP_MBAR exceeds anyway
+
+# Feedforward — for bigger targets, aim the seek straight at the temperature
+# the flow map predicts, minus a margin, and let the PI finish the approach.
+# Map: rise above baseline ≈ PRESSURE_MIN_STEP_MBAR at the cracking point,
+# plus PRESSURE_FF_SLOPE per K above it. 16 Sept 2026 holds gave at least
+# +2.6e-7 at 40 °C, +4.5e-7 at 41.3, +5.4e-7 at 42.2 and +8.5e-7 at 43.0
+# (the last three still rising), i.e. ≥ ~2e-7 per K. Assuming a steeper
+# slope than that makes the goal err low.
+PRESSURE_FF_ENABLE      = True
+PRESSURE_FF_CRACK_C     = 40.3     # °C, cracking point used by the map
+PRESSURE_FF_SLOPE_MBAR_K = 3e-7    # mbar per K above cracking (deliberately steep)
+PRESSURE_FF_FRACTION    = 0.8      # aim for this share of the rise beyond the opening step
+PRESSURE_FF_MAX_C       = 55.0     # never aim the seek higher than this
+
+# Burst — from a cool start, heat at full power until the TC reaches
+# PRESSURE_BURST_BRAKE_K below the seek goal, then coast (heater off) until
+# the TC peaks, then seek.
+# 16 Sept 2026 13:36 run: 100 % from 29.5 °C opened the valve after 21 s with
+# the TC at 45 °C; after cutting the heater the TC kept rising ~3 K for ~8 s
+# (heat still in the heater), and chamber pressure followed the TC within
+# seconds, so the valve's actuating part sits thermally close to the TC.
+# Aiming only for 40 °C, the burst saved almost nothing in the fitted model
+# (the PI already heats the small local mass in ~30 s). Enabled with the
+# feedforward: the goal is now often well above 40 °C,
+# where full power saves more time. The burst starts at once (the valve
+# can't open for ≥ ~15 s from a start below PRESSURE_BURST_MAX_START_C, and
+# the baseline needs only PRESSURE_BASE_MIN_S of samples).
+PRESSURE_BURST_ENABLE   = True
+PRESSURE_BURST_BRAKE_K  = 3.5      # cut full power this far below the seek goal
+                                   # (the TC then rises ~3 K more)
+PRESSURE_BURST_MAX_START_C = 35.0  # warmer starts skip the burst
+PRESSURE_BURST_MAX_S    = 60.0     # never burst longer than this (13:36: 21 s for +15.5 K)
+PRESSURE_COAST_MAX_S    = 60.0     # coast ends at the TC peak, or after this long
+PRESSURE_HOLD_DUTY      = 0.15     # duty that holds ~40 °C (16 Sept 2026 hold data);
+PRESSURE_HOLD_AMBIENT_C = 26.0     # scaled with (T − this) to preload the temperature PI
+                                   # when the coast ends
+PRESSURE_HOLD_SHUT_C    = 38.5     # setpoint while the target is at/below baseline — safely
+                                   # below the cracking point, so the valve stays shut
+PRESSURE_SEEK_BAND_C    = 0.3      # creep starts once the TC is within this of the setpoint…
+PRESSURE_SEEK_HOLD_S    = 0.0      # …and has stayed there this long (lets the valve body
+                                   # soak; try 30-60 s if openings overshoot)
+PRESSURE_SEEK_RATE_C_MIN = 1.0     # creep rate while the valve is shut, °C per minute.
+                                   # Was 0.3 while the valve was thought to lag the TC by
+                                   # minutes; the 13:36 run shows it follows within seconds.
+                                   # Fitted model: opens after ~2 min (median; 0.3 → 3.5 min),
+                                   # overshoot p90 +8 % (0.3: +5 %)
 PRESSURE_SEEK_MAX_C     = 46.0     # creep stops here (with a warning)
 PRESSURE_OPEN_DEC       = 0.05     # rise above baseline that counts as open (≈ +12 %;
                                    # the snap is +25–40 %)
 PRESSURE_BASE_WINDOW_S  = 30.0     # baseline = median log10(p) over this window…
-PRESSURE_BASE_GUARD_S   = 5.0      # …ignoring the most recent seconds
+PRESSURE_BASE_GUARD_S   = 5.0      # …ignoring the most recent seconds…
+PRESSURE_BASE_MIN_S     = 5.0      # …and available once this much has been recorded
 PRESSURE_OPEN_FLOOR_C   = 39.5     # once open, the setpoint never goes below this, so the
                                    # loop trims flow instead of shutting the valve
 
@@ -436,11 +508,17 @@ _heater = dict(
     p_pinned_warned = False,
     p_phase         = 'seek',  # 'seek' (valve shut) or 'track' (PI on pressure)
     p_ramping       = False,   # seek: creeping upwards
+    p_band_since    = None,    # seek: when the TC first reached the seek band
+    p_creep         = 0.0,     # seek: °C added by the creep on top of the goal
+    p_goal          = None,    # seek: current goal temperature (for display/logging)
+    p_burst         = None,    # seek: None, 'burst', 'coast'
+    p_burst_t0      = None,    # when the current burst/coast stage began
+    p_burst_peak    = None,    # coast: highest TC seen
+    p_override      = None,    # duty the outer loop imposes (burst/coast), else None
     p_seek_capped   = False,   # seek: reached PRESSURE_SEEK_MAX_C
     p_hist          = deque(maxlen=int((PRESSURE_BASE_WINDOW_S + 5) * LABJACK_SAMPLE_HZ * 2)),
     p_base          = None,    # baseline log10(p / mbar), frozen when the valve opens
-    p_abs_target    = None,    # baseline + Δp target, mbar
-    p_warned_target = None,    # last Δp target warned about (below minimum step)
+    p_warned_target = None,    # last target warned about (below what the valve can hold)
 )
 _events      = deque(maxlen=200)                            # (timestamp, text)
 _p20_chart   = deque(maxlen=CHART_SECONDS * KELLER_POLL_HZ)     # recent upstream P20 (bar at 20 °C)
@@ -806,10 +884,10 @@ def _heater_trip(reason: str):
 
 def _pressure_baseline(h, now):
     """Median log10(p) over the baseline window, skipping the newest seconds.
-    None until at least half the window has been recorded."""
+    None until PRESSURE_BASE_MIN_S of samples are available."""
     ys = sorted(y for t, y in h['p_hist']
                 if now - PRESSURE_BASE_WINDOW_S <= t <= now - PRESSURE_BASE_GUARD_S)
-    need = 0.5 * (PRESSURE_BASE_WINDOW_S - PRESSURE_BASE_GUARD_S) * LABJACK_SAMPLE_HZ
+    need = PRESSURE_BASE_MIN_S * LABJACK_SAMPLE_HZ
     if len(ys) < need:
         return None
     n = len(ys)
@@ -819,9 +897,11 @@ def _pressure_baseline(h, now):
 def _pressure_outer_loop(vac, temp, dt):
     """Outer loop of the cascade: chamber pressure → valve temperature setpoint.
 
-    SEEK (valve shut). The setpoint jumps to PRESSURE_SEEK_START_C, just below
-    the cracking point, so the inner loop heats at full speed. Once the TC is
-    there, the setpoint creeps up at PRESSURE_SEEK_RATE_C_MIN. Meanwhile the
+    SEEK (valve shut). The setpoint jumps to PRESSURE_SEEK_START_C, at or just
+    below the cracking point, so the inner loop heats at full speed. Once the
+    TC is there (and, optionally, has stayed there PRESSURE_SEEK_HOLD_S), the
+    setpoint creeps up at PRESSURE_SEEK_RATE_C_MIN. If the target is at or
+    below the baseline, the setpoint waits at PRESSURE_HOLD_SHUT_C instead. Meanwhile the
     chamber baseline is measured (median over the last 30 s, allowed to fall
     with the pump-down but never to rise). When the
     filtered pressure rises PRESSURE_OPEN_DEC above that baseline, the valve
@@ -830,7 +910,7 @@ def _pressure_outer_loop(vac, temp, dt):
     body, which is what would otherwise cause an overshoot on opening.
 
     TRACK (valve open). PI on log10(p), because chamber pressure moves in
-    decades, with target r = log10(baseline + Δp):
+    decades, with target r = log10(target):
 
         T_sp = T_open − s·KP·(y − y_open) + s·KI·∫clamp(r − y) dt
 
@@ -860,13 +940,24 @@ def _pressure_outer_loop(vac, temp, dt):
             start = min(tsp_hi, max(PRESSURE_SEEK_START_C, temp))
             h['p_hist'].clear()
             h['p_hist'].append((now, y))
+            burst = PRESSURE_BURST_ENABLE and temp <= PRESSURE_BURST_MAX_START_C
             h.update(p_init=False, p_phase='seek', p_filt=y, p_y0=y, p_t0=start,
                      p_err=None, p_integral=0.0, setpoint_C=start,
-                     p_ramping=warm, p_seek_capped=False, p_base=None,
-                     p_abs_target=None, p_warned_target=None,
+                     p_ramping=warm, p_band_since=None, p_creep=0.0, p_goal=start,
+                     p_burst='burst' if burst else None, p_burst_t0=now,
+                     p_burst_peak=None,
+                     p_override=HEATER_MAX_DUTY if burst else None,
+                     p_seek_capped=False, p_base=None,
+                     p_warned_target=None,
                      p_pinned_since=None, p_pinned_warned=False)
-            msgs.append(f"Pressure loop: seeking — T_sp {start:.1f} °C, then "
-                        f"+{PRESSURE_SEEK_RATE_C_MIN:g} °C/min until the valve opens")
+            if h['p_burst']:
+                msgs.append(f"Pressure loop: full power until "
+                            f"{PRESSURE_BURST_BRAKE_K:g} K below the goal (≥ {start:.1f} °C, "
+                            f"set from the target once the baseline is known), coast, then "
+                            f"+{PRESSURE_SEEK_RATE_C_MIN:g} °C/min until the valve opens")
+            else:
+                msgs.append(f"Pressure loop: seeking — T_sp {start:.1f} °C, then "
+                            f"+{PRESSURE_SEEK_RATE_C_MIN:g} °C/min until the valve opens")
             if warm:
                 msgs.append(f"Pressure loop: valve already at {temp:.1f} °C — if it is "
                             f"open, the baseline will include flow. Let it cool below "
@@ -884,29 +975,54 @@ def _pressure_outer_loop(vac, temp, dt):
                     # and is never detected.
                     base = min(base, h['p_base'])
                 if base is not None:
-                    h['p_base']       = base
-                    h['p_abs_target'] = 10 ** base + h['p_target_mbar']
-                    h['p_err']        = math.log10(h['p_abs_target']) - h['p_filt']
+                    h['p_base'] = base
+                    h['p_err']  = math.log10(h['p_target_mbar']) - h['p_filt']
+                    _check_target(h, msgs)
 
                 if base is not None and h['p_filt'] - base > PRESSURE_OPEN_DEC:
                     # Opened — freeze the baseline, hand over bumplessly.
+                    if h['p_burst']:
+                        _end_burst(h, tsp, msgs, f"valve opened during {h['p_burst']}")
                     h.update(p_phase='track', p_y0=h['p_filt'], p_t0=tsp,
                              p_integral=0.0, p_ramping=False)
                     msgs.append(f"Pressure loop: valve opened at T_sp {tsp:.2f} °C "
                                 f"(TC {temp:.2f} °C), baseline {10 ** base:.2e} mbar — "
-                                f"now controlling to {h['p_abs_target']:.2e} mbar")
+                                f"now controlling to {h['p_target_mbar']:.2e} mbar")
+                elif base is not None and h['p_target_mbar'] <= 10 ** base:
+                    # Target at/below baseline: opening would only move away from
+                    # it, so park safely below the cracking point (resumes if raised).
+                    if h['p_burst']:
+                        h.update(p_burst=None, p_override=None)
+                    h.update(setpoint_C=min(tsp, PRESSURE_HOLD_SHUT_C), p_creep=0.0,
+                             p_ramping=False, p_band_since=None)
                 else:
-                    if not h['p_ramping'] and temp >= tsp - PRESSURE_SEEK_BAND_C:
-                        h['p_ramping'] = True
-                        msgs.append(f"Pressure loop: at {temp:.1f} °C, valve shut — "
-                                    f"creeping +{PRESSURE_SEEK_RATE_C_MIN:g} °C/min")
-                    if h['p_ramping']:
-                        cap = min(PRESSURE_SEEK_MAX_C, tsp_hi)
-                        tsp = min(cap, tsp + PRESSURE_SEEK_RATE_C_MIN / 60.0 * dt)
-                        if tsp >= cap and not h['p_seek_capped']:
-                            h['p_seek_capped'] = True
-                            msgs.append(f"Pressure loop: reached {cap:g} °C and the "
-                                        f"valve has not opened — holding there")
+                    goal = min(tsp_hi, _seek_goal(h))
+                    if h['p_goal'] is None or abs(goal - h['p_goal']) > 0.05:
+                        if base is not None:
+                            msgs.append(f"Pressure loop: seek goal {goal:.1f} °C for target "
+                                        f"{h['p_target_mbar']:.2e} mbar (baseline "
+                                        f"{10 ** base:.2e})")
+                        h['p_goal'] = goal
+                    tsp = min(tsp_hi, goal + h['p_creep'])
+                    if h['p_burst']:
+                        _burst_step(h, temp, tsp, now, msgs)
+                    else:
+                        if not h['p_ramping'] and temp >= tsp - PRESSURE_SEEK_BAND_C:
+                            if h['p_band_since'] is None:
+                                h['p_band_since'] = now
+                        if (not h['p_ramping'] and h['p_band_since'] is not None
+                                and now - h['p_band_since'] >= PRESSURE_SEEK_HOLD_S):
+                            h['p_ramping'] = True
+                            msgs.append(f"Pressure loop: at {temp:.1f} °C, valve shut — "
+                                        f"creeping +{PRESSURE_SEEK_RATE_C_MIN:g} °C/min")
+                        if h['p_ramping']:
+                            cap = min(max(PRESSURE_SEEK_MAX_C, goal), tsp_hi)
+                            h['p_creep'] += PRESSURE_SEEK_RATE_C_MIN / 60.0 * dt
+                            tsp = min(cap, goal + h['p_creep'])
+                            if tsp >= cap and not h['p_seek_capped']:
+                                h['p_seek_capped'] = True
+                                msgs.append(f"Pressure loop: reached {cap:g} °C and the "
+                                            f"valve has not opened — holding there")
                     h['setpoint_C'] = tsp
 
         if h['p_phase'] == 'seek':
@@ -919,20 +1035,79 @@ def _pressure_outer_loop(vac, temp, dt):
     return tsp
 
 
+def _seek_goal(h):
+    """Seek goal temperature: PRESSURE_SEEK_START_C, raised by the feedforward
+    map for targets above the minimum flow (caller holds _heater_lock)."""
+    goal = PRESSURE_SEEK_START_C
+    if PRESSURE_FF_ENABLE and h['p_base'] is not None:
+        extra = h['p_target_mbar'] - 10 ** h['p_base'] - PRESSURE_MIN_STEP_MBAR
+        if extra > 0:
+            goal = max(goal, PRESSURE_FF_CRACK_C
+                       + PRESSURE_FF_FRACTION * extra / PRESSURE_FF_SLOPE_MBAR_K)
+    return min(goal, PRESSURE_FF_MAX_C)
+
+
+def _burst_step(h, temp, tsp, now, msgs):
+    """Advance the burst/coast sequence toward seek setpoint tsp
+    (caller holds _heater_lock)."""
+    stage = h['p_burst']
+    if stage == 'burst':
+        h['p_override'] = HEATER_MAX_DUTY
+        if temp >= tsp - PRESSURE_BURST_BRAKE_K:
+            msgs.append(f"Pressure loop: burst done after {now - h['p_burst_t0']:.1f} s "
+                        f"at {temp:.1f} °C (goal {tsp:.1f} °C) — coasting")
+            h.update(p_burst='coast', p_burst_t0=now, p_burst_peak=temp, p_override=0.0)
+        elif now - h['p_burst_t0'] > PRESSURE_BURST_MAX_S:
+            _end_burst(h, tsp, msgs, f"burst time limit ({PRESSURE_BURST_MAX_S:g} s) "
+                                     f"reached at {temp:.1f} °C — check the thermocouple")
+    elif stage == 'coast':
+        h['p_override'] = 0.0
+        h['p_burst_peak'] = max(h['p_burst_peak'], temp)
+        if (temp < h['p_burst_peak'] - 0.3        # clearly past the peak (TC noise ~0.05 K)
+                or temp >= tsp - PRESSURE_SEEK_BAND_C
+                or now - h['p_burst_t0'] > PRESSURE_COAST_MAX_S):
+            _end_burst(h, tsp, msgs, f"coast done, TC peaked at {h['p_burst_peak']:.1f} °C")
+
+
+def _end_burst(h, tsp, msgs, why):
+    """Hand heating back to the temperature PI, preloaded near holding power."""
+    hold = PRESSURE_HOLD_DUTY * max(0.0, tsp - PRESSURE_HOLD_AMBIENT_C) / max(
+        1.0, 40.0 - PRESSURE_HOLD_AMBIENT_C)
+    h.update(p_burst=None, p_override=None, d_prev=None,
+             integral=(min(HEATER_MAX_DUTY, hold) / PID_KI) if PID_KI > 0 else 0.0)
+    msgs.append(f"Pressure loop: {why} — temperature control resumes")
+
+
+def _check_target(h, msgs):
+    """Warn once per target value if the valve cannot hold it
+    (caller holds _heater_lock; needs a measured baseline)."""
+    tgt = h['p_target_mbar']
+    if h['p_base'] is None or h['p_warned_target'] == tgt:
+        return
+    base   = 10 ** h['p_base']
+    lowest = base + PRESSURE_MIN_STEP_MBAR
+    if tgt < lowest:
+        h['p_warned_target'] = tgt
+        if tgt <= base and h['p_phase'] == 'seek':
+            msgs.append(f"Pressure loop: target {tgt:.2e} mbar is at or below the "
+                        f"chamber baseline {base:.2e} mbar — keeping the valve shut "
+                        f"at {PRESSURE_HOLD_SHUT_C:g} °C. "
+                        f"The lowest holdable pressure is ≈ {lowest:.1e} mbar")
+        else:
+            msgs.append(f"Pressure loop: target {tgt:.2e} mbar is below the lowest "
+                        f"pressure the valve can hold once open (baseline {base:.2e} + "
+                        f"step ~{PRESSURE_MIN_STEP_MBAR:.1e} ≈ {lowest:.1e} mbar) — "
+                        f"expect it to sit above target at the "
+                        f"{PRESSURE_OPEN_FLOOR_C:g} °C floor")
+
+
 def _pressure_track(h, s, tsp_hi, now, dt, msgs):
     """TRACK step of the outer loop (caller holds _heater_lock)."""
     tsp_lo = max(PRESSURE_TSP_MIN_C, PRESSURE_OPEN_FLOOR_C)
-    h['p_abs_target'] = 10 ** h['p_base'] + h['p_target_mbar']
-    r   = math.log10(h['p_abs_target'])
+    r   = math.log10(h['p_target_mbar'])
     err = r - h['p_filt']
     h['p_err'] = err
-
-    if (h['p_target_mbar'] < PRESSURE_MIN_STEP_MBAR
-            and h['p_warned_target'] != h['p_target_mbar']):
-        h['p_warned_target'] = h['p_target_mbar']
-        msgs.append(f"Pressure loop: Δp target {h['p_target_mbar']:.1e} mbar is below "
-                    f"the valve's minimum step (~{PRESSURE_MIN_STEP_MBAR:.0e} mbar) — "
-                    f"expect it to sit above target at the {tsp_lo:g} °C floor")
+    _check_target(h, msgs)
 
     e_i = 0.0 if abs(err) < PRESSURE_DEADBAND_DEC else err
     e_i = max(-PRESSURE_ERR_CLAMP_DEC, min(PRESSURE_ERR_CLAMP_DEC, e_i))
@@ -1028,7 +1203,11 @@ def _heater_compute_duty(temp, tc_healthy, dt,
             setpoint = _pressure_outer_loop(vac, temp, dt)
         elif p_init:
             return 0.0      # not initialised yet — don't heat on a stale setpoint
-        # else: a single missed read — hold the last setpoint
+        # else: a single missed read — hold the last setpoint / override
+        with _heater_lock:
+            override = _heater['p_override']
+        if override is not None:                # burst / coast: duty set directly
+            return max(0.0, min(HEATER_MAX_DUTY, override))
 
     # ── 'auto' / 'pressure': PI(D) on valve temperature, with anti-windup ──
     error = setpoint - temp
@@ -1350,7 +1529,7 @@ def logger_thread():
             'heater_I_mean_calc',       # A, duty × rail / R
             'heater_V_mean_meas',       # V, blank unless HEATER_V_AIN set
             'heater_I_mean_meas',       # A, blank unless HEATER_I_AIN set
-            'pressure_target_mbar',     # pressure mode: baseline + Δp target (blank until the baseline is known)
+            'pressure_target_mbar',     # blank unless mode is pressure
             'vacuum_status',            # blank = valid reading
             'heater_duty_cmd',          # 0-1, operator's manual duty (blank unless manual)
             'events',                   # event-log lines since the previous row, ' | '-joined
@@ -1389,8 +1568,7 @@ def logger_thread():
                 v_m    = round(v_m, 3) if v_m is not None else ''
                 i_m    = round(i_m, 4) if i_m is not None else ''
                 in_p   = _heater['mode'] == 'pressure' and not _heater['p_init']
-                p_tgt  = (_heater['p_abs_target']
-                          if in_p and _heater['p_abs_target'] is not None else '')
+                p_tgt  = _heater['p_target_mbar'] if in_p else ''
                 p_base = (10 ** _heater['p_base']
                           if in_p and _heater['p_base'] is not None else '')
                 d_cmd  = (round(_heater['duty_cmd'], 4)
@@ -1581,7 +1759,7 @@ class TEGui:
         row2.pack(fill="x", pady=(0, 4))
         self.duty_entry = self._entry(row2, "duty %", "0", width=6)
         self.sp_entry   = self._entry(row2, "setpoint °C", f"{PID_SETPOINT_DEFAULT:g}", width=6)
-        self.p_entry    = self._entry(row2, "Δp target mbar", f"{PRESSURE_TARGET_DEFAULT:.1e}", width=9)
+        self.p_entry    = self._entry(row2, "target mbar", f"{PRESSURE_TARGET_DEFAULT:.1e}", width=9)
         tk.Button(row2, text="update", command=self._send_update, **btn).pack(side="left")
 
         self.heater_status = tk.Label(parent, text="", font=self.f, fg=DIM,
@@ -1675,11 +1853,11 @@ class TEGui:
             change = f"setpoint {a['sp']:g} → {val:g} °C"
         else:   # 'pressure' — the outer loop owns the temperature setpoint
             key = 'tgt'
-            val = self._read_entry(self.p_entry, "Δp target", a['tgt'],
+            val = self._read_entry(self.p_entry, "target", a['tgt'],
                                    PRESSURE_TARGET_MIN, PRESSURE_TRIP_MBAR / 2.0,
                                    fmt="{:.2e}", unit=" mbar")
             heater_command(mode=mode, p_target_mbar=val)
-            change = f"Δp target {a['tgt']:.2e} → {val:.2e} mbar above baseline"
+            change = f"target {a['tgt']:.2e} → {val:.2e} mbar"
 
         changes = []
         if not first and mode != a['mode']:
@@ -1916,29 +2094,38 @@ class TEGui:
             self.loop_status.configure(text="")
         elif not h['armed'] or h['p_filt'] is None or h['p_init']:
             self.loop_status.configure(
-                text=f"auto (P) idle · Δp target {h['p_target_mbar']:.2e} mbar above baseline · "
+                text=f"auto (P) idle · target {h['p_target_mbar']:.2e} mbar · "
                      f"on arm: T_sp → {PRESSURE_SEEK_START_C:g} °C, then "
                      f"+{PRESSURE_SEEK_RATE_C_MIN:g} °C/min until the valve opens", fg=DIM)
         elif h['p_phase'] == 'seek':
             base = (f"{10 ** h['p_base']:.2e} mbar" if h['p_base'] is not None
                     else "measuring…")
-            step = (f"creeping +{PRESSURE_SEEK_RATE_C_MIN:g} °C/min" if h['p_ramping']
-                    else "heating")
+            if h['p_burst'] == 'burst':
+                step = f"BURST full power to {h['setpoint_C'] - PRESSURE_BURST_BRAKE_K:.1f} °C"
+            elif h['p_burst'] == 'coast':
+                step = f"coasting (peak {h['p_burst_peak']:.1f} °C)"
+            elif h['p_base'] is not None and h['p_target_mbar'] <= 10 ** h['p_base']:
+                step = "holding shut (target ≤ baseline)"
+            elif h['p_ramping']:
+                step = f"creeping +{PRESSURE_SEEK_RATE_C_MIN:g} °C/min"
+            else:
+                step = "heating"
             self.loop_status.configure(
-                text=f"auto (P) seeking · valve shut · {step} · T_sp {h['setpoint_C']:.2f} °C · "
-                     f"baseline {base} · Δp target {h['p_target_mbar']:.1e}",
+                text=f"auto (P) seeking · valve shut · {step} · goal {h['p_goal']:.1f} · "
+                     f"T_sp {h['setpoint_C']:.2f} °C · "
+                     f"baseline {base} · target {h['p_target_mbar']:.2e} mbar",
                 fg=WARN if h['p_seek_capped'] else BRIGHT)
         else:
             tsp_hi = min(PRESSURE_TSP_MAX_C, TEMP_TRIP_C - 5.0)
             floor  = max(PRESSURE_TSP_MIN_C, PRESSURE_OPEN_FLOOR_C)
             self.loop_status.configure(
-                text=f"auto (P) · target {h['p_abs_target']:.2e} "
-                     f"(base {10 ** h['p_base']:.2e} + Δp {h['p_target_mbar']:.1e}) · "
+                text=f"auto (P) · target {h['p_target_mbar']:.2e} · "
+                     f"baseline {10 ** h['p_base']:.2e} · "
                      f"filt {10 ** h['p_filt']:.2e} · err {h['p_err']:+.2f} dec · "
                      f"T_sp {floor:g}-{tsp_hi:g} °C",
                 fg=WARN if h['p_pinned_since'] else BRIGHT)
 
-        vac_ref = h['p_abs_target'] if mode == 'pressure' else None
+        vac_ref = h['p_target_mbar'] if mode == 'pressure' else None
         te_ref  = h['setpoint_C'] if (h['armed'] and mode != 'manual') else None
         i_full  = HEATER_V_RAIL / HEATER_R_OHM
 

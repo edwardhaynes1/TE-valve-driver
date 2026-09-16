@@ -11,7 +11,10 @@ Panels (only those whose data is present are drawn):
        P20 = P * 293.15 K / T_Keller, which is proportional to the amount
        of gas. Falls back to raw upstream pressure if no Keller temperature.
   B  Main plot, larger, same time axis: chamber pressure (blue, log,
-     left axis) and TE temperature (red, right axis)
+     left axis) and TE temperature (red, right axis). In pressure-mode
+     runs the driver's pressure target is drawn dashed blue; while the
+     heater is in temperature-control mode, the temperature setpoint is
+     drawn dotted red.
 
 Valve open/close times are detected from the chamber pressure: the valve
 counts as open while the pressure sits clearly above its fitted baseline
@@ -66,6 +69,8 @@ COLUMN_ALIASES = {
                  "chamber", "vacuummbar", "ionguage", "iongauge"],
     "upstream": ["kellerpressure", "upstreampressure", "upstreambar",
                  "keller", "upstream", "inletpressure"],
+    "p_target": ["pressuretarget", "targetmbar", "ptarget"],
+    "t_setpoint": ["heatersetpoint", "setpointdegc", "tsetpoint"],
     "keller_temp": ["kellertemperature", "upstreamtemperature",
                     "inlettemperature", "kellertemp"],
     "duty":     ["heaterduty", "duty", "pwm", "heateroutput"],
@@ -211,7 +216,7 @@ def load(path, cols):
         print("  note: no usable timestamp column, using sample index as time")
 
     for role in ("temp", "chamber", "upstream", "duty", "keller_temp",
-                 "current_meas", "current_calc"):
+                 "current_meas", "current_calc", "p_target", "t_setpoint"):
         if cols[role]:
             df[cols[role]] = numeric(df, cols[role])
 
@@ -498,6 +503,17 @@ TOP_ROLES = ("p20", "upstream", "current")              # upper overview (duty
                                                        # omitted: current tracks it)
 
 
+def add_to_legend(ax, handle):
+    """Append one line to the legend drawn above ax by panel_timeseries."""
+    leg = ax.get_legend()
+    old = getattr(leg, "legend_handles", None) or leg.legendHandles  # mpl < 3.7
+    handles = list(old) + [handle]
+    labels = [x.get_text() for x in leg.get_texts()] + [handle.get_label()]
+    ax.legend(handles=handles, labels=labels, loc="lower left",
+              bbox_to_anchor=(0, 1.01), ncol=len(handles), frameon=False,
+              fontsize=9, handlelength=1.8, borderaxespad=0)
+
+
 def make_figure(df, cols, steps, segs, outgas, title, valve=(None, [])):
     """Supporting traces on top; larger chamber + temperature plot below.
     Both share one time axis."""
@@ -525,6 +541,25 @@ def make_figure(df, cols, steps, segs, outgas, title, valve=(None, [])):
     if baseline is not None and "chamber" in main_axes:
         main_axes["chamber"].plot(df.t, baseline, ls=":", lw=1.2,
                                   color=COLOURS["chamber"], alpha=0.7)
+    tcol = cols.get("p_target")
+    if tcol and "chamber" in main_axes and df[tcol].notna().any():
+        (h,) = main_axes["chamber"].step(
+            df.t, df[tcol].where(df[tcol] > 0), where="post", ls="--", lw=1.4,
+            color=COLOURS["chamber"], alpha=0.8, label="pressure target")
+        add_to_legend(ax_m, h)
+        last = df[tcol].dropna()
+        print(f"\npressure target (from log): {last.iloc[0]:.2e} → {last.iloc[-1]:.2e} mbar")
+
+    scol = cols.get("t_setpoint")
+    if scol and "temp" in main_axes:
+        sp = df[scol]
+        if cols.get("mode"):             # temperature-control mode only
+            sp = sp.where(df[cols["mode"]].astype(str).str.strip().str.lower() == "auto")
+        if sp.notna().any():
+            (h,) = main_axes["temp"].step(df.t, sp, where="post", ls=":", lw=1.8,
+                                          color=COLOURS["temp"], label="temperature setpoint")
+            add_to_legend(ax_m, h)
+
     if events:
         hosts = [a for a in (ax_t, ax_m) if a is not None]
         mark_valve_events(hosts, events, ax_m if ax_m is not None else ax_t)
