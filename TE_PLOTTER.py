@@ -345,7 +345,7 @@ def detect_valve_events(df, cols):
     """Find when the chamber pressure leaves and returns to its baseline.
 
     The baseline is a low-order fit of log10(p) against time. It starts from
-    the lowest quarter of the trace and is refitted with the elevated points
+    the samples near the lowest pressure and is refitted with the elevated points
     excluded until it settles, so a slow pump-down drift is followed even if
     the valve is open for most of the log. Noise comes from sample-to-sample
     differences. The valve counts as open while log10(p) is more than
@@ -370,11 +370,16 @@ def detect_valve_events(df, cols):
     sigma = 1.4826 * np.median(np.abs(d - np.median(d))) / np.sqrt(2)
     thresh = max(VALVE_MIN_RISE_DEC, VALVE_NOISE_SIGMAS * sigma)
 
-    # Start from the lowest part of the trace (the valve only adds gas),
-    # then refit with everything clearly above the baseline left out.
-    quiet = y <= np.percentile(y, 25)
+    # Start from the samples near the very lowest pressure (the valve only
+    # adds gas, so the baseline is the floor of the trace, even if the valve
+    # was open for most of the log), then refit with everything clearly above
+    # the baseline left out. Fit a drift slope only if the shut periods cover
+    # enough of the log; otherwise a short stretch would be extrapolated.
+    span = t[-1] - t[0]
+    quiet = y <= np.percentile(y, 2) + thresh / 2
     for _ in range(20):
-        coef = np.polyfit(t[quiet], y[quiet], VALVE_BASELINE_DEG)
+        deg = VALVE_BASELINE_DEG if np.ptp(t[quiet]) >= 0.4 * span else 0
+        coef = np.polyfit(t[quiet], y[quiet], deg)
         resid = y - np.polyval(coef, t)
         new_quiet = resid < thresh / 2      # keep the tails out of the fit too
         if new_quiet.sum() < 10 or np.array_equal(new_quiet, quiet):

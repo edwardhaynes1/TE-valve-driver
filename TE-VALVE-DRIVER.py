@@ -293,7 +293,13 @@ PRESSURE_KP             = 10.0     # °C per decade — acts on the MEASUREMENT 
 # cut the median time to target from ~210 to ~170 s (p90 530 → 360 s) with
 # the same overshoot; smoothed steady ripple ≤ 12 % (≤ 8 % at 0.2). KP 20
 # hunted in the same tests, so KP stays at 10.
-PRESSURE_KI             = 0.30     # °C per (decade·s) — was 0.20, 0.10, 0.05
+#
+# Back to 0.2 after the 16:46 staircase: the valve keeps "soaking" for
+# 1-2 min after it opens (pressure doubled at constant TC), much more than
+# assumed above. On valve models fitted to that (324 cases, exponential flow
+# map ±50 %), KI 0.3 overshot by up to +77 % and 0.45 hunted; 0.2 kept
+# overshoot ≤ +10 % (p90 +7 %), median time to target ~3 min.
+PRESSURE_KI             = 0.20     # °C per (decade·s) — history: 0.05, 0.10, 0.20, 0.30
 PRESSURE_DEADBAND_DEC   = 0.01     # ±decades (≈ ±2.3 %) in which the integrator rests — was 0.02,
                                    # which left the rise above baseline up to ~10 % off
 PRESSURE_FILTER_S       = 2.0      # EMA time constant on log10(p), s
@@ -301,7 +307,7 @@ PRESSURE_TSP_MIN_C      = 20.0     # lowest temperature setpoint the loop may re
 PRESSURE_TSP_MAX_C      = 140.0    # highest (also capped at TEMP_TRIP_C − 5 °C)
 PRESSURE_ERR_CLAMP_DEC  = 1.0      # integrator sees at most ±this error (decades), so the
                                    # integral path moves the setpoint ≤ KI × clamp
-                                   # (0.3 × 1 × 60 = 18 °C/min) however far off target
+                                   # (0.2 × 1 × 60 = 12 °C/min) however far off target
 PRESSURE_TRIP_MBAR      = 5e-4     # latch heater off above this chamber pressure
 PRESSURE_TRIP_ALL_MODES = False    # True: apply the over-pressure trip in manual/auto too
 PRESSURE_BAD_READS_TO_TRIP = 8     # consecutive invalid gauge reads (2 s at 4 Hz)
@@ -318,15 +324,19 @@ PRESSURE_SEEK_START_C   = 40.5     # lowest seek goal: at the estimated cracking
 
 # Feedforward — for bigger targets, aim the seek straight at the temperature
 # the flow map predicts, minus a margin, and let the PI finish the approach.
-# Map: rise above baseline ≈ PRESSURE_MIN_STEP_MBAR at the cracking point,
-# plus PRESSURE_FF_SLOPE per K above it. 16 Sept 2026 holds gave at least
-# +2.6e-7 at 40 °C, +4.5e-7 at 41.3, +5.4e-7 at 42.2 and +8.5e-7 at 43.0
-# (the last three still rising), i.e. ≥ ~2e-7 per K. Assuming a steeper
-# slope than that makes the goal err low.
+# Map, from the 16 Sept 2026 16:46 staircase (steady plateaus at 41, 42, 43,
+# 44, 45 and 47 °C, upstream ~2.76 bar): the rise above baseline grows
+# exponentially, doubling every ~2.2 K:
+#     rise ≈ PRESSURE_FF_REF_RISE_MBAR · exp((T − PRESSURE_FF_REF_C) / PRESSURE_FF_EFOLD_K)
+# so the goal is T = REF_C + EFOLD · ln(FRACTION · rise / REF_RISE).
+# (Replaces a straight-line map, 3e-7 mbar/K above 40.3 °C, which aimed too
+# high for mid-size targets.) Flow scales with upstream pressure, so re-fit
+# if that changes much.
 PRESSURE_FF_ENABLE      = True
-PRESSURE_FF_CRACK_C     = 40.3     # °C, cracking point used by the map
-PRESSURE_FF_SLOPE_MBAR_K = 3e-7    # mbar per K above cracking (deliberately steep)
-PRESSURE_FF_FRACTION    = 0.8      # aim for this share of the rise beyond the opening step
+PRESSURE_FF_REF_C       = 41.0     # °C
+PRESSURE_FF_REF_RISE_MBAR = 7.1e-7 # steady rise above baseline at REF_C
+PRESSURE_FF_EFOLD_K     = 3.2      # K per e-fold (×2 every 2.2 K)
+PRESSURE_FF_FRACTION    = 0.8      # aim for this share of the rise
 PRESSURE_FF_MAX_C       = 55.0     # never aim the seek higher than this
 
 # Burst — from a cool start, heat at full power until the TC reaches
@@ -1132,10 +1142,10 @@ def _seek_goal(h):
     map for targets above the minimum flow (caller holds _heater_lock)."""
     goal = PRESSURE_SEEK_START_C
     if PRESSURE_FF_ENABLE and h['p_base'] is not None:
-        extra = h['p_target_mbar'] - 10 ** h['p_base'] - PRESSURE_MIN_STEP_MBAR
-        if extra > 0:
-            goal = max(goal, PRESSURE_FF_CRACK_C
-                       + PRESSURE_FF_FRACTION * extra / PRESSURE_FF_SLOPE_MBAR_K)
+        rise = h['p_target_mbar'] - 10 ** h['p_base']
+        if rise > 0:
+            goal = max(goal, PRESSURE_FF_REF_C + PRESSURE_FF_EFOLD_K * math.log(
+                PRESSURE_FF_FRACTION * rise / PRESSURE_FF_REF_RISE_MBAR))
     return min(goal, PRESSURE_FF_MAX_C)
 
 
