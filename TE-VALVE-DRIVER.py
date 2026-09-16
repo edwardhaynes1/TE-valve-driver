@@ -233,6 +233,24 @@ LJ_WATCHDOG_S         = 10         # U3 firmware watchdog → FIO0 low if we die
 # the valve by accident, so the ~10 s speed gain is not worth it.
 PID_KP                = 0.050      # duty per °C of error
 PID_KI                = 0.0010     # duty per °C·s of accumulated error (Ti = 50 s)
+# Burst — for upward steps of at least TEMP_BURST_MIN_STEP_K (on arming or
+# when the setpoint is raised), heat at full power, cut early, coast with
+# the heater off until the TC peaks, then hand back to the PI preloaded near
+# holding power. Same idea as the pressure-mode burst. The heater keeps
+# ~HEATER_LAG_S worth of heat when cut, which carried the TC on by
+# 2.4-3 K in the 16 Sept 2026 runs (12 s and 21 s bursts), so the cut comes
+# brake × (1 − e^(−t/HEATER_LAG_S)) below the setpoint. The brake starts at
+# TEMP_BURST_BRAKE_K and is re-estimated from each coast's measured rise
+# (for this session), so a wrong starting value only costs the first step.
+TEMP_BURST_ENABLE     = True
+TEMP_BURST_MIN_STEP_K = 4.0        # smaller steps are left to the PI
+TEMP_BURST_BRAKE_K    = 3.0        # rise after the cut, fully heated heater (starting value)
+TEMP_BURST_LEARN      = 0.5        # weight of each new measurement in the brake estimate
+TEMP_BURST_MAX_S      = 90.0       # never burst longer than this
+TEMP_COAST_MAX_S      = 60.0
+HEATER_LAG_S          = 5.0        # heater → TC lag (fitted to the 13:36 run)
+HEATER_HOLD_DUTY_40C  = 0.15       # duty that holds ~40 °C (16 Sept 2026 holds)…
+HEATER_HOLD_AMBIENT_C = 26.0       # …scaled with (T − this) for other temperatures
 PID_KD                = 0.0        # duty per °C/s, acts on the MEASUREMENT (no
                                    # setpoint kick). 0 = PI, recommended here: in
                                    # simulation D bought a few seconds of settling
@@ -330,9 +348,7 @@ PRESSURE_BURST_BRAKE_K  = 3.5      # cut full power this far below the seek goal
 PRESSURE_BURST_MAX_START_C = 35.0  # warmer starts skip the burst
 PRESSURE_BURST_MAX_S    = 60.0     # never burst longer than this (13:36: 21 s for +15.5 K)
 PRESSURE_COAST_MAX_S    = 60.0     # coast ends at the TC peak, or after this long
-PRESSURE_HOLD_DUTY      = 0.15     # duty that holds ~40 °C (16 Sept 2026 hold data);
-PRESSURE_HOLD_AMBIENT_C = 26.0     # scaled with (T − this) to preload the temperature PI
-                                   # when the coast ends
+                                   # (holding power for the handover: HEATER_HOLD_DUTY_40C)
 PRESSURE_HOLD_SHUT_C    = 38.5     # setpoint while the target is at/below baseline — safely
                                    # below the cracking point, so the valve stays shut
 PRESSURE_SEEK_BAND_C    = 0.3      # creep starts once the TC is within this of the setpoint…
@@ -512,6 +528,12 @@ _heater = dict(
     p_creep         = 0.0,     # seek: °C added by the creep on top of the goal
     p_goal          = None,    # seek: current goal temperature (for display/logging)
     p_burst         = None,    # seek: None, 'burst', 'coast'
+    t_check         = False,   # auto: re-evaluate a burst (armed / setpoint changed)
+    t_burst         = None,    # auto: None, 'burst', 'coast'
+    t_burst_t0      = None,
+    t_burst_peak    = None,
+    t_burst_cut     = None,    # auto: (TC at cut, heater charge fraction at cut)
+    t_brake         = TEMP_BURST_BRAKE_K,
     p_burst_t0      = None,    # when the current burst/coast stage began
     p_burst_peak    = None,    # coast: highest TC seen
     p_override      = None,    # duty the outer loop imposes (burst/coast), else None
@@ -854,10 +876,13 @@ def heater_command(**kwargs):
                 _heater['integral']    = 0.0
                 _heater['p_init']      = True
                 _heater['d_prev']      = None
+                _heater['t_check']     = True
+                _heater['t_burst']     = None
             else:
                 _heater['armed']    = False
                 _heater['armed_at'] = None
                 _heater['duty_cmd'] = 0.0
+                _heater['t_burst']  = None
         new_mode = kwargs.get('mode')
         if new_mode is not None and new_mode != _heater['mode']:
             if (new_mode == 'manual') != (_heater['mode'] == 'manual'):
@@ -865,9 +890,76 @@ def heater_command(**kwargs):
                 _heater['d_prev']   = None
             if new_mode == 'pressure':
                 _heater['p_init'] = True
+            _heater['t_burst'] = None
+            _heater['t_check'] = new_mode == 'auto'
+        if ('setpoint_C' in kwargs and _heater['mode'] != 'pressure'
+                and kwargs['setpoint_C'] != _heater['setpoint_C']):
+            _heater['t_check'] = True
         for k in ('mode', 'duty_cmd', 'setpoint_C', 'p_target_mbar'):
             if k in kwargs:
                 _heater[k] = kwargs[k]
+
+
+def _hold_integral(t_sp):
+    """Integrator value that makes the PI output roughly the duty that holds
+    t_sp — used to hand over smoothly after a burst."""
+    hold = HEATER_HOLD_DUTY_40C * max(0.0, t_sp - HEATER_HOLD_AMBIENT_C) / max(
+        1.0, 40.0 - HEATER_HOLD_AMBIENT_C)
+    return (min(HEATER_MAX_DUTY, hold) / PID_KI) if PID_KI > 0 else 0.0
+
+
+def _temp_burst_step(temp, setpoint):
+    """Auto mode: run the burst/coast sequence if one is due.
+    Returns the duty to impose, or None to let the PI run."""
+    now, msgs, duty = time.time(), [], None
+    with _heater_lock:
+        h = _heater
+        if h['t_check']:
+            h['t_check'] = False
+            if TEMP_BURST_ENABLE and setpoint - temp >= TEMP_BURST_MIN_STEP_K:
+                h.update(t_burst='burst', t_burst_t0=now, t_burst_peak=None)
+                msgs.append(f"Temperature burst: full power from {temp:.1f} °C toward "
+                            f"{setpoint:.1f} °C")
+            elif h['t_burst']:
+                h['t_burst'] = None
+        stage = h['t_burst']
+        if stage == 'burst':
+            el     = now - h['t_burst_t0']
+            charge = 1.0 - math.exp(-el / HEATER_LAG_S)
+            if temp >= setpoint - h['t_brake'] * charge:
+                msgs.append(f"Temperature burst: cut after {el:.1f} s at {temp:.1f} °C "
+                            f"(brake {h['t_brake']:.1f} K) — coasting")
+                h.update(t_burst='coast', t_burst_t0=now, t_burst_peak=temp,
+                         t_burst_cut=(temp, charge))
+                duty = 0.0
+            elif el > TEMP_BURST_MAX_S:
+                h.update(t_burst=None, d_prev=None, integral=_hold_integral(setpoint))
+                msgs.append(f"Temperature burst: time limit ({TEMP_BURST_MAX_S:g} s) at "
+                            f"{temp:.1f} °C — PI resumes; check the thermocouple")
+            else:
+                duty = HEATER_MAX_DUTY
+        elif stage == 'coast':
+            # Heater stays off until the TC peaks, even if it passes the
+            # setpoint (the PI would be near zero there anyway), so the whole
+            # rise is measured.
+            h['t_burst_peak'] = max(h['t_burst_peak'], temp)
+            past_peak = temp < h['t_burst_peak'] - 0.3
+            if past_peak or now - h['t_burst_t0'] > TEMP_COAST_MAX_S:
+                note = ""
+                cut_T, charge = h['t_burst_cut']
+                if past_peak and charge > 0.3:
+                    measured = (h['t_burst_peak'] - cut_T) / charge
+                    h['t_brake'] = min(10.0, max(1.0, (1 - TEMP_BURST_LEARN) * h['t_brake']
+                                                 + TEMP_BURST_LEARN * measured))
+                    note = f", brake now {h['t_brake']:.1f} K"
+                h.update(t_burst=None, d_prev=None, integral=_hold_integral(setpoint))
+                msgs.append(f"Temperature burst: coast done, peak {h['t_burst_peak']:.1f} °C "
+                            f"vs setpoint {setpoint:.1f} °C{note} — PI resumes")
+            else:
+                duty = 0.0
+    for m in msgs:
+        log_event(m)
+    return duty
 
 
 def _heater_trip(reason: str):
@@ -1071,10 +1163,7 @@ def _burst_step(h, temp, tsp, now, msgs):
 
 def _end_burst(h, tsp, msgs, why):
     """Hand heating back to the temperature PI, preloaded near holding power."""
-    hold = PRESSURE_HOLD_DUTY * max(0.0, tsp - PRESSURE_HOLD_AMBIENT_C) / max(
-        1.0, 40.0 - PRESSURE_HOLD_AMBIENT_C)
-    h.update(p_burst=None, p_override=None, d_prev=None,
-             integral=(min(HEATER_MAX_DUTY, hold) / PID_KI) if PID_KI > 0 else 0.0)
+    h.update(p_burst=None, p_override=None, d_prev=None, integral=_hold_integral(tsp))
     msgs.append(f"Pressure loop: {why} — temperature control resumes")
 
 
@@ -1208,6 +1297,11 @@ def _heater_compute_duty(temp, tc_healthy, dt,
             override = _heater['p_override']
         if override is not None:                # burst / coast: duty set directly
             return max(0.0, min(HEATER_MAX_DUTY, override))
+
+    if mode == 'auto':
+        burst_duty = _temp_burst_step(temp, setpoint)
+        if burst_duty is not None:
+            return max(0.0, min(HEATER_MAX_DUTY, burst_duty))
 
     # ── 'auto' / 'pressure': PI(D) on valve temperature, with anti-windup ──
     error = setpoint - temp
@@ -2090,7 +2184,15 @@ class TEGui:
         else:
             self.heater_status.configure(text="disarmed · output low", fg=DIM)
 
-        if mode != 'pressure':
+        if mode == 'auto' and h['armed'] and h['t_burst'] == 'burst':
+            self.loop_status.configure(
+                text=f"auto (T) · BURST full power, cut ~{h['t_brake']:.1f} K below "
+                     f"{h['setpoint_C']:.1f} °C", fg=BRIGHT)
+        elif mode == 'auto' and h['armed'] and h['t_burst'] == 'coast':
+            self.loop_status.configure(
+                text=f"auto (T) · coasting, heater off (peak {h['t_burst_peak']:.1f} °C) — "
+                     f"PI resumes at the peak", fg=BRIGHT)
+        elif mode != 'pressure':
             self.loop_status.configure(text="")
         elif not h['armed'] or h['p_filt'] is None or h['p_init']:
             self.loop_status.configure(
@@ -2100,6 +2202,12 @@ class TEGui:
         elif h['p_phase'] == 'seek':
             base = (f"{10 ** h['p_base']:.2e} mbar" if h['p_base'] is not None
                     else "measuring…")
+            low = ""
+            if h['p_base'] is not None:
+                lowest = 10 ** h['p_base'] + PRESSURE_MIN_STEP_MBAR
+                if 10 ** h['p_base'] < h['p_target_mbar'] < lowest:
+                    low = (f" — BELOW lowest holdable ≈ {lowest:.1e}, "
+                           f"will hold minimum flow")
             if h['p_burst'] == 'burst':
                 step = f"BURST full power to {h['setpoint_C'] - PRESSURE_BURST_BRAKE_K:.1f} °C"
             elif h['p_burst'] == 'coast':
@@ -2113,17 +2221,26 @@ class TEGui:
             self.loop_status.configure(
                 text=f"auto (P) seeking · valve shut · {step} · goal {h['p_goal']:.1f} · "
                      f"T_sp {h['setpoint_C']:.2f} °C · "
-                     f"baseline {base} · target {h['p_target_mbar']:.2e} mbar",
-                fg=WARN if h['p_seek_capped'] else BRIGHT)
+                     f"baseline {base} · target {h['p_target_mbar']:.2e} mbar{low}",
+                fg=WARN if (h['p_seek_capped'] or low) else BRIGHT)
         else:
             tsp_hi = min(PRESSURE_TSP_MAX_C, TEMP_TRIP_C - 5.0)
             floor  = max(PRESSURE_TSP_MIN_C, PRESSURE_OPEN_FLOOR_C)
-            self.loop_status.configure(
-                text=f"auto (P) · target {h['p_target_mbar']:.2e} · "
-                     f"baseline {10 ** h['p_base']:.2e} · "
-                     f"filt {10 ** h['p_filt']:.2e} · err {h['p_err']:+.2f} dec · "
-                     f"T_sp {floor:g}-{tsp_hi:g} °C",
-                fg=WARN if h['p_pinned_since'] else BRIGHT)
+            lowest = 10 ** h['p_base'] + PRESSURE_MIN_STEP_MBAR
+            if h['p_target_mbar'] < lowest:
+                self.loop_status.configure(
+                    text=f"auto (P) · target {h['p_target_mbar']:.2e} is BELOW the lowest "
+                         f"holdable ≈ {lowest:.1e} (baseline {10 ** h['p_base']:.2e} + "
+                         f"min. flow) — holding minimum flow at the {floor:g} °C floor · "
+                         f"now {10 ** h['p_filt']:.2e}",
+                    fg=WARN)
+            else:
+                self.loop_status.configure(
+                    text=f"auto (P) · target {h['p_target_mbar']:.2e} · "
+                         f"baseline {10 ** h['p_base']:.2e} · "
+                         f"filt {10 ** h['p_filt']:.2e} · err {h['p_err']:+.2f} dec · "
+                         f"T_sp {floor:g}-{tsp_hi:g} °C",
+                    fg=WARN if h['p_pinned_since'] else BRIGHT)
 
         vac_ref = h['p_target_mbar'] if mode == 'pressure' else None
         te_ref  = h['setpoint_C'] if (h['armed'] and mode != 'manual') else None
