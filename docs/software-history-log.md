@@ -1,4 +1,4 @@
-# Decisions
+# Software history log
 
 Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a

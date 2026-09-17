@@ -54,7 +54,7 @@ differently from this page, fix one of them. Add terms as they appear.
 |---|---|
 | **Main log** | `logs/te-sensor_<time>.csv`, one row every 0.5 s. Columns in `tevalve/schema.py`. |
 | **Switching log** | `logs/te-sensor_<time>_pwm.csv`, one row per gate edge. |
-| **P20** | Upstream pressure referred to 20 °C using the Keller chip temperature. Not charted or used by the plotter any more (see decision 2); shown in the text readout with a warning. |
+| **P20** | Upstream pressure referred to 20 °C using the Keller chip temperature. Not charted or used by the plotter any more (see entry 5 in docs/software-history-log.md); shown in the text readout with a warning. |
 | **Golden record** | `tests/golden/control_trace.json.gz`: the control law's recorded behaviour. Tests require an exact match. |
 | **Heater state** | The dict `h` from `controller.new_state()`: operator commands, loop internals and the live electrical readout. At run time it is `shared.heater`. |
 | **Step** | One call of `controller.step`: interlocks, then the control law, every 0.25 s. |

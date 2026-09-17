@@ -2,7 +2,7 @@
 
 Live display, logging and heater control for the TE-Valve test setup, plus
 a plotter for the logs. Terms used here are defined in [CONTEXT.md](CONTEXT.md);
-the reasons behind the design are in [docs/decisions.md](docs/decisions.md).
+the reasons behind the design are in [docs/software-history-log.md](docs/software-history-log.md).
 
 ## Run
 
@@ -75,4 +75,4 @@ no hardware.
 - **New log column.** Append it to `MAIN_COLUMNS` in `tevalve/schema.py`,
   fill it in `logfile.py`. Never rename or reorder existing columns.
 - **New term.** Add it to CONTEXT.md.
-- **A choice someone might question later.** Add a line to docs/decisions.md.
+- **A choice someone might question later.** Add a line to docs/software-history-log.md.
