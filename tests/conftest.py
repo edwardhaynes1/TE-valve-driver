@@ -1,6 +1,5 @@
 """Shared test set-up: make the repo importable and give each test a fresh
 heater state and a fake clock."""
-import copy
 import sys
 from pathlib import Path
 
@@ -11,18 +10,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from driver import config, control, controller, shared  # noqa: E402
 
-_FRESH_HEATER = copy.deepcopy(shared.heater)
-_FRESH_READINGS = copy.deepcopy(shared.readings)
-
 
 def reset_shared():
-    shared.heater.clear()
-    shared.heater.update(copy.deepcopy(_FRESH_HEATER))
-    shared.readings.clear()
-    shared.readings.update(copy.deepcopy(_FRESH_READINGS))
-    for q in (shared.events, shared.events_pending, shared.pwm_edges):
-        q.clear()
-    shared.stop.clear()
+    shared.reset()
+    control.reset()
 
 
 class PackageAdapter:
@@ -31,8 +22,9 @@ class PackageAdapter:
     VAC_SATURATED = config.VAC_SATURATED
     VAC_ERROR = config.VAC_ERROR
 
-    def __init__(self):
-        self.heater = shared.heater
+    @property
+    def heater(self):
+        return control.snapshot()
 
     def command(self, **kw):
         control.heater_command(**kw)
@@ -41,17 +33,21 @@ class PackageAdapter:
         return control.compute_duty(*a)
 
     def set_upstream(self, bar, t):
-        shared.readings['keller_pressure_bar'] = bar
-        shared.readings['keller_pressure_t'] = t
+        if bar is None:
+            shared.clear_keller()
+        else:
+            shared.store_keller(bar, None, t)
 
     def set_clock(self, fn):
         control.clock = fn
 
     def reset(self):
         reset_shared()
+        self._log = []
 
     def events(self):
-        return list(shared.events_pending)
+        self._log.extend(shared.take_events())
+        return list(self._log)
 
 
 class ControllerAdapter:

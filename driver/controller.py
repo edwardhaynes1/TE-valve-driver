@@ -10,6 +10,8 @@ locks, clock, logging, files or hardware.
     trip(h, reason, msgs)                latch the heater off
     record_edge(h, state, duty, now, note) -> row
                                          ON-time accounting for one gate edge
+    take_on_time(h, now) -> seconds      ON time since the previous call
+    force_off(h, device_lost)            device-side disarm (connect / lost)
 
 Everything it needs comes in as arguments: the state `h` (changed in place),
 the time `now`, and the readings. Messages for the event log come back in
@@ -265,6 +267,35 @@ def record_edge(h, state, duty, now, note=""):
         on_s = round(now - since, 3)
     return dict(timestamp=datetime.fromtimestamp(now).isoformat(timespec='milliseconds'),
                 gate=1 if state else 0, duty=round(duty, 4), on_s=on_s, note=note)
+
+
+# Live electrical readout fields, written by the device thread.
+ELECTRICAL = ('out_high', 'v_now', 'i_now', 'rail_meas', 'v_meas', 'i_meas',
+              'v_meas_mean', 'i_meas_mean', 'p_meas_mean')
+
+
+def force_off(h, device_lost=False):
+    """Heater off and disarmed by the device thread (not the operator): on
+    connecting, and — with device_lost — when the LabJack goes away, which
+    also restarts auto-p and clears the electrical readout."""
+    h['armed'] = False
+    h['duty_cmd'] = 0.0
+    h['duty_actual'] = 0.0
+    if device_lost:
+        h['p_init'] = True
+        h.update(out_high=False, v_now=0.0, i_now=0.0, rail_meas=None,
+                 v_meas=None, i_meas=None, v_meas_mean=None,
+                 i_meas_mean=None, p_meas_mean=None)
+
+
+def take_on_time(h, now):
+    """Gate ON seconds since the previous call (for one log row)."""
+    on_s = h['on_time_acc']
+    if h['on_acc_from'] is not None:
+        on_s += now - h['on_acc_from']
+        h['on_acc_from'] = now
+    h['on_time_acc'] = 0.0
+    return on_s
 
 
 def _hold_integral(t_sp):

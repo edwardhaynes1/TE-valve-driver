@@ -40,7 +40,10 @@ from .config import (
     VACUUM_INTERCEPT, VACUUM_SLOPE, VAC_ERROR, VAC_OVER, VAC_SATURATED,
     VAC_UNDER,
 )
-from .control import compute_duty, heater_trip, record_gate_edge
+from .control import (
+    apply_duty, compute_duty, force_off, gate_on_recorded, heater_trip,
+    record_gate_edge, set_electrical,
+)
 from .shared import log_event
 
 
@@ -140,25 +143,15 @@ def keller_thread(initial_port: str, initial_bus):
                 t0 = time.time()
                 p1   = bus.f73(KELLER_ADDRESS, 1)
                 tob1 = bus.f73(KELLER_ADDRESS, 4)
-                with shared.lock:
-                    if p1 is not None:
-                        shared.readings['keller_pressure_samples'].append(round(p1, 4))
-                        shared.readings['keller_pressure_bar'] = p1
-                        shared.readings['keller_pressure_t']   = t0
-                        shared.up_chart.append(p1)
-                    if tob1 is not None:
-                        shared.readings['keller_temperature_samples'].append(round(tob1, 2))
+                shared.store_keller(p1, tob1, t0)
                 shared.stop.wait(timeout=max(0.0, interval - (time.time() - t0)))
 
         except Exception as e:
             log_event(f"Keller read error: {e} — reconnecting…")
 
         # ── null state immediately so GUI shows '---' ──────────────────────
-        shared.keller_ok = False
-        with shared.lock:
-            shared.readings['keller_pressure_samples']    = []
-            shared.readings['keller_temperature_samples'] = []
-            shared.readings['keller_pressure_bar']        = None
+        shared.set_health(keller=False)
+        shared.clear_keller()
 
         if shared.stop.is_set():
             break
@@ -168,7 +161,7 @@ def keller_thread(initial_port: str, initial_bus):
         new_port, new_bus = detect_keller_bus()
         if new_bus is not None:
             port, bus = new_port, new_bus
-            shared.keller_ok = True
+            shared.set_health(keller=True)
             log_event(f"Keller reconnected · {port}")
         else:
             log_event("Keller not found — will retry")
@@ -283,7 +276,7 @@ def _tc_try_init(lj, announce_failure):
 # share one U3 device handle. FIO2 is analogue (vacuum gauge) and FIO4-7 are
 # digital SPI (thermocouple); configIO sets the analogue/digital split once.
 #
-# shared.labjack_ok tracks the vacuum channel, shared.tc_ok tracks the thermocouple. They
+# The labjack health flag tracks the vacuum channel, tc the thermocouple. They
 # are reported independently in the GUI so a fault on one doesn't mask the other.
 
 def vacuum_gauge_status(volts: float):
@@ -370,10 +363,7 @@ def labjack_thread():
             # Heater OFF before anything else happens on this device.
             lj.setDOState(HEATER_FIO, 0)
             record_gate_edge(False, 0.0, "connect: forced low")
-            with shared.heater_lock:
-                shared.heater['armed']       = False
-                shared.heater['duty_cmd']    = 0.0
-                shared.heater['duty_actual'] = 0.0
+            force_off()
 
             # U3 firmware watchdog: if we stop talking to the device for
             # LJ_WATCHDOG_S, the U3 itself drives FIO0 low. This is what
@@ -386,22 +376,24 @@ def labjack_thread():
             except Exception as e:
                 log_event(f"WARNING: U3 watchdog not armed ({e}) — do not leave heater unattended")
 
-            shared.labjack_ok = True
+            shared.set_health(labjack=True)
             sense = "".join(f" · FIO{ch} {nm}" for nm, ch in
                             (("V-sense", HEATER_V_AIN), ("I-sense", HEATER_I_AIN))
                             if ch is not None)
             rng = "0-3.6 V" if VACUUM_AIN_SPECIAL else "0-2.44 V"
             log_event(f"LabJack connected  FIO0 heater · FIO2 analog ({rng}){sense} · FIO4-7 SPI")
         except Exception as e:
-            shared.labjack_ok = False
-            shared.tc_ok = False
+            shared.set_health(labjack=False)
+            tc_ok = False
+            shared.set_health(tc=tc_ok)
             log_event(f"LabJack connect failed: {e} — retry in 5 s")
             shared.stop.wait(timeout=5)
             continue
 
         # ── initialise the thermocouple IC ─────────────────────────────────
-        shared.tc_ok       = _tc_try_init(lj, announce_failure=True)
-        tc_announced = not shared.tc_ok      # failure already logged
+        tc_ok       = _tc_try_init(lj, announce_failure=True)
+        shared.set_health(tc=tc_ok)
+        tc_announced = not tc_ok      # failure already logged
         tc_next_try  = time.time() + TC_RETRY_S
 
         # ── tick loop — breaks on error to trigger reconnect ───────────────
@@ -466,16 +458,12 @@ def labjack_thread():
                                   f"open SW171 / switch off 24 V.")
                         heater_trip("heater current with gate OFF")
 
-                with shared.heater_lock:
-                    shared.heater['out_high']    = out_high
-                    shared.heater['v_now']       = v_now
-                    shared.heater['i_now']       = i_now
-                    shared.heater['rail_meas']   = rail
-                    shared.heater['v_meas']      = v_meas
-                    shared.heater['i_meas']      = i_meas
-                    shared.heater['v_meas_mean'] = sum(v_win) / len(v_win) if v_win else None
-                    shared.heater['i_meas_mean'] = sum(i_win) / len(i_win) if i_win else None
-                    shared.heater['p_meas_mean'] = sum(p_win) / len(p_win) if p_win else None
+                set_electrical(
+                    out_high=out_high, v_now=v_now, i_now=i_now, rail_meas=rail,
+                    v_meas=v_meas, i_meas=i_meas,
+                    v_meas_mean=sum(v_win) / len(v_win) if v_win else None,
+                    i_meas_mean=sum(i_win) / len(i_win) if i_win else None,
+                    p_meas_mean=sum(p_win) / len(p_win) if p_win else None)
 
                 # ── sensors, sub-sampled ───────────────────────────────────
                 if t0 >= next_sensor:
@@ -495,13 +483,9 @@ def labjack_thread():
                             elif vac_status != "startup":
                                 log_event("Vacuum gauge back in range")
                             vac_status = status
-                        with shared.lock:
-                            shared.readings['vacuum_chamber_mbar'] = mbar
-                            shared.readings['vacuum_status']       = status
-                            shared.readings['vacuum_gauge_V']      = raw * VACUUM_DIVIDER_RATIO
-                            shared.vac_chart.append(mbar)
+                        shared.store_vacuum(mbar, status, raw * VACUUM_DIVIDER_RATIO)
                         bad_vac_reads = 0 if mbar is not None else bad_vac_reads + 1
-                        shared.labjack_ok = True
+                        shared.set_health(labjack=True)
                     except Exception as e:
                         log_event(f"LabJack vacuum read error: {e}")
                         break   # reconnect the whole device
@@ -509,55 +493,47 @@ def labjack_thread():
                     # thermocouple not talking: retry init periodically.
                     # (_tc_init blocks ~0.3 s; harmless, as the heater is
                     # already forced off whenever the thermocouple is down.)
-                    if not shared.tc_ok and t0 >= tc_next_try:
+                    if not tc_ok and t0 >= tc_next_try:
                         tc_next_try = t0 + TC_RETRY_S
-                        shared.tc_ok = _tc_try_init(lj, announce_failure=not tc_announced)
-                        tc_announced = not shared.tc_ok
-                        if shared.tc_ok:
+                        tc_ok = _tc_try_init(lj, announce_failure=not tc_announced)
+                        shared.set_health(tc=tc_ok)
+                        tc_announced = not tc_ok
+                        if tc_ok:
                             bad_tc_reads = 0
 
                     # thermocouple (SPI) — only if init succeeded
-                    if shared.tc_ok:
+                    if tc_ok:
                         try:
                             fault = _tc_read_reg(lj, REG_FAULTSR)
                             temp  = _tc_decode_temp(_tc_read_regs(lj, REG_LTCBH, 3))
-                            with shared.lock:
-                                shared.readings['tc_fault'] = fault
-                                # On any active fault, don't trust the temperature
-                                shared.readings['te_temperature_degC'] = temp if fault == 0 else None
-                                if fault == 0:
-                                    shared.te_chart.append(temp)
+                            shared.store_valve_temp(temp, fault)
                             bad_tc_reads = 0 if fault == 0 else bad_tc_reads + 1
                         except Exception as e:
-                            shared.tc_ok = False
+                            tc_ok = False
+                            shared.set_health(tc=tc_ok)
                             bad_tc_reads += 1
-                            with shared.lock:
-                                shared.readings['te_temperature_degC'] = None
-                                shared.readings['tc_fault'] = None
+                            shared.clear_valve_temp()
                             log_event(f"MAX31856 read error: {e} — "
                                       f"re-initialising every {TC_RETRY_S:g} s")
                             tc_announced = True
                             tc_next_try  = t0 + TC_RETRY_S
 
                     # ── control law ────────────────────────────────────────
-                    with shared.lock:
-                        temp_now = shared.readings['te_temperature_degC']
-                        vac_now  = shared.readings['vacuum_chamber_mbar']
-                        vac_st   = shared.readings['vacuum_status']
-                    healthy = shared.tc_ok and bad_tc_reads < TC_BAD_READS_TO_TRIP
+                    now_r    = shared.latest()
+                    temp_now = now_r['te_temperature_degC']
+                    vac_now  = now_r['vacuum_chamber_mbar']
+                    vac_st   = now_r['vacuum_status']
+                    healthy = tc_ok and bad_tc_reads < TC_BAD_READS_TO_TRIP
                     dt      = max(1e-3, t0 - last_ctrl)
                     last_ctrl = t0
                     duty = compute_duty(
                         temp_now, healthy, dt,
                         vac=vac_now, vac_status=vac_st,
                         vac_healthy=bad_vac_reads < PRESSURE_BAD_READS_TO_TRIP)
-                    with shared.heater_lock:
-                        shared.heater['duty_actual'] = duty
-                        p_mean = shared.heater['p_meas_mean']
+                    p_mean = apply_duty(duty)
                     if p_mean is None:
                         p_mean = duty * HEATER_V_RAIL ** 2 / HEATER_R_OHM
-                    with shared.lock:
-                        shared.heat_chart.append(p_mean)
+                    shared.push_power(p_mean)
 
                 # ── time-proportioning output on FIO0 ──────────────────────
                 # Plain digital toggling, no timers: FIO4-7 stay free for SPI.
@@ -572,34 +548,21 @@ def labjack_thread():
                         out_high = want_high
                     except Exception as e:
                         log_event(f"Heater output write error: {e}")
-                        with shared.lock:
-                            shared.pwm_edges.append(dict(
-                                timestamp=datetime.now().isoformat(timespec='milliseconds'),
-                                gate='', duty=round(duty, 4), on_s='',
-                                note=f"write error ({'ON' if want_high else 'OFF'} "
-                                     f"requested), state unknown"))
+                        shared.queue_edge(dict(
+                            timestamp=datetime.now().isoformat(timespec='milliseconds'),
+                            gate='', duty=round(duty, 4), on_s='',
+                            note=f"write error ({'ON' if want_high else 'OFF'} "
+                                 f"requested), state unknown"))
                         break
                     record_gate_edge(out_high, duty)
 
                 shared.stop.wait(timeout=max(0.0, tick - (time.time() - t0)))
         finally:
-            shared.labjack_ok = False
-            shared.tc_ok = False
-            with shared.lock:
-                shared.readings['vacuum_chamber_mbar']   = None
-                shared.readings['te_temperature_degC']   = None
-                shared.readings['tc_fault']              = None
-                shared.readings['vacuum_status']         = None
-                shared.readings['vacuum_gauge_V']        = None
-            with shared.heater_lock:
-                shared.heater['armed']       = False
-                shared.heater['duty_cmd']    = 0.0
-                shared.heater['duty_actual'] = 0.0
-                shared.heater['p_init']      = True
-                shared.heater.update(out_high=False, v_now=0.0, i_now=0.0,
-                               rail_meas=None, v_meas=None, i_meas=None,
-                               v_meas_mean=None, i_meas_mean=None,
-                               p_meas_mean=None)
+            shared.set_health(labjack=False)
+            tc_ok = False
+            shared.set_health(tc=tc_ok)
+            shared.clear_labjack()
+            force_off(device_lost=True)
             # Belt and braces on the way out: force the gate low, then let go
             # of the watchdog so the device isn't left armed for the next user.
             why = "shutdown" if shared.stop.is_set() else "reconnect"
@@ -607,9 +570,7 @@ def labjack_thread():
                 lj.setDOState(HEATER_FIO, 0)
                 record_gate_edge(False, 0.0, f"{why}: forced low")
             except Exception:
-                with shared.heater_lock:
-                    stuck_on = shared.heater['on_since'] is not None
-                if stuck_on:
+                if gate_on_recorded():
                     record_gate_edge(False, 0.0,
                                       f"{why}: force-low write FAILED — gate state "
                                       f"unknown, LabJack watchdog should drop it")

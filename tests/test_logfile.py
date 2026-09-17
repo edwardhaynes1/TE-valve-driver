@@ -3,6 +3,8 @@ import csv
 import json
 import threading
 import time
+
+import pytest
 from pathlib import Path
 
 from driver import control, logfile, schema, shared
@@ -30,8 +32,9 @@ def test_on_time_accounting(clock):
     control.record_gate_edge(True, 0.25)
     clock.advance(0.2)
     control.record_gate_edge(False, 0.25, "shutdown: forced low")
-    assert abs(shared.heater['on_time_acc'] - 0.7) < 1e-9
-    edges = list(shared.pwm_edges)
+    assert control.take_on_time() == pytest.approx(0.7)
+    assert control.take_on_time() == 0.0                  # taken once
+    edges = shared.take_edges()
     assert [e['gate'] for e in edges] == [1, 0, 1, 0]
     assert [e['on_s'] for e in edges] == ['', 0.5, '', 0.2]
     assert edges[-1]['note'] == "shutdown: forced low"
@@ -44,7 +47,7 @@ def test_repeated_on_edge_does_not_restart_the_on_period(clock):
     control.record_gate_edge(True, 1.0)        # e.g. a reconnect re-asserting ON
     clock.advance(0.3)
     control.record_gate_edge(False, 1.0)
-    assert shared.pwm_edges[-1]['on_s'] == 0.6
+    assert shared.take_edges()[-1]['on_s'] == pytest.approx(0.6)
 
 
 def test_logger_writes_both_files(tmp_path, monkeypatch):
@@ -74,7 +77,7 @@ def test_logger_writes_both_files(tmp_path, monkeypatch):
     on_edges = sum(float(e["on_s"]) for e in edges if e["on_s"])
     # each value is rounded to 1 ms, so allow 0.5 ms per rounded value
     assert abs(on_rows - on_edges) <= 0.0005 * (len(rows) + len(edges)) + 1e-9
-    assert shared.csv_ok is True
+    assert shared.health()['csv'] is True
 
 
 def test_importing_the_package_creates_no_files(tmp_path):

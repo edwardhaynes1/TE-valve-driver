@@ -9,7 +9,7 @@ ALLOWED = {
     "schema": set(),
     "config": set(),
     "controller": {"config"},
-    "shared": {"config", "controller"},
+    "shared": {"config"},
     "control": {"config", "shared", "controller"},
     "devices": {"config", "shared", "control"},
     "logfile": {"config", "shared", "control", "schema"},
@@ -56,3 +56,33 @@ def test_control_and_logs_need_no_hardware_or_gui():
     for module in ("config", "controller", "shared", "control", "schema", "logfile"):
         _, external = imports_of(module)
         assert not external & HARDWARE_OR_GUI, f"{module} imports {external & HARDWARE_OR_GUI}"
+
+
+def test_no_module_reaches_into_another_modules_private_names():
+    # e.g. control._heater or shared._readings: go through the functions
+    for module in ALLOWED:
+        tree = ast.parse((PKG / f"{module}.py").read_text(encoding="utf-8"))
+        imported = {a.asname or a.name for n in ast.walk(tree)
+                    if isinstance(n, ast.ImportFrom) and n.level for a in n.names}
+        for n in ast.walk(tree):
+            if (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                    and n.value.id in imported and n.attr.startswith("_")):
+                raise AssertionError(f"{module}: {n.value.id}.{n.attr} (line {n.lineno})")
+            if isinstance(n, ast.ImportFrom) and n.level:
+                private = [a.name for a in n.names if a.name.startswith("_")]
+                assert not private, f"{module} imports private {private}"
+
+
+def test_shared_and_control_expose_no_raw_state():
+    import threading
+    import types
+    from driver import control, shared
+    immutable = (int, float, str, tuple)
+    for mod, allowed in ((shared, immutable + (threading.Event,)), (control, immutable)):
+        for name in dir(mod):
+            if name.startswith("_"):
+                continue
+            obj = getattr(mod, name)
+            if isinstance(obj, (types.FunctionType, types.ModuleType, type)) or callable(obj):
+                continue
+            assert isinstance(obj, allowed), f"{mod.__name__}.{name} is a {type(obj).__name__}"

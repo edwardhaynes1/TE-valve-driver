@@ -96,8 +96,9 @@ def main():
 
     print("Scanning for Keller sensor...")
     keller_port, keller_bus = detect_keller_bus()
-    shared.keller_ok = keller_bus is not None
-    if not shared.keller_ok:
+    keller_ok = keller_bus is not None
+    shared.set_health(keller=keller_ok)
+    if not keller_ok:
         print("  [Keller] NOT FOUND — upstream pressure/temperature will be blank.")
 
     if LABJACK_AVAILABLE:
@@ -119,7 +120,7 @@ def main():
     threading.Thread(target=logger_thread, daemon=True).start()
 
     log_event("System started")
-    if shared.keller_ok:
+    if keller_ok:
         log_event(f"Keller online · {keller_port}")
 
     # ── GUI runs on the main thread ────────────────────────────────────────

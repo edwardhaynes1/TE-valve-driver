@@ -4,6 +4,19 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 12. Shared state only through functions — 17 Sept 2026
+`shared.py` used to hand out its dictionaries, lists and locks, and the GUI,
+logger and device thread reached straight in: the logger reset the heater's
+on-time bookkeeping itself, and the device thread disarmed the heater by
+writing its fields. Every module had to know the key names and locking rules.
+Now `shared.py` keeps readings, charts, events and health flags private
+behind named functions (`store_keller`, `latest`, `take_log_readings`, …),
+and `control.py` alone owns the heater state (`snapshot`, `take_on_time`,
+`force_off`, …). The locking lives in those two files only.
+`test_architecture.py` fails if any module touches another's private names
+or if either file exposes a raw container. Behaviour is unchanged: the golden
+record still matches, and the GUI and logs were checked end to end.
+
 ## 11. One set of names for modes and the valve temperature — 17 Sept 2026
 The modes were "auto (T)" / "auto (P)" on screen but `auto` / `pressure` in
 the code and CSV. They are now `manual`, `auto-t` and `auto-p` everywhere,

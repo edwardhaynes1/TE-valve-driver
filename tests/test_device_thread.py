@@ -25,7 +25,7 @@ def lj(monkeypatch):
     monkeypatch.setattr(devices, "HEATER_PWM_PERIOD_S", PERIOD)
     th = threading.Thread(target=devices.labjack_thread, daemon=True)
     th.start()
-    wait_for(lambda: shared.tc_ok and shared.readings['te_temperature_degC'] is not None)
+    wait_for(lambda: shared.health()['tc'] and shared.latest()['te_temperature_degC'] is not None)
     fake.thread = th
     yield fake
     shared.stop.set()
@@ -42,8 +42,7 @@ def wait_for(cond, timeout=3.0):
 
 
 def edges_with(note):
-    with shared.lock:
-        return [e for e in shared.pwm_edges if note in e['note']]
+    return [e for e in shared.pending_edges() if note in e['note']]
 
 
 def test_connect_forces_the_gate_low_first(lj):
@@ -51,8 +50,9 @@ def test_connect_forces_the_gate_low_first(lj):
     assert edges_with("connect: forced low")
     assert lj.config["NumberOfTimersEnabled"] == 0              # FIO4 stays SPI
     assert lj.watchdog_cfg["SetDIOStateOnTimeout"] is True
-    assert shared.readings['vacuum_chamber_mbar'] == pytest.approx(1.5e-7, rel=1e-3)
-    assert shared.readings['te_temperature_degC'] == pytest.approx(30.0, abs=0.01)
+    r = shared.latest()
+    assert r['vacuum_chamber_mbar'] == pytest.approx(1.5e-7, rel=1e-3)
+    assert r['te_temperature_degC'] == pytest.approx(30.0, abs=0.01)
 
 
 def test_manual_duty_becomes_gate_switching(lj):
@@ -63,9 +63,9 @@ def test_manual_duty_becomes_gate_switching(lj):
     frac = lj.on_fraction(t0, time.time())
     # each edge lands on a tick, and Windows stretches ticks: allow 1.5 ticks per period
     assert frac == pytest.approx(0.4, abs=1.5 * TICK / PERIOD)
-    with shared.lock:
-        on_edges = [e for e in shared.pwm_edges if e['gate'] == 1]
-        off_edges = [e for e in shared.pwm_edges if e['gate'] == 0 and e['on_s'] != '']
+    edges = shared.pending_edges()
+    on_edges = [e for e in edges if e['gate'] == 1]
+    off_edges = [e for e in edges if e['gate'] == 0 and e['on_s'] != '']
     assert len(on_edges) >= 3
     # the first on-period can be partial: arming lands anywhere in the running PWM cycle
     full = [e['on_s'] for e in off_edges[1:]]
@@ -84,9 +84,9 @@ def test_thermocouple_fault_trips_and_drops_the_gate(lj):
     control.heater_command(mode='manual', duty_cmd=1.0, armed=True)
     wait_for(lambda: lj.gate_now() == 1)
     lj.fault = 0x01                                         # open circuit
-    wait_for(lambda: shared.heater['trip_reason'] is not None, timeout=1.0)
+    wait_for(lambda: control.snapshot()['trip_reason'] is not None, timeout=1.0)
     wait_for(lambda: lj.gate_now() == 0, timeout=0.3)
-    assert "thermocouple" in shared.heater['trip_reason']
+    assert "thermocouple" in control.snapshot()['trip_reason']
     lj.fault = 0
     time.sleep(0.5)
     assert lj.gate_now() == 0                               # latched until re-armed
@@ -97,7 +97,7 @@ def test_over_temperature_trips(lj):
     wait_for(lambda: lj.gate_now() == 1)
     lj.temp_c = config.TEMP_TRIP_C + 1
     wait_for(lambda: lj.gate_now() == 0, timeout=1.0)
-    assert "over-temperature" in shared.heater['trip_reason']
+    assert "over-temperature" in control.snapshot()['trip_reason']
 
 
 def test_write_error_reconnects_with_the_gate_low(lj):
@@ -105,7 +105,7 @@ def test_write_error_reconnects_with_the_gate_low(lj):
     control.heater_command(mode='manual', duty_cmd=0.5, armed=True)
     wait_for(lambda: edges_with("write error"))
     wait_for(lambda: edges_with("reconnect: forced low"))
-    assert not shared.heater['armed']                       # reconnect disarms
+    assert not control.snapshot()['armed']                  # reconnect disarms
 
 
 def test_shutdown_leaves_the_gate_low(lj):

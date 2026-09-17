@@ -75,105 +75,70 @@ def logger_thread():
 
         def write_row():
             # gate edges first, so the _pwm file is never behind the main one
-            with shared.lock:
-                edges = list(shared.pwm_edges)
-                shared.pwm_edges.clear()
+            edges = shared.take_edges()
             if edges:
                 try:
                     pwm_writer.writerows([[e[c] for c in schema.PWM] for e in edges])
                     fp.flush()
                 except Exception as e:
-                    with shared.lock:
-                        shared.pwm_edges[:0] = edges
-                    if shared.csv_ok is not False:
-                        shared.csv_ok = False
+                    shared.put_back_edges(edges)
+                    if shared.health()['csv'] is not False:
+                        shared.set_health(csv=False)
                         log_event(f"PWM CSV WRITE FAILED — {type(e).__name__}: {e}")
                     return
 
-            with shared.lock:
-                p_samp = shared.readings['keller_pressure_samples']
-                t_samp = shared.readings['keller_temperature_samples']
-                p_mean = round(sum(p_samp) / len(p_samp), 4) if p_samp else None
-                t_mean = round(sum(t_samp) / len(t_samp), 2) if t_samp else None
-                n_k    = len(p_samp)
-                shared.readings['keller_pressure_samples']    = []
-                shared.readings['keller_temperature_samples'] = []
-
-                vac     = shared.readings['vacuum_chamber_mbar']
-                te_temp = shared.readings['te_temperature_degC']
-                fault   = shared.readings['tc_fault']
-                vac_st  = shared.readings['vacuum_status'] or ''
-                taken   = list(shared.events_pending)
-                shared.events_pending.clear()
+            r = shared.take_log_readings()
+            taken = shared.take_events()
             events = ' | '.join(ascii_text(e) for e in taken)
 
-            with shared.heater_lock:
-                h_duty = round(shared.heater['duty_actual'], 4)
-                h_mode = shared.heater['mode'] if shared.heater['armed'] else 'off'
-                h_set  = (round(shared.heater['setpoint_C'], 2)
-                          if shared.heater['mode'] in (AUTO_T, AUTO_P) else '')
-                v_calc = round(shared.heater['duty_actual'] * HEATER_V_RAIL, 3)
-                i_calc = round(shared.heater['duty_actual'] * HEATER_V_RAIL / HEATER_R_OHM, 4)
-                v_m    = shared.heater['v_meas_mean']
-                i_m    = shared.heater['i_meas_mean']
-                v_m    = round(v_m, 3) if v_m is not None else ''
-                i_m    = round(i_m, 4) if i_m is not None else ''
-                p_calc = round(shared.heater['duty_actual'] * HEATER_V_RAIL ** 2 / HEATER_R_OHM, 4)
-                p_m    = shared.heater['p_meas_mean']
-                p_m    = round(p_m, 4) if p_m is not None else ''
-                now    = control.clock()   # same clock as the edge times
-                on_s   = shared.heater['on_time_acc']
-                if shared.heater['on_acc_from'] is not None:
-                    on_s += now - shared.heater['on_acc_from']
-                    shared.heater['on_acc_from'] = now
-                shared.heater['on_time_acc'] = 0.0
-                on_s   = round(on_s, 3)
-                in_p   = shared.heater['mode'] == AUTO_P and not shared.heater['p_init']
-                p_tgt  = shared.heater['p_target_mbar'] if in_p else ''
-                p_base = (10 ** shared.heater['p_base']
-                          if in_p and shared.heater['p_base'] is not None else '')
-                d_cmd  = (round(shared.heater['duty_cmd'], 4)
-                          if shared.heater['mode'] == MANUAL else '')
+            h = control.snapshot()
+            on_s = round(control.take_on_time(), 3)
+            duty = h['duty_actual']
+            in_p = h['mode'] == AUTO_P and not h['p_init']
+
+            def blank_or(value, digits):
+                return round(value, digits) if value is not None else ''
 
             ts = datetime.now().isoformat(timespec='milliseconds')
+            row = {
+                'timestamp': ts,
+                'keller_pressure_bar': r['p_mean'],
+                'keller_temperature_degC': r['t_mean'],
+                'n_keller_samples': r['n_keller'],
+                'vacuum_chamber_mbar': r['vac'],
+                'te_temperature_degC': r['valve_temp'],
+                'tc_fault': r['fault'] if r['fault'] is not None else '',
+                'heater_duty': round(duty, 4),
+                'heater_mode': h['mode'] if h['armed'] else 'off',
+                'heater_setpoint_degC': (round(h['setpoint_C'], 2)
+                                         if h['mode'] in (AUTO_T, AUTO_P) else ''),
+                'heater_V_mean_calc': round(duty * HEATER_V_RAIL, 3),
+                'heater_I_mean_calc': round(duty * HEATER_V_RAIL / HEATER_R_OHM, 4),
+                'heater_V_mean_meas': blank_or(h['v_meas_mean'], 3),
+                'heater_I_mean_meas': blank_or(h['i_meas_mean'], 4),
+                'pressure_target_mbar': h['p_target_mbar'] if in_p else '',
+                'vacuum_status': r['vac_status'] or '',
+                'heater_duty_cmd': round(h['duty_cmd'], 4) if h['mode'] == MANUAL else '',
+                'events': events,
+                'pressure_baseline_mbar': (10 ** h['p_base']
+                                           if in_p and h['p_base'] is not None else ''),
+                'heater_P_mean_calc': round(duty * HEATER_V_RAIL ** 2 / HEATER_R_OHM, 4),
+                'heater_P_mean_meas': blank_or(h['p_meas_mean'], 4),
+                'heater_on_s': on_s,
+            }
             try:
-                row = {
-                    'timestamp': ts,
-                    'keller_pressure_bar': p_mean,
-                    'keller_temperature_degC': t_mean,
-                    'n_keller_samples': n_k,
-                    'vacuum_chamber_mbar': vac,
-                    'te_temperature_degC': te_temp,
-                    'tc_fault': fault if fault is not None else '',
-                    'heater_duty': h_duty,
-                    'heater_mode': h_mode,
-                    'heater_setpoint_degC': h_set,
-                    'heater_V_mean_calc': v_calc,
-                    'heater_I_mean_calc': i_calc,
-                    'heater_V_mean_meas': v_m,
-                    'heater_I_mean_meas': i_m,
-                    'pressure_target_mbar': p_tgt,
-                    'vacuum_status': vac_st,
-                    'heater_duty_cmd': d_cmd,
-                    'events': events,
-                    'pressure_baseline_mbar': p_base,
-                    'heater_P_mean_calc': p_calc,
-                    'heater_P_mean_meas': p_m,
-                    'heater_on_s': on_s,
-                }
                 writer.writerow([row[c] for c in schema.MAIN])
                 f.flush()
             except Exception as e:
-                with shared.lock:                       # keep the events for next time
-                    shared.events_pending[:0] = taken
-                if shared.csv_ok is not False:          # report once per outage
-                    shared.csv_ok = False
+                shared.put_back_events(taken)           # keep the events for next time
+                if shared.health()['csv'] is not False:  # report once per outage
+                    shared.set_health(csv=False)
                     log_event(f"CSV WRITE FAILED — {type(e).__name__}: {e} — "
                               f"data is NOT being logged, retrying every row")
                 return
-            if shared.csv_ok is False:
+            if shared.health()['csv'] is False:
                 log_event("CSV logging resumed")
-            shared.csv_ok = True
+            shared.set_health(csv=True)
 
         start = time.time()
         n = 0

@@ -18,7 +18,7 @@ from .config import (
     PRESSURE_SEEK_START_C, PRESSURE_TARGET_DEFAULT, PRESSURE_TARGET_MIN,
     PRESSURE_TRIP_MBAR, PRESSURE_TSP_MAX_C, PRESSURE_TSP_MIN_C, TEMP_TRIP_C,
 )
-from .control import AUTO_P, AUTO_T, MANUAL, MODES, heater_command
+from .control import AUTO_P, AUTO_T, MANUAL, MODES, heater_command, snapshot
 from .devices import FAULT_BITS, LABJACK_AVAILABLE
 from .shared import log_event
 
@@ -192,9 +192,7 @@ class TEGui:
         self._send_update()
 
     def _toggle_arm(self):
-        with shared.heater_lock:
-            armed = shared.heater['armed']
-        if armed:
+        if snapshot()['armed']:
             heater_command(armed=False)
             log_event("Heater DISARMED by operator")
         else:
@@ -392,7 +390,7 @@ class TEGui:
 
     def _heater_vi_lines(self, h):
         """Return [(label, value, note, value_tag)] for the V and I readouts."""
-        if not shared.labjack_ok:
+        if not shared.health()['labjack']:
             return [("HEATER V     ", "---", "", "dim"),
                     ("HEATER I     ", "---", "", "dim"),
                     ("HEATER P     ", "---", "", "dim")]
@@ -434,23 +432,24 @@ class TEGui:
         return lines
 
     def _poll(self):
-        with shared.lock:
-            p_samp = shared.readings['keller_pressure_samples']
-            t_samp = shared.readings['keller_temperature_samples']
-            p       = (sum(p_samp) / len(p_samp)) if p_samp else None
-            t       = (sum(t_samp) / len(t_samp)) if t_samp else None
-            vac     = shared.readings['vacuum_chamber_mbar']
-            vac_st  = shared.readings['vacuum_status']
-            vac_u   = shared.readings['vacuum_gauge_V']
-            te_temp = shared.readings['te_temperature_degC']
-            fault   = shared.readings['tc_fault']
-            up_chart   = list(shared.up_chart)
-            vac_chart  = list(shared.vac_chart)
-            te_chart   = list(shared.te_chart)
-            heat_chart = list(shared.heat_chart)
-            events     = list(shared.events)
-        with shared.heater_lock:
-            h = dict(shared.heater)
+        r = shared.latest()
+        hist = shared.charts()
+        ok = shared.health()
+        events = shared.recent_events()
+        h = snapshot()
+        p_samp = r['keller_pressure_samples']
+        t_samp = r['keller_temperature_samples']
+        p       = (sum(p_samp) / len(p_samp)) if p_samp else None
+        t       = (sum(t_samp) / len(t_samp)) if t_samp else None
+        vac     = r['vacuum_chamber_mbar']
+        vac_st  = r['vacuum_status']
+        vac_u   = r['vacuum_gauge_V']
+        te_temp = r['te_temperature_degC']
+        fault   = r['tc_fault']
+        up_chart   = hist['upstream']
+        vac_chart  = hist['vacuum']
+        te_chart   = hist['valve_temp']
+        heat_chart = hist['power']
 
         p_s  = f"{p:.4f} bar"      if p       is not None else "---"
         t_s  = f"{t:.1f} °C"       if t       is not None else "---"
@@ -472,11 +471,11 @@ class TEGui:
         st.delete("1.0", "end")
         st.insert("end", "TE-VALVE-DRIVER\n", "bright")
         for lbl, ok, avail in (
-            (f"[KELLER:{'OK' if shared.keller_ok else '--'}]",  shared.keller_ok,  True),
-            (f"[VACUUM:{'OK' if shared.labjack_ok else '--'}]", shared.labjack_ok, LABJACK_AVAILABLE),
-            (f"[VALVE-T:{'OK' if shared.tc_ok else '--'}]",     shared.tc_ok,      LABJACK_AVAILABLE),
-            (f"[CSV:{'OK' if shared.csv_ok else ('ERR' if shared.csv_ok is False else '--')}]",
-             bool(shared.csv_ok), True),
+            (f"[KELLER:{'OK' if ok['keller'] else '--'}]",   ok['keller'],  True),
+            (f"[VACUUM:{'OK' if ok['labjack'] else '--'}]",  ok['labjack'], LABJACK_AVAILABLE),
+            (f"[VALVE-T:{'OK' if ok['tc'] else '--'}]",      ok['tc'],      LABJACK_AVAILABLE),
+            (f"[CSV:{'OK' if ok['csv'] else ('ERR' if ok['csv'] is False else '--')}]",
+             bool(ok['csv']), True),
         ):
             tag = "ok" if ok else ("dim" if not avail else "err")
             st.insert("end", lbl + "  ", tag)

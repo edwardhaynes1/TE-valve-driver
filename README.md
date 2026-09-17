@@ -25,20 +25,20 @@ driver/
   config.py           every tunable number: wiring, calibration, limits, tuning
   controller.py       heater control law and interlocks: state, time and readings
                       in; duty and messages out. No threads, clock, files or hardware
-  control.py          thread-safe wrapper the device thread and GUI call
+  control.py          owns the heater state; the only way to command or read it
   devices.py          Keller, LabJack, thermocouple, heater gate, their threads
   logfile.py          the two CSV logs
   schema.py           CSV column names (shared with the plotter)
-  shared.py           state shared between threads, event log
+  shared.py           readings, charts, event log, health flags — through functions only
   gui.py              the Live Log window
   app.py              start-up
 tests/                pytest suite, scenarios and golden record
 ```
 
-Dependencies only point one way: `config` ← `controller` ← `shared` ←
+Dependencies only point one way: `config` ← `controller`, `shared` ←
 `control` ← `devices`, `logfile` ← `gui` ← `app`. `controller` imports
 nothing but `config` and pure standard modules; `test_architecture.py`
-enforces this.
+enforces this, and that no module reaches into another's private names.
 
 ## Test
 
