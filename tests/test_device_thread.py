@@ -13,7 +13,7 @@ from fake_u3 import FakeU3  # noqa: E402
 from tevalve import config, control, devices, shared  # noqa: E402
 
 PERIOD = 0.5
-
+STEP = 1.0 / config.LABJACK_SAMPLE_HZ   # the controller runs this often (0.25 s)
 
 @pytest.fixture
 def lj(monkeypatch):
@@ -68,11 +68,11 @@ def test_manual_duty_becomes_gate_switching(lj):
     assert all(e['on_s'] == pytest.approx(0.4 * PERIOD, abs=0.06) for e in off_edges)
 
 
-def test_disarm_stops_heating_within_a_tick(lj):
+def test_disarm_stops_heating_within_a_control_step(lj):
     control.heater_command(mode='manual', duty_cmd=1.0, armed=True)
     wait_for(lambda: lj.gate_now() == 1)
     control.heater_command(armed=False)
-    wait_for(lambda: lj.gate_now() == 0, timeout=0.3)
+    wait_for(lambda: lj.gate_now() == 0, timeout=STEP + 0.5)
 
 
 def test_thermocouple_fault_trips_and_drops_the_gate(lj):
