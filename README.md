@@ -47,8 +47,8 @@ pip install pytest
 python -m pytest
 ```
 
-Run the tests before every commit. They take about 10 seconds and need
-no hardware. GitHub also runs them on Windows after every push
+Run the tests before every commit. They take about half a minute and
+need no hardware. GitHub also runs them on Windows after every push
 (`.github/workflows/tests.yml`): see the repository's **Actions** tab, and
 GitHub emails you if a run fails.
 
@@ -63,6 +63,10 @@ GitHub emails you if a run fails.
 - **`test_device_thread.py`** runs the real LabJack thread against a fake
   U3 (`fake_u3.py`): duty becomes gate switching, disarm and trips drop the
   gate, a write error reconnects with the gate low, shutdown leaves it low.
+- **`test_device_faults.py`** covers the thread's error and sensing paths:
+  a lost vacuum reading, gauge range changes, thermocouple faults and
+  recovery, measured heater voltage and current (including the no-current
+  warning and the stray-current trip), and a failed force-low at shutdown.
 - **`test_logfile.py`, `test_devices.py`, `test_plotter.py`** cover the logs,
   the gauge conversion, pin checks, and that the plotter reads what the
   driver writes.

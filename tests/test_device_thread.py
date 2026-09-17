@@ -1,48 +1,25 @@
-"""devices.labjack_thread against a fake U3: gate switching, the
+"""The LabJack thread against a fake U3: gate switching, the
 thermocouple interlock, write errors and shutdown. Runs in real time
 (a few seconds) with a shortened PWM period."""
-import threading
 import time
-import types
 
 import pytest
 
 pytest.importorskip("serial")
 
+from device_harness import STEP, TICK, edges_with, start, stop, wait_for  # noqa: E402
 from fake_u3 import FakeU3  # noqa: E402
-from driver import config, control, devices, shared  # noqa: E402
+from driver import config, control, shared  # noqa: E402
 
 PERIOD = 1.0
-TICK = 1.0 / config.HEATER_TICK_HZ   # 50 ms: the gate can only switch on a tick
-STEP = 1.0 / config.LABJACK_SAMPLE_HZ   # the controller runs this often (0.25 s)
+
 
 @pytest.fixture
 def lj(monkeypatch):
     fake = FakeU3(config.VACUUM_DIVIDER_RATIO)
-    monkeypatch.setattr(control, "clock", time.time)          # real time here
-    monkeypatch.setattr(devices, "LABJACK_AVAILABLE", True)
-    monkeypatch.setattr(devices, "u3", types.SimpleNamespace(U3=lambda: fake), raising=False)
-    monkeypatch.setattr(devices, "HEATER_PWM_PERIOD_S", PERIOD)
-    th = threading.Thread(target=devices.labjack_thread, daemon=True)
-    th.start()
-    wait_for(lambda: shared.health()['tc'] and shared.latest()['te_temperature_degC'] is not None)
-    fake.thread = th
+    fake.thread = start(monkeypatch, fake, HEATER_PWM_PERIOD_S=PERIOD)
     yield fake
-    shared.stop.set()
-    th.join(timeout=3)
-
-
-def wait_for(cond, timeout=3.0):
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        if cond():
-            return
-        time.sleep(0.02)
-    raise AssertionError("condition not reached")
-
-
-def edges_with(note):
-    return [e for e in shared.pending_edges() if note in e['note']]
+    stop(fake.thread)
 
 
 def test_connect_forces_the_gate_low_first(lj):
