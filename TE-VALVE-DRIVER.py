@@ -13,7 +13,7 @@ The code lives in the tevalve/ package:
     schema.py    CSV column names, shared with TE_PLOTTER.py
     gui.py       the Live Log window
     app.py       start-up
-See README.md and CONTEXT.md.
+See README.md and docs/context.md.
 """
 from tevalve.app import run
 

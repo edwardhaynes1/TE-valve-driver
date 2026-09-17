@@ -1,7 +1,7 @@
 # TE-Valve driver
 
 Live display, logging and heater control for the TE-Valve test setup, plus
-a plotter for the logs. Terms used here are defined in [CONTEXT.md](CONTEXT.md);
+a plotter for the logs. Terms used here are defined in [docs/context.md](docs/context.md);
 the reasons behind the design are in [docs/software-history-log.md](docs/software-history-log.md).
 
 ## Run
@@ -74,5 +74,5 @@ no hardware.
   file together with the change.
 - **New log column.** Append it to `MAIN_COLUMNS` in `tevalve/schema.py`,
   fill it in `logfile.py`. Never rename or reorder existing columns.
-- **New term.** Add it to CONTEXT.md.
+- **New term.** Add it to docs/context.md.
 - **A choice someone might question later.** Add a line to docs/software-history-log.md.
