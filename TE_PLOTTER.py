@@ -34,6 +34,8 @@ Usage:
     python TE_PLOTTER.py LOGFILE.csv         # skips the picker
     python TE_PLOTTER.py LOGFILE.csv -o OUT.png [--no-show]
 """
+import sys
+sys.dont_write_bytecode = True   # keep __pycache__ folders out of the project
 
 import argparse
 import sys
