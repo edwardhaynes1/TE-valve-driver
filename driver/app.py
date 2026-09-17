@@ -85,12 +85,12 @@ def main():
         print("  If in doubt about the heater: SW171 off and 24 V off at")
         print("  the wall makes it safe regardless of what software does.")
         print("!" * 60 + "\n")
-        return
+        return False
 
     pin_err = check_sense_pins()
     if pin_err:
         print(f"\nCONFIG ERROR: {pin_err}\nFix the heater sense settings and restart.\n")
-        return
+        return False
 
     logfile.init_paths()
 
@@ -124,18 +124,21 @@ def main():
 
     # ── GUI runs on the main thread ────────────────────────────────────────
     TEGui().run()
+    return True
 
 
 def run():
-    """Entry point for TE-VALVE-DRIVER.py: keeps the console open on a crash,
-    so a double-clicked window doesn't vanish before the error can be read."""
+    """Entry point for TE-VALVE-DRIVER.py. The console closes by itself after
+    a normal exit, but stays open after a crash or a refused start, so the
+    message can be read."""
+    ok = False
     try:
-        main()
+        ok = main()
     except Exception:
         import traceback
         print("\n" + "=" * 60)
         print("FATAL ERROR:")
         print("=" * 60)
         traceback.print_exc()
-    finally:
+    if not ok:
         input("\nPress Enter to close...")
