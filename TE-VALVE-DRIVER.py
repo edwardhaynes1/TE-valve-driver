@@ -1875,18 +1875,27 @@ def logger_thread():
 # ═══════════════════════════════════════════════════════════════════════════════
 # GUI
 # ═══════════════════════════════════════════════════════════════════════════════
-BG     = "#0c0c0c"
-TEXT   = "#d0d0d0"
-BRIGHT = "#ffffff"
-DIM    = "#505050"
-BORDER = "#2a2a2a"
-WARN   = "#ff4040"
-GRID   = "#1a1a1a"
-REF    = "#8a8a8a"   # dashed target / setpoint lines
-TEMP_LINE = "#ff2a2a"   # TE valve temperature curve (red)
-VAC_LINE  = "#2f8cff"   # vacuum chamber pressure curve (blue)
-UP_LINE   = "#cfe6cf"   # upstream pressure curve (whitish green, secondary)
-PWR_LINE  = "#ff8c00"   # heater power curve (orange, matches TE_PLOTTER)
+# All GUI colours are defined here and used by name below. Change them here.
+
+# Base palette (window, text, controls)
+BG        = "#0c0c0c"   # window background
+TEXT      = "#d0d0d0"   # normal text
+BRIGHT    = "#ffffff"   # highlighted values
+DIM       = "#505050"   # labels, inactive items
+BORDER    = "#2a2a2a"   # chart and entry borders
+WARN      = "#ff4040"   # errors, trips, warnings
+FIELD     = "#1a1a1a"   # entry boxes and buttons
+FIELD_HOT = "#303030"   # button while pressed
+
+# Charts
+GRID      = "#1a1a1a"   # horizontal grid lines
+REF       = "#8a8a8a"   # dashed target / setpoint / budget lines
+
+# Chart traces
+TEMP_LINE = "#ff2a2a"   # TE valve temperature (red)
+VAC_LINE  = "#2f8cff"   # vacuum chamber pressure (blue)
+UP_LINE   = "#cfe6cf"   # upstream pressure (whitish green, secondary)
+PWR_LINE  = "#ffffff"   # heater power (white)
 
 # Operator-facing mode names. Internal values (and the CSV heater_mode
 # column) stay 'manual' / 'auto' / 'pressure'.
@@ -1970,7 +1979,7 @@ class TEGui:
     def _entry(self, parent, label, initial, width=8):
         lbl = tk.Label(parent, text=label, font=self.f, fg=DIM, bg=BG)
         lbl.pack(side="left")
-        e = tk.Entry(parent, width=width, font=self.f, bg="#1a1a1a",
+        e = tk.Entry(parent, width=width, font=self.f, bg=FIELD,
                      fg=BRIGHT, insertbackground=BRIGHT, bd=0,
                      highlightthickness=1, highlightbackground=BORDER,
                      disabledbackground=BG, disabledforeground=DIM)
@@ -1999,7 +2008,7 @@ class TEGui:
         tk.Label(parent, text="─── heater  (FIO0 → Q171)   SW171 must be enabled",
                  font=self.f, fg=DIM, bg=BG, anchor="w").pack(fill="x")
 
-        btn = dict(bg="#1a1a1a", fg=TEXT, activebackground="#303030",
+        btn = dict(bg=FIELD, fg=TEXT, activebackground=FIELD_HOT,
                    activeforeground=BRIGHT, font=self.f, bd=0,
                    highlightthickness=1, highlightbackground=BORDER,
                    padx=8, pady=2)
