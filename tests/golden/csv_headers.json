@@ -1,0 +1,33 @@
+{
+ "main": [
+  "timestamp",
+  "keller_pressure_bar",
+  "keller_temperature_degC",
+  "n_keller_samples",
+  "vacuum_chamber_mbar",
+  "te_temperature_degC",
+  "tc_fault",
+  "heater_duty",
+  "heater_mode",
+  "heater_setpoint_degC",
+  "heater_V_mean_calc",
+  "heater_I_mean_calc",
+  "heater_V_mean_meas",
+  "heater_I_mean_meas",
+  "pressure_target_mbar",
+  "vacuum_status",
+  "heater_duty_cmd",
+  "events",
+  "pressure_baseline_mbar",
+  "heater_P_mean_calc",
+  "heater_P_mean_meas",
+  "heater_on_s"
+ ],
+ "pwm": [
+  "timestamp",
+  "gate",
+  "duty",
+  "on_s",
+  "note"
+ ]
+}

@@ -24,9 +24,10 @@ counts as open while the pressure sits clearly above its fitted baseline
 Step-response fits, upstream decay rates (raw pressure), heater energy and
 the outgassing fit are printed to the terminal.
 
-Column names are matched loosely, so logs from different driver versions
-work without editing this file. Whatever it matched is printed at the top
-of every run; anything it cannot match is skipped rather than fatal.
+Column names come from tevalve/schema.py, the same definition the driver
+writes with. Logs from older driver versions, whose names differ, fall back
+to loose matching (COLUMN_ALIASES). Whatever it matched is printed at the
+top of every run; anything it cannot match is skipped rather than fatal.
 
 Usage:
     python TE_PLOTTER.py                     # opens a file picker
@@ -58,7 +59,38 @@ except ImportError as _exc:
     sys.exit(1)
 
 # ---------------------------------------------------------------------------
-# Column matching. Each role lists candidate name fragments, best first.
+# Column names written by the current driver (tevalve/schema.py). If the
+# package isn't next to this file, the plotter still works on the aliases.
+# ---------------------------------------------------------------------------
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+try:
+    from tevalve import schema as _schema
+    SCHEMA_COLUMNS = set(_schema.MAIN)
+except ImportError:
+    SCHEMA_COLUMNS = set()
+
+# Role -> column name in the current schema
+ROLE_COLUMNS = {
+    "time": "timestamp",
+    "temp": "te_temperature_degC",
+    "chamber": "vacuum_chamber_mbar",
+    "upstream": "keller_pressure_bar",
+    "p_target": "pressure_target_mbar",
+    "t_setpoint": "heater_setpoint_degC",
+    "keller_temp": "keller_temperature_degC",
+    "duty": "heater_duty",
+    "current_meas": "heater_I_mean_meas",
+    "current_calc": "heater_I_mean_calc",
+    "power_meas": "heater_P_mean_meas",
+    "power_calc": "heater_P_mean_calc",
+    "fault": "tc_fault",
+    "mode": "heater_mode",
+}
+assert not SCHEMA_COLUMNS or set(ROLE_COLUMNS.values()) <= SCHEMA_COLUMNS, \
+    "TE_PLOTTER.ROLE_COLUMNS names a column that tevalve/schema.py doesn't define"
+
+# ---------------------------------------------------------------------------
+# Fallback for older logs. Each role lists candidate name fragments, best first.
 # Matching is case-insensitive and ignores spaces, hyphens and underscores.
 # Add a fragment here if a future driver renames something.
 # ---------------------------------------------------------------------------
@@ -139,6 +171,9 @@ def resolve_columns(df):
     normed = {norm(c): c for c in df.columns}
     found = {}
     for role, aliases in COLUMN_ALIASES.items():
+        if ROLE_COLUMNS.get(role) in df.columns:    # current schema: exact name
+            found[role] = ROLE_COLUMNS[role]
+            continue
         banned = COLUMN_EXCLUDE.get(role, [])
         allowed = {n: c for n, c in normed.items()
                    if not any(b in n for b in banned)}

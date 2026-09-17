@@ -1,0 +1,10 @@
+# driver
+pyserial
+LabJackPython
+keller-protocol
+# plotter
+numpy
+pandas
+matplotlib
+# tests
+pytest
