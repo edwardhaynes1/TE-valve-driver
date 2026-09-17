@@ -30,13 +30,14 @@ from .shared import log_event
 # operating system releases it automatically when the process dies, however it
 # dies, so there is no stale-lock file to clean up by hand.
 
-_LOCK_PATH = str(Path(__file__).resolve().parent.parent / ".te-valve-driver.lock")
+_LOCK_PATH = str(Path(__file__).resolve().parent.parent / "logs" / ".te-valve-driver.lock")
 _lock_fh = None
 
 
 def acquire_single_instance_lock():
     """Return True if we got the lock, False if another instance holds it."""
     global _lock_fh
+    os.makedirs(os.path.dirname(_LOCK_PATH), exist_ok=True)
     try:
         _lock_fh = open(_LOCK_PATH, 'a+')
     except Exception:
