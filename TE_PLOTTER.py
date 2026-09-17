@@ -14,7 +14,7 @@ Panels (only those whose data is present are drawn):
   B  Main plot, larger, same time axis: chamber pressure (blue, log,
      left axis) and valve temperature (red, right axis). In auto-p
      runs the driver's pressure target is drawn dashed blue; while the
-     heater is in temperature-control mode, the temperature setpoint is
+     heater is in auto-t, the temperature setpoint is
      drawn dotted red.
 
 Valve open/close times are detected from the chamber pressure: the valve

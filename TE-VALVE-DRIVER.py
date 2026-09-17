@@ -15,7 +15,11 @@ The code lives in the driver/ package:
     app.py       start-up
 See README.md and prog-documentation/context.md.
 """
-from driver.app import run
+import sys
+
+sys.dont_write_bytecode = True   # keep __pycache__ folders out of the project
+
+from driver.app import run  # noqa: E402
 
 if __name__ == "__main__":
     run()
