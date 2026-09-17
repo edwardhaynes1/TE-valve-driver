@@ -15,7 +15,11 @@ after the lock is released. The logic itself is in controller.py.
 import time
 
 from . import controller, shared
+from .controller import AUTO_P, AUTO_T, MANUAL, MODES
 from .shared import log_event
+
+__all__ = ['MANUAL', 'AUTO_T', 'AUTO_P', 'MODES', 'clock', 'heater_command',
+           'compute_duty', 'heater_trip', 'record_gate_edge']
 
 # Time source. Tests replace it with a fake clock.
 clock = time.time

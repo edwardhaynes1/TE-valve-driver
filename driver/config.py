@@ -73,7 +73,7 @@ TC_BAD_READS_TO_TRIP  = 3          # consecutive bad TC reads before tripping
 TC_RETRY_S            = 5.0        # re-initialise a non-responding MAX31856 this often
 LJ_WATCHDOG_S         = 10         # U3 firmware watchdog → FIO0 low if we die
 
-# ─── Closed-loop temperature control (mode 'auto') ───────────────────────────
+# ─── Closed-loop temperature control (mode auto-t) ───────────────────────────
 # Tuned 15 Sept 2026 from bench data. The valve fits a first-order plant with
 # gain ≈ 105 °C per unit duty and time constant ≈ 80 s. The previous gains
 # (Kp 0.020, Ki 0.0015 → integral time 13 s, far shorter than the plant's
@@ -126,7 +126,7 @@ PID_KD                = 0.0        # duty per °C/s, acts on the MEASUREMENT (no
 PID_D_FILTER_S        = 5.0        # low-pass on the derivative, s
 PID_SETPOINT_DEFAULT  = 60.0       # °C
 
-# ─── Closed-loop PRESSURE control (mode 'pressure') ──────────────────────────
+# ─── Closed-loop PRESSURE control (mode auto-p) ──────────────────────────────
 # Cascade: outer PI on log10(chamber pressure) → valve temperature setpoint →
 # the inner PI above → duty. Gains are STARTING VALUES — tune on the bench.
 # The operator's target is ABSOLUTE chamber pressure. The baseline (valve

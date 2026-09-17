@@ -18,7 +18,7 @@ from .config import (
     PRESSURE_SEEK_START_C, PRESSURE_TARGET_DEFAULT, PRESSURE_TARGET_MIN,
     PRESSURE_TRIP_MBAR, PRESSURE_TSP_MAX_C, PRESSURE_TSP_MIN_C, TEMP_TRIP_C,
 )
-from .control import heater_command
+from .control import AUTO_P, AUTO_T, MANUAL, MODES, heater_command
 from .devices import FAULT_BITS, LABJACK_AVAILABLE
 from .shared import log_event
 
@@ -43,14 +43,11 @@ GRID      = "#1a1a1a"   # horizontal grid lines
 REF       = "#8a8a8a"   # dashed target / setpoint / budget lines
 
 # Chart traces
-TEMP_LINE = "#ff2a2a"   # TE valve temperature (red)
+TEMP_LINE = "#ff2a2a"   # valve temperature (red)
 VAC_LINE  = "#2f8cff"   # vacuum chamber pressure (blue)
 UP_LINE   = "#cfe6cf"   # upstream pressure (whitish green, secondary)
 PWR_LINE  = "#ffffff"   # heater power (white)
 
-# Operator-facing mode names. Internal values (and the CSV heater_mode
-# column) stay 'manual' / 'auto' / 'pressure'.
-MODE_LABELS = {'manual': "manual", 'auto': "auto (T)", 'pressure': "auto (P)"}
 
 
 class TEGui:
@@ -120,7 +117,7 @@ class TEGui:
         p_src = ("measured" if (HEATER_I_AIN is not None or HEATER_V_AIN is not None)
                  else "calculated")
         self.vac_canvas = self._chart(charts, "vacuum chamber (mbar, log)   dashed = target")
-        self.te_canvas  = self._chart(charts, "TE valve temperature (°C)   dashed = setpoint")
+        self.te_canvas  = self._chart(charts, "valve temperature (°C)   dashed = setpoint")
         self.up_canvas  = self._chart(charts, "upstream pressure (bar abs, Keller raw)")
         self.heat_canvas = self._chart(
             charts, f"heater power (W, {p_src}, {HEATER_PWM_PERIOD_S:g} s mean)   "
@@ -146,9 +143,9 @@ class TEGui:
 
     def _update_inputs(self):
         """Enable only the input that belongs to the selected mode."""
-        active = {'manual': self.duty_entry,
-                  'auto': self.sp_entry,
-                  'pressure': self.p_entry}[self.mode_var.get()]
+        active = {MANUAL: self.duty_entry,
+                  AUTO_T: self.sp_entry,
+                  AUTO_P: self.p_entry}[self.mode_var.get()]
         for e in (self.duty_entry, self.sp_entry, self.p_entry):
             on = e is active
             e.configure(state="normal" if on else "disabled",
@@ -170,9 +167,9 @@ class TEGui:
                                  command=self._toggle_arm, **btn)
         self.arm_btn.pack(side="left", padx=(0, 10))
 
-        self.mode_var = tk.StringVar(value="manual")
-        for val, label in MODE_LABELS.items():
-            tk.Radiobutton(row1, text=label, value=val, variable=self.mode_var,
+        self.mode_var = tk.StringVar(value=MANUAL)
+        for mode in MODES:
+            tk.Radiobutton(row1, text=mode, value=mode, variable=self.mode_var,
                            command=self._on_mode, font=self.f, fg=TEXT, bg=BG,
                            selectcolor=BG, activebackground=BG,
                            activeforeground=BRIGHT, bd=0,
@@ -206,12 +203,12 @@ class TEGui:
             log_event(f"Heater ARMED by operator · {self._active_summary()}")
 
     def _active_summary(self):
-        """'auto (T) · setpoint 60.0 °C' — the mode and the value it uses."""
+        """'auto-t · setpoint 60.0 °C' — the mode and the value it uses."""
         a, mode = self._applied, self.mode_var.get()
         value = {'manual':   f"duty {a['duty']*100:g} %",
-                 'auto':     f"setpoint {a['sp']:g} °C",
-                 'pressure': f"target {a['tgt']:.2e} mbar"}[mode]
-        return f"{MODE_LABELS[mode]} · {value}"
+                 AUTO_T:   f"setpoint {a['sp']:g} °C",
+                 AUTO_P:   f"target {a['tgt']:.2e} mbar"}[mode]
+        return f"{mode} · {value}"
 
     @staticmethod
     def _set_entry(entry, text):
@@ -268,13 +265,13 @@ class TEGui:
                                    0.0, HEATER_MAX_DUTY, scale=0.01, unit=" %")
             heater_command(mode=mode, duty_cmd=val)
             change = f"duty {a['duty']*100:g} → {val*100:g} %"
-        elif mode == 'auto':
+        elif mode == AUTO_T:
             key = 'sp'
             val = self._read_entry(self.sp_entry, "setpoint", a['sp'],
                                    0.0, TEMP_TRIP_C - 5.0, unit=" °C")
             heater_command(mode=mode, setpoint_C=val)
             change = f"setpoint {a['sp']:g} → {val:g} °C"
-        else:   # 'pressure' — the outer loop owns the temperature setpoint
+        else:   # auto-p — the outer loop owns the temperature setpoint
             key = 'tgt'
             val = self._read_entry(self.p_entry, "target", a['tgt'],
                                    PRESSURE_TARGET_MIN, PRESSURE_TRIP_MBAR / 2.0,
@@ -284,7 +281,7 @@ class TEGui:
 
         changes = []
         if not first and mode != a['mode']:
-            changes.append(f"mode {MODE_LABELS[a['mode']]} → {MODE_LABELS[mode]}")
+            changes.append(f"mode {a['mode']} → {mode}")
         if val != a[key]:
             changes.append(change)
         a['mode'], a[key] = mode, val
@@ -477,7 +474,7 @@ class TEGui:
         for lbl, ok, avail in (
             (f"[KELLER:{'OK' if shared.keller_ok else '--'}]",  shared.keller_ok,  True),
             (f"[VACUUM:{'OK' if shared.labjack_ok else '--'}]", shared.labjack_ok, LABJACK_AVAILABLE),
-            (f"[TE-TEMP:{'OK' if shared.tc_ok else '--'}]",     shared.tc_ok,      LABJACK_AVAILABLE),
+            (f"[VALVE-T:{'OK' if shared.tc_ok else '--'}]",     shared.tc_ok,      LABJACK_AVAILABLE),
             (f"[CSV:{'OK' if shared.csv_ok else ('ERR' if shared.csv_ok is False else '--')}]",
              bool(shared.csv_ok), True),
         ):
@@ -486,7 +483,7 @@ class TEGui:
         st.insert("end", "\n\n")
         st.insert("end", "UPSTREAM P   ", "dim") ; st.insert("end", p_s + "\n",
                   "bright" if p is not None else "dim")
-        st.insert("end", "UPSTREAM T   ", "dim") ; st.insert("end", t_s + "\n",
+        st.insert("end", "KELLER T     ", "dim") ; st.insert("end", t_s + "\n",
                   "bright" if t is not None else "dim")
         st.insert("end", "UPSTREAM P20 ", "dim") ; st.insert("end", p20_s, "bright" if p20 is not None else "dim")
         st.insert("end", "  (at 20 °C, uses Keller chip T — not the gas T)\n", "dim")
@@ -494,7 +491,7 @@ class TEGui:
         st.insert("end", v_s, "bright" if vac is not None else "dim")
         st.insert("end", vac_note, "err")
         st.insert("end", vac_volt + "\n", "dim")
-        st.insert("end", "TE VALVE T   ", "dim")
+        st.insert("end", "VALVE T      ", "dim")
         st.insert("end", te_s, "bright" if te_temp is not None else "dim")
         st.insert("end", fault_note + "\n", "err" if fault_note else "dim")
         st.insert("end", "\n")
@@ -517,27 +514,27 @@ class TEGui:
             left = "" if h['armed_at'] is None else \
                 f" · off in {max(0, HEATER_MAX_RUN_S - (time.time() - h['armed_at']))/60:.0f} min"
             tgt = {'manual': "",
-                   'auto': f" · T_sp {h['setpoint_C']:.1f} °C",
-                   'pressure': f" · T_sp {h['setpoint_C']:.1f} °C (from pressure)"}[mode]
+                   AUTO_T: f" · T_sp {h['setpoint_C']:.1f} °C",
+                   AUTO_P: f" · T_sp {h['setpoint_C']:.1f} °C (from pressure)"}[mode]
             self.heater_status.configure(
-                text=f"ARMED · {MODE_LABELS[mode]} · duty {h['duty_actual']*100:4.1f} % · "
+                text=f"ARMED · {mode} · duty {h['duty_actual']*100:4.1f} % · "
                      f"{power:.2f} W{tgt}{left}", fg=BRIGHT)
         else:
             self.heater_status.configure(text="disarmed · output low", fg=DIM)
 
-        if mode == 'auto' and h['armed'] and h['t_burst'] == 'burst':
+        if mode == AUTO_T and h['armed'] and h['t_burst'] == 'burst':
             self.loop_status.configure(
-                text=f"auto (T) · BURST full power, cut ~{h['t_brake']:.1f} K below "
+                text=f"auto-t · BURST full power, cut ~{h['t_brake']:.1f} K below "
                      f"{h['setpoint_C']:.1f} °C", fg=BRIGHT)
-        elif mode == 'auto' and h['armed'] and h['t_burst'] == 'coast':
+        elif mode == AUTO_T and h['armed'] and h['t_burst'] == 'coast':
             self.loop_status.configure(
-                text=f"auto (T) · coasting, heater off (peak {h['t_burst_peak']:.1f} °C) — "
+                text=f"auto-t · coasting, heater off (peak {h['t_burst_peak']:.1f} °C) — "
                      f"PI resumes at the peak", fg=BRIGHT)
-        elif mode != 'pressure':
+        elif mode != AUTO_P:
             self.loop_status.configure(text="")
         elif not h['armed'] or h['p_filt'] is None or h['p_init']:
             self.loop_status.configure(
-                text=f"auto (P) idle · target {h['p_target_mbar']:.2e} mbar · "
+                text=f"auto-p idle · target {h['p_target_mbar']:.2e} mbar · "
                      f"on arm: T_sp → {PRESSURE_SEEK_START_C:g} °C, then "
                      f"+{PRESSURE_SEEK_RATE_C_MIN:g} °C/min until the valve opens", fg=DIM)
         elif h['p_phase'] == 'seek':
@@ -560,7 +557,7 @@ class TEGui:
             else:
                 step = "heating"
             self.loop_status.configure(
-                text=f"auto (P) seeking · valve shut · {step} · goal {h['p_goal']:.1f} "
+                text=f"auto-p seeking · valve shut · {step} · goal {h['p_goal']:.1f} "
                      f"(upstream shift {h['p_shift']:+.1f} K) · "
                      f"T_sp {h['setpoint_C']:.2f} °C · "
                      f"baseline {base} · target {h['p_target_mbar']:.2e} mbar{low}",
@@ -571,20 +568,20 @@ class TEGui:
             lowest = 10 ** h['p_base'] + PRESSURE_MIN_STEP_MBAR
             if h['p_target_mbar'] < lowest:
                 self.loop_status.configure(
-                    text=f"auto (P) · target {h['p_target_mbar']:.2e} is BELOW the lowest "
+                    text=f"auto-p · target {h['p_target_mbar']:.2e} is BELOW the lowest "
                          f"holdable ≈ {lowest:.1e} (baseline {10 ** h['p_base']:.2e} + "
                          f"min. flow) — holding minimum flow at the {floor:.1f} °C floor · "
                          f"now {10 ** h['p_filt']:.2e}",
                     fg=WARN)
             else:
                 self.loop_status.configure(
-                    text=f"auto (P) · target {h['p_target_mbar']:.2e} · "
+                    text=f"auto-p · target {h['p_target_mbar']:.2e} · "
                          f"baseline {10 ** h['p_base']:.2e} · "
                          f"filt {10 ** h['p_filt']:.2e} · err {h['p_err']:+.2f} dec · "
                          f"T_sp {floor:.1f}-{tsp_hi:g} °C · upstream shift {h['p_shift']:+.1f} K",
                     fg=WARN if h['p_pinned_since'] else BRIGHT)
 
-        vac_ref = h['p_target_mbar'] if mode == 'pressure' else None
+        vac_ref = h['p_target_mbar'] if mode == AUTO_P else None
         te_ref  = h['setpoint_C'] if (h['armed'] and mode != 'manual') else None
         p_full  = HEATER_V_RAIL ** 2 / HEATER_R_OHM
 

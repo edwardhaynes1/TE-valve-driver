@@ -76,31 +76,31 @@ def test_the_first_trip_reason_is_kept(h):
 def test_over_pressure_trips_only_in_pressure_mode(h):
     armed(h, duty_cmd=0.2)
     assert step(h, vac=1e-3)[0] == 0.2                 # manual: ignored
-    armed(h, mode='pressure', p_target_mbar=1e-6)
+    armed(h, mode='auto-p', p_target_mbar=1e-6)
     duty, _ = step(h, vac=1e-3)
     assert duty == 0.0 and "over-pressure" in h['trip_reason']
 
 
 def test_unreadable_high_pressure_trips_pressure_mode(h):
-    armed(h, mode='pressure')
+    armed(h, mode='auto-p')
     step(h, vac=None, vac_status=config.VAC_OVER)
     assert "too high to measure" in h['trip_reason']
 
 
 def test_pressure_mode_waits_for_its_first_reading(h):
-    armed(h, mode='pressure')
+    armed(h, mode='auto-p')
     assert step(h, vac=None) == (0.0, [])
     assert h['p_init'] and h['armed']
 
 
 def test_pressure_mode_needs_a_live_gauge(h):
-    armed(h, mode='pressure')
+    armed(h, mode='auto-p')
     step(h, vac=None, vac_healthy=False, vac_status=config.VAC_ERROR)
     assert "needs a live gauge" in h['trip_reason']
 
 
 def test_a_cold_start_in_pressure_mode_bursts_at_full_power(h):
-    armed(h, mode='pressure', p_target_mbar=1e-6)
+    armed(h, mode='auto-p', p_target_mbar=1e-6)
     duty, msgs = step(h, temp=25.0, vac=1.5e-7, p_up=2.76, p_up_t=T0)
     assert duty == config.HEATER_MAX_DUTY
     assert h['p_phase'] == 'seek' and h['p_burst'] == 'burst'
@@ -108,7 +108,7 @@ def test_a_cold_start_in_pressure_mode_bursts_at_full_power(h):
 
 
 def test_stale_upstream_readings_are_ignored(h):
-    armed(h, mode='pressure', p_target_mbar=1e-6)
+    armed(h, mode='auto-p', p_target_mbar=1e-6)
     old = T0 - config.PRESSURE_UP_MAX_AGE_S - 1
     step(h, temp=25.0, vac=1.5e-7, p_up=1.0, p_up_t=old)
     assert h['p_up_bar'] is None and h['p_shift'] == 0.0
@@ -125,3 +125,14 @@ def test_new_state_is_independent(h):
     other = controller.new_state()
     h['p_hist'].append((0, 0))
     assert not other['p_hist']
+
+
+def test_unknown_mode_is_refused(h):
+    # e.g. an old name: silently accepting it would run the temperature PI
+    with pytest.raises(ValueError):
+        controller.command(h, T0, mode='pressure')
+    assert h['mode'] == controller.MANUAL
+
+
+def test_mode_names_are_the_documented_ones():
+    assert controller.MODES == ('manual', 'auto-t', 'auto-p')

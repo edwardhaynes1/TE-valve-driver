@@ -33,7 +33,7 @@ heater = controller.new_state()
 events      = deque(maxlen=200)                            # (timestamp, text)
 up_chart    = deque(maxlen=CHART_SECONDS * KELLER_POLL_HZ)     # recent upstream pressure (bar abs, raw)
 vac_chart   = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)  # recent vacuum readings
-te_chart    = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)  # recent TE temperatures
+te_chart    = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)  # recent valve temperatures
 heat_chart  = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)  # recent heater power (period mean, W)
 
 

@@ -143,19 +143,19 @@ def all_scenarios(adapter):
     }, 60))
 
     out.append(run(adapter, "auto_burst_from_cold", {
-        0: cmd(mode='auto', setpoint_C=45.0),
+        0: cmd(mode='auto-t', setpoint_C=45.0),
         at(1): cmd(armed=True),
     }, 900))
 
     out.append(run(adapter, "auto_small_step_then_big_step", {
-        0: cmd(mode='auto', setpoint_C=27.0),
+        0: cmd(mode='auto-t', setpoint_C=27.0),
         at(1): cmd(armed=True),
         at(300): cmd(setpoint_C=50.0),
         at(700): cmd(setpoint_C=48.0),
     }, 1000))
 
     out.append(run(adapter, "pressure_from_cold_then_retarget", {
-        0: cmd(mode='pressure', p_target_mbar=1.5e-6),
+        0: cmd(mode='auto-p', p_target_mbar=1.5e-6),
         at(1): cmd(armed=True),
         at(900): cmd(p_target_mbar=5e-7),
         at(1300): cmd(p_target_mbar=1e-7),
@@ -163,28 +163,28 @@ def all_scenarios(adapter):
     }, 2000))
 
     out.append(run(adapter, "pressure_warm_start_low_upstream", {
-        0: cmd(mode='pressure', p_target_mbar=1e-6),
+        0: cmd(mode='auto-p', p_target_mbar=1e-6),
         at(1): cmd(armed=True),
     }, 900, plant=Plant(t0=37.0, amb=30.0, seed=2), upstream=2.0))
 
     out.append(run(adapter, "pressure_target_below_baseline", {
-        0: cmd(mode='pressure', p_target_mbar=1e-7),
+        0: cmd(mode='auto-p', p_target_mbar=1e-7),
         at(1): cmd(armed=True),
         at(400): cmd(p_target_mbar=1e-6),
     }, 900, upstream=None))
 
     out.append(run(adapter, "mode_switching", {
-        0: cmd(mode='auto', setpoint_C=42.0),
+        0: cmd(mode='auto-t', setpoint_C=42.0),
         at(1): cmd(armed=True),
-        at(200): cmd(mode='pressure', p_target_mbar=1e-6),
+        at(200): cmd(mode='auto-p', p_target_mbar=1e-6),
         at(600): cmd(mode='manual', duty_cmd=0.1),
-        at(700): cmd(mode='auto', setpoint_C=38.0),
+        at(700): cmd(mode='auto-t', setpoint_C=38.0),
         at(800): cmd(armed=False),
         at(810): cmd(armed=True),
     }, 1000))
 
     out.append(run(adapter, "trip_thermocouple", {
-        0: cmd(mode='auto', setpoint_C=40.0),
+        0: cmd(mode='auto-t', setpoint_C=40.0),
         at(1): cmd(armed=True),
     }, 30, healthy_fn=lambda k: k < at(10)))
 
@@ -204,7 +204,7 @@ def all_scenarios(adapter):
     }, 10))
 
     out.append(run(adapter, "trip_overpressure_pressure_mode", {
-        0: cmd(mode='pressure', p_target_mbar=1e-6),
+        0: cmd(mode='auto-p', p_target_mbar=1e-6),
         at(1): cmd(armed=True),
     }, 40, vac_fn=lambda k, p, a: 1e-3 if k >= at(20) else p.vac()))
 
@@ -214,19 +214,19 @@ def all_scenarios(adapter):
     }, 20, vac_fn=lambda k, p, a: (None, a.VAC_OVER, True)))
 
     out.append(run(adapter, "trip_gauge_saturated", {
-        0: cmd(mode='pressure', p_target_mbar=1e-6),
+        0: cmd(mode='auto-p', p_target_mbar=1e-6),
         at(1): cmd(armed=True),
     }, 20, vac_fn=lambda k, p, a: ((None, a.VAC_SATURATED, True)
                                    if k >= at(10) else p.vac())))
 
     out.append(run(adapter, "trip_gauge_dead_and_missed_reads", {
-        0: cmd(mode='pressure', p_target_mbar=1e-6),
+        0: cmd(mode='auto-p', p_target_mbar=1e-6),
         at(1): cmd(armed=True),
     }, 40, vac_fn=lambda k, p, a: ((None, a.VAC_ERROR, k < at(30))
                                    if k >= at(20) and k % 7 else p.vac())))
 
     out.append(run(adapter, "pressure_no_reading_before_init", {
-        0: cmd(mode='pressure', p_target_mbar=1e-6),
+        0: cmd(mode='auto-p', p_target_mbar=1e-6),
         at(1): cmd(armed=True),
     }, 10, vac_fn=lambda k, p, a: (None, None, True) if k < at(5) else p.vac()))
 

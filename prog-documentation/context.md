@@ -19,7 +19,7 @@ differently from this page, fix one of them. Add terms as they appear.
 | **ARIEL PCB** | The heater control board (FIO0 drives the MOSFET gate Q171; SW171 enables the 24 V rail). Not the valve, whatever the valve ends up being called. |
 | **Heater** | The 88 Ω element on the valve, 24 V rail: 6.55 W at full duty. |
 | **Upstream pressure** | Gas pressure before the valve, from the Keller PAA-23SX-H2. Absolute, in bar. |
-| **Keller chip temperature** | The Keller's temperature reading. It is the sensor chip's temperature, *not* the gas temperature (grip test, 17 Sept 2026). |
+| **Keller chip temperature** | The Keller's temperature reading ("KELLER T" on screen). It is the sensor chip's temperature, *not* the gas temperature (grip test, 17 Sept 2026). |
 | **Chamber pressure** | Vacuum chamber pressure from the Pfeiffer IKR 270 cold-cathode gauge, in mbar. |
 | **TC** | The valve's type-K thermocouple, read by the MAX31856. It sits by the heater, so it leads the valve body. |
 | **Valve temperature** | The TC reading, in °C. The one name for it: not "TE temperature" or "TC temperature". (The CSV column keeps its original name, `te_temperature_degC`.) |
@@ -47,22 +47,23 @@ differently from this page, fix one of them. Add terms as they appear.
 |---|---|
 | **Armed / disarmed** | Armed = the software may switch the heater on. Disarming always wins, and takes effect at the next control step (within 0.25 s). |
 | **Trip** | A latched heater-off caused by an interlock. Cleared only by disarm, then arm. |
-| **Interlock** | A check before any heating: TC healthy, below 160 °C, armed less than 60 min, chamber pressure readable and below 5e-4 mbar (pressure mode). |
+| **Interlock** | A check before any heating: TC healthy, below 160 °C, armed less than 60 min, chamber pressure readable and below 5e-4 mbar (auto-p only). |
 | **Duty** | Fraction of each PWM period the heater is on, 0–1. What the controller commands. |
 | **PWM period** | 2 s. The heater is switched fully on or off within it (time-proportioning, done in software on the 50 ms tick). The cycle runs continuously, so the first pulse after arming can be shorter than the rest. |
 | **Gate / edge** | The FIO0 output to the MOSFET gate. An edge is one on→off or off→on switch; every edge goes in the `_pwm.csv` log. |
 | **Heater power** | Mean power over one PWM period = duty × V²/R. *Not* mean V × mean I. |
 | **Flight power budget** | 1 W for the valve heater in flight. Drawn dashed on the power chart. |
-| **Mode: manual** | Fixed duty. Internal name `manual`. |
-| **Mode: auto (T)** | PI loop holding a valve temperature setpoint. Internal name `auto`. |
-| **Mode: auto (P)** | Cascade: an outer loop on chamber pressure moves the auto (T) setpoint. Internal name `pressure`. |
+| **Mode** | One of three, named identically on screen, in the code (`controller.MODES`) and in the CSV `heater_mode` column. Logs before 17 Sept 2026 say `auto` for auto-t and `pressure` for auto-p. |
+| **manual** | Fixed duty. |
+| **auto-t** | PI loop holding a valve temperature setpoint. |
+| **auto-p** | Cascade: an outer loop on chamber pressure moves the auto-t setpoint. Avoid "pressure mode". |
 | **Burst** | Full power from a cool start, cut early (the *brake*), to reach a temperature fast. |
 | **Coast** | Heater off after a burst until the valve temperature peaks; then the PI takes over. |
-| **Seek** | Auto (P) phase with the valve shut: heat to the *goal*, then *creep* up at 1 °C/min until the valve opens. |
+| **Seek** | auto-p phase with the valve shut: heat to the *goal*, then *creep* up at 1 °C/min until the valve opens. |
 | **Goal** | Seek target temperature: the cracking point, raised by the *feedforward map* for larger pressure targets and moved by the *upstream shift*. |
 | **Upstream shift** | Temperature offset applied for upstream pressure (12 K per bar relative to 2.76 bar). |
 | **Hold shut** | If the pressure target is at or below the baseline, the setpoint parks at 38.5 °C. |
-| **Track** | Auto (P) phase with the valve open: PI on log10(chamber pressure). |
+| **Track** | auto-p phase with the valve open: PI on log10(chamber pressure). |
 | **Open floor** | In track, the setpoint never drops below 39.5 °C, so the loop trims flow rather than shutting the valve. |
 
 ## Logs

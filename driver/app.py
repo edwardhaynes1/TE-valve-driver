@@ -103,7 +103,7 @@ def main():
     if LABJACK_AVAILABLE:
         print("LabJack will connect on its own thread (vacuum + thermocouple).")
     else:
-        print("LabJack not available — vacuum and TE temperature disabled.")
+        print("LabJack not available — vacuum and valve temperature disabled.")
 
     print(f"\nLogging to: {logfile.LOG_FILE}")
     print(f"Heater switching log: {logfile.PWM_LOG_FILE}")

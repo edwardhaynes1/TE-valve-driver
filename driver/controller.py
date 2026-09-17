@@ -6,7 +6,7 @@ locks, clock, logging, files or hardware.
                                          duty_cmd, setpoint_C, p_target_mbar
     step(h, now, dt, temp, tc_healthy, vac, vac_status, vac_healthy,
          p_up, p_up_t) -> (duty, msgs)   one control step: interlocks first,
-                                         then manual / auto (T) / auto (P)
+                                         then manual / auto-t / auto-p
     trip(h, reason, msgs)                latch the heater off
     record_edge(h, state, duty, now, note) -> row
                                          ON-time accounting for one gate edge
@@ -42,13 +42,21 @@ from .config import (
 )
 
 
+# Heater modes — the one set of names, used on screen, in code and in the
+# CSV heater_mode column (logs before 17 Sept 2026 say 'auto' / 'pressure').
+MANUAL = 'manual'    # fixed duty
+AUTO_T = 'auto-t'    # PI holding a valve temperature setpoint
+AUTO_P = 'auto-p'    # cascade: chamber pressure → temperature setpoint → PI
+MODES = (MANUAL, AUTO_T, AUTO_P)
+
+
 def new_state():
     """A fresh heater state: operator commands, loop internals, and the
     live electrical readout the device thread writes. One dict, so the
     GUI and logger can read it under a single lock."""
     return dict(
         armed        = False,      # operator has armed the heater
-        mode         = 'manual',   # 'manual' (fixed duty) or 'auto' (PI on temp)
+        mode         = MANUAL,     # one of MODES
         duty_cmd     = 0.0,        # commanded duty in manual mode, 0-1
         setpoint_C   = PID_SETPOINT_DEFAULT,
         duty_actual  = 0.0,        # what the output is actually doing right now
@@ -128,15 +136,17 @@ def command(h, now, **kwargs):
             h['duty_cmd'] = 0.0
             h['t_burst']  = None
     new_mode = kwargs.get('mode')
+    if new_mode is not None and new_mode not in MODES:
+        raise ValueError(f"unknown heater mode {new_mode!r}; use one of {MODES}")
     if new_mode is not None and new_mode != h['mode']:
-        if (new_mode == 'manual') != (h['mode'] == 'manual'):
+        if (new_mode == MANUAL) != (h['mode'] == MANUAL):
             h['integral'] = 0.0
             h['d_prev']   = None
-        if new_mode == 'pressure':
+        if new_mode == AUTO_P:
             h['p_init'] = True
         h['t_burst'] = None
-        h['t_check'] = new_mode == 'auto'
-    if ('setpoint_C' in kwargs and h['mode'] != 'pressure'
+        h['t_check'] = new_mode == AUTO_T
+    if ('setpoint_C' in kwargs and h['mode'] != AUTO_P
             and kwargs['setpoint_C'] != h['setpoint_C']):
         h['t_check'] = True
     for k in ('mode', 'duty_cmd', 'setpoint_C', 'p_target_mbar'):
@@ -178,7 +188,7 @@ def step(h, now, dt, temp, tc_healthy, vac=None, vac_status=None,
         return 0.0, msgs
 
     # Interlock 4 — chamber over-pressure.
-    if mode == 'pressure' or PRESSURE_TRIP_ALL_MODES:
+    if mode == AUTO_P or PRESSURE_TRIP_ALL_MODES:
         if vac_status in VAC_HIGH_STATES:
             trip(h, f"chamber pressure too high to measure ({vac_status})", msgs)
             return 0.0, msgs
@@ -187,10 +197,10 @@ def step(h, now, dt, temp, tc_healthy, vac=None, vac_status=None,
                     f"{PRESSURE_TRIP_MBAR:.0e} mbar", msgs)
             return 0.0, msgs
 
-    if mode == 'manual':
+    if mode == MANUAL:
         return max(0.0, min(HEATER_MAX_DUTY, duty_cmd)), msgs
 
-    if mode == 'pressure':
+    if mode == AUTO_P:
         # Interlock 5 — pressure mode is blind without a live gauge.
         if not vac_healthy:
             trip(h, f"no valid chamber pressure for {PRESSURE_BAD_READS_TO_TRIP} "
@@ -206,12 +216,12 @@ def step(h, now, dt, temp, tc_healthy, vac=None, vac_status=None,
         if override is not None:                # burst / coast: duty set directly
             return max(0.0, min(HEATER_MAX_DUTY, override)), msgs
 
-    if mode == 'auto':
+    if mode == AUTO_T:
         burst_duty = _temp_burst_step(h, temp, setpoint, now, msgs)
         if burst_duty is not None:
             return max(0.0, min(HEATER_MAX_DUTY, burst_duty)), msgs
 
-    # ── 'auto' / 'pressure': PI(D) on valve temperature, with anti-windup ──
+    # ── auto-t / auto-p: PI(D) on valve temperature, with anti-windup ──────
     error = setpoint - temp
     prev = h['d_prev']
     if prev is None or PID_KD == 0.0:

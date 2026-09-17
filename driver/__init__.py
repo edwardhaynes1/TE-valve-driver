@@ -11,7 +11,7 @@ Logs three sensor channels with a robust, self-reconnecting architecture:
   • Upstream pressure + temperature  — Keller PAA-23SX-H2 (RS485/USB, K-114)
   • Vacuum chamber pressure          — Pfeiffer IKR 270 cold cathode gauge,
                                        LabJack U3 FIO2 via voltage divider
-  • TE valve temperature             — MAX31856 Type-K thermocouple, LabJack SPI
+  • Valve temperature                — MAX31856 Type-K thermocouple, LabJack SPI
 
 Each sensor runs on its own thread. If any device disconnects mid-session the
 affected reading goes to '---' immediately (never a stale value) and the thread
@@ -20,8 +20,8 @@ unaffected.
 
 HEATER CONTROL is included (FIO0). See the safety notes below. Three modes:
   manual    fixed duty cycle
-  auto (T)  PI loop (optional D) holding the valve at a temperature setpoint
-  auto (P)  cascade: an outer loop on chamber pressure moves the temperature
+  auto-t    PI loop (optional D) holding the valve at a temperature setpoint
+  auto-p    cascade: an outer loop on chamber pressure moves the temperature
             setpoint, and the auto-mode PI holds the valve there. It first
             SEEKS (from a cool start a full-power BURST, then a coast with the
             heater off; then setpoint 40 °C and a slow creep upwards while

@@ -18,7 +18,7 @@ MAIN_COLUMNS = (
     ("te_temperature_degC",     "valve thermocouple, latest reading"),
     ("tc_fault",                "MAX31856 fault register (0 = OK)"),
     ("heater_duty",             "applied duty, 0-1"),
-    ("heater_mode",             "off / manual / auto / pressure"),
+    ("heater_mode",             "off / manual / auto-t / auto-p (before 17 Sept 2026: auto / pressure)"),
     ("heater_setpoint_degC",    "temperature setpoint (auto: operator's; pressure: outer loop's)"),
     ("heater_V_mean_calc",      "V, duty x rail"),
     ("heater_I_mean_calc",      "A, duty x rail / R"),

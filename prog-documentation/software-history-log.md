@@ -4,6 +4,15 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 11. One set of names for modes and the valve temperature — 17 Sept 2026
+The modes were "auto (T)" / "auto (P)" on screen but `auto` / `pressure` in
+the code and CSV. They are now `manual`, `auto-t` and `auto-p` everywhere,
+defined once in `controller.MODES`; an unknown name is refused rather than
+silently running the temperature loop. The CSV `heater_mode` column carries
+the new names from 17 Sept 2026; the plotter accepts both. The thermocouple
+reading is "valve temperature" on screen and in the plotter (the CSV column
+keeps its name, `te_temperature_degC`). Control behaviour is unchanged.
+
 ## 10. The controller takes everything as arguments — 17 Sept 2026
 `controller.step(h, now, dt, readings…)` returns `(duty, messages)` and
 touches nothing else: no lock, clock, event log or shared readings. That
@@ -49,7 +58,7 @@ the gas, and P20 dropped accordingly. The raw absolute pressure is charted
 instead. A proper correction needs a temperature sensor on the upstream
 tubing.
 
-## 4. Pressure mode is a cascade with seek and track phases — Sept 2026
+## 4. auto-p is a cascade with seek and track phases — Sept 2026
 The valve snaps open near 40 °C rather than throttling, and chamber pressure
 spans decades. So the outer loop sets a temperature setpoint for the
 proven temperature PI: it seeks (burst, coast, creep) with the valve shut

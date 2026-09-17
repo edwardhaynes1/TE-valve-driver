@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 
 from . import control, schema, shared
+from .control import AUTO_P, AUTO_T, MANUAL
 from .config import HEATER_R_OHM, HEATER_V_RAIL, LOG_DIR, LOG_INTERVAL_S
 from .shared import ascii_text, log_event
 
@@ -110,7 +111,7 @@ def logger_thread():
                 h_duty = round(shared.heater['duty_actual'], 4)
                 h_mode = shared.heater['mode'] if shared.heater['armed'] else 'off'
                 h_set  = (round(shared.heater['setpoint_C'], 2)
-                          if shared.heater['mode'] in ('auto', 'pressure') else '')
+                          if shared.heater['mode'] in (AUTO_T, AUTO_P) else '')
                 v_calc = round(shared.heater['duty_actual'] * HEATER_V_RAIL, 3)
                 i_calc = round(shared.heater['duty_actual'] * HEATER_V_RAIL / HEATER_R_OHM, 4)
                 v_m    = shared.heater['v_meas_mean']
@@ -127,12 +128,12 @@ def logger_thread():
                     shared.heater['on_acc_from'] = now
                 shared.heater['on_time_acc'] = 0.0
                 on_s   = round(on_s, 3)
-                in_p   = shared.heater['mode'] == 'pressure' and not shared.heater['p_init']
+                in_p   = shared.heater['mode'] == AUTO_P and not shared.heater['p_init']
                 p_tgt  = shared.heater['p_target_mbar'] if in_p else ''
                 p_base = (10 ** shared.heater['p_base']
                           if in_p and shared.heater['p_base'] is not None else '')
                 d_cmd  = (round(shared.heater['duty_cmd'], 4)
-                          if shared.heater['mode'] == 'manual' else '')
+                          if shared.heater['mode'] == MANUAL else '')
 
             ts = datetime.now().isoformat(timespec='milliseconds')
             try:

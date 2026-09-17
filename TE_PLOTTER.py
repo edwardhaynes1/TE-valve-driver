@@ -12,7 +12,7 @@ Panels (only those whose data is present are drawn):
        logs). P20 is no longer used: the Keller temperature is the sensor
        chip's, not the gas's, so the correction added artefacts.
   B  Main plot, larger, same time axis: chamber pressure (blue, log,
-     left axis) and TE temperature (red, right axis). In pressure-mode
+     left axis) and valve temperature (red, right axis). In auto-p
      runs the driver's pressure target is drawn dashed blue; while the
      heater is in temperature-control mode, the temperature setpoint is
      drawn dotted red.
@@ -493,7 +493,7 @@ def panel_timeseries(ax, df, cols, roles=None, sides=None):
     The first trace present uses the host axis on the left; the rest get
     twin axes, stacked outward on the left or right side."""
     series = [  # role, axis label, scale, side, style
-        ("temp",     "TE temperature (°C)",          1,   "left",  "line"),
+        ("temp",     "valve temperature (°C)",       1,   "left",  "line"),
         ("upstream", "upstream pressure (bar abs)",  1,   "left",  "line"),
         ("chamber",  "chamber pressure (mbar)",      1,   "right", "log"),
         ("power",    "heater power (W)",             1,   "right", "line"),
@@ -614,7 +614,9 @@ def make_figure(df, cols, steps, segs, outgas, title, valve=(None, [])):
     if scol and "temp" in main_axes:
         sp = df[scol]
         if cols.get("mode"):             # temperature-control mode only
-            sp = sp.where(df[cols["mode"]].astype(str).str.strip().str.lower() == "auto")
+            # temperature mode is 'auto-t' (named 'auto' in logs before 17 Sept 2026)
+            sp = sp.where(df[cols["mode"]].astype(str).str.strip().str.lower()
+                          .isin(["auto-t", "auto"]))
         if sp.notna().any():
             (h,) = main_axes["temp"].step(df.t, sp, where="post", ls=":", lw=1.8,
                                           color=COLOURS["temp"], label="temperature setpoint")
