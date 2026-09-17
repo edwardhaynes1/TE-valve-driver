@@ -48,7 +48,9 @@ python -m pytest
 ```
 
 Run the tests before every commit. They take about 10 seconds and need
-no hardware.
+no hardware. GitHub also runs them on Windows after every push
+(`.github/workflows/tests.yml`): see the repository's **Actions** tab, and
+GitHub emails you if a run fails.
 
 - **`test_control_equivalence.py`** replays 15 scripted scenarios (manual,
   bursts, seek/track, retargeting, mode changes, every interlock) against a
