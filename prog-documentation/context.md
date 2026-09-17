@@ -3,6 +3,14 @@
 One meaning per word. If code, logs, plots or conversation use a term
 differently from this page, fix one of them. Add terms as they appear.
 
+## Names
+
+| Term | Meaning |
+|---|---|
+| **TE-VALVE-DRIVER** | The program: live display, logging and heater control. Started with `TE-VALVE-DRIVER.py`. |
+| **`driver/`** | The folder holding the program's parts (a Python *package*: code refers to it by name, e.g. `from driver import controller`). |
+| **TE_PLOTTER** | The separate program that plots the logs. |
+
 ## The hardware
 
 | Term | Meaning |
@@ -13,34 +21,43 @@ differently from this page, fix one of them. Add terms as they appear.
 | **Upstream pressure** | Gas pressure before the valve, from the Keller PAA-23SX-H2. Absolute, in bar. |
 | **Keller chip temperature** | The Keller's temperature reading. It is the sensor chip's temperature, *not* the gas temperature (grip test, 17 Sept 2026). |
 | **Chamber pressure** | Vacuum chamber pressure from the Pfeiffer IKR 270 cold-cathode gauge, in mbar. |
-| **TC** | The valve's type-K thermocouple, read by the MAX31856. "Valve temperature" in the GUI means the TC reading, which leads the valve body. |
+| **TC** | The valve's type-K thermocouple, read by the MAX31856. It sits by the heater, so it leads the valve body. |
+| **Valve temperature** | The TC reading, in °C. The one name for it: not "TE temperature" or "TC temperature". (The CSV column keeps its original name, `te_temperature_degC`.) |
 
 ## Valve behaviour
 
 | Term | Meaning |
 |---|---|
-| **Cracking point** | TC temperature at which the valve opens: about 40.1–40.6 °C in the 16 Sept runs (valve body ≈ 39.3 °C). |
+| **Cracking point** | Valve temperature at which the valve opens: about 40.1–40.6 °C in the 16 Sept runs. |
 | **Snap open** | The valve goes from shut to open in one step rather than throttling gradually (16 Sept runs). Whether it throttles at all above the cracking point is still open. |
 | **Closing hysteresis** | The valve closes about 1 K below where it opened. |
 | **Baseline** | Chamber pressure with the valve shut. Measured during seek, frozen once the valve opens. |
+| **Hold power** | Holding about 40 °C takes about 15 % duty, ≈ 1 W, with the lab at about 26 °C (16 Sept holds). That is the whole flight power budget; a colder environment will need more. |
+
+## Known rig behaviour
+
+| Term | Meaning |
+|---|---|
+| **Upstream leak** | The upstream connection at the valve leaks (17 Sept 2026), so upstream pressure falls even with the valve shut. Fix before measuring pressure dependence. |
+| **Keller head sensitivity** | The Keller's chip temperature follows the air conditioning and a hand on the sensor head, not the gas. Insulate the head; don't use its temperature to correct pressure. |
 
 ## Heater control
 
 | Term | Meaning |
 |---|---|
-| **Armed / disarmed** | Armed = the software may switch the heater on. Disarming always wins. |
+| **Armed / disarmed** | Armed = the software may switch the heater on. Disarming always wins, and takes effect at the next control step (within 0.25 s). |
 | **Trip** | A latched heater-off caused by an interlock. Cleared only by disarm, then arm. |
 | **Interlock** | A check before any heating: TC healthy, below 160 °C, armed less than 60 min, chamber pressure readable and below 5e-4 mbar (pressure mode). |
 | **Duty** | Fraction of each PWM period the heater is on, 0–1. What the controller commands. |
-| **PWM period** | 2 s. The heater is switched fully on or off within it (time-proportioning, done in software on the 50 ms tick). |
+| **PWM period** | 2 s. The heater is switched fully on or off within it (time-proportioning, done in software on the 50 ms tick). The cycle runs continuously, so the first pulse after arming can be shorter than the rest. |
 | **Gate / edge** | The FIO0 output to the MOSFET gate. An edge is one on→off or off→on switch; every edge goes in the `_pwm.csv` log. |
 | **Heater power** | Mean power over one PWM period = duty × V²/R. *Not* mean V × mean I. |
 | **Flight power budget** | 1 W for the valve heater in flight. Drawn dashed on the power chart. |
 | **Mode: manual** | Fixed duty. Internal name `manual`. |
-| **Mode: auto (T)** | PI loop holding a TC setpoint. Internal name `auto`. |
+| **Mode: auto (T)** | PI loop holding a valve temperature setpoint. Internal name `auto`. |
 | **Mode: auto (P)** | Cascade: an outer loop on chamber pressure moves the auto (T) setpoint. Internal name `pressure`. |
 | **Burst** | Full power from a cool start, cut early (the *brake*), to reach a temperature fast. |
-| **Coast** | Heater off after a burst until the TC peaks; then the PI takes over. |
+| **Coast** | Heater off after a burst until the valve temperature peaks; then the PI takes over. |
 | **Seek** | Auto (P) phase with the valve shut: heat to the *goal*, then *creep* up at 1 °C/min until the valve opens. |
 | **Goal** | Seek target temperature: the cracking point, raised by the *feedforward map* for larger pressure targets and moved by the *upstream shift*. |
 | **Upstream shift** | Temperature offset applied for upstream pressure (12 K per bar relative to 2.76 bar). |
@@ -57,7 +74,7 @@ differently from this page, fix one of them. Add terms as they appear.
 | **P20** | Upstream pressure referred to 20 °C using the Keller chip temperature. Not charted or used by the plotter any more (see entry 5 in [software-history-log.md](software-history-log.md)); shown in the text readout with a warning. |
 | **Golden record** | `tests/golden/control_trace.json.gz`: the control law's recorded behaviour. Tests require an exact match. |
 | **Heater state** | The dict `h` from `controller.new_state()`: operator commands, loop internals and the live electrical readout. At run time it is `shared.heater`. |
-| **Step** | One call of `controller.step`: interlocks, then the control law, every 0.25 s. |
+| **Control step** | One call of `controller.step`: interlocks, then the control law, every 0.25 s. |
 
 ## Mission context
 
