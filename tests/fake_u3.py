@@ -26,6 +26,7 @@ class FakeU3:
         self.i_scale = 0.5               # amps per LabJack volt
         self.element_ohm = 88.0          # None = open element / SW171 off
         self.stray_a = 0.0               # current flowing with the gate OFF
+        self.sense_delay_s = 0.0         # slow sense reads stretch every tick
         # faults
         self.fail_next_on_write = False
         self.fail_all_writes = False
@@ -55,6 +56,7 @@ class FakeU3:
                        else (math.log10(self.vac_mbar) + 12.75) / 1.25)
             return u_gauge / self.divider
         if channel == V_SENSE_FIO:
+            time.sleep(self.sense_delay_s)
             return self.rail_v / self.v_scale
         if channel == I_SENSE_FIO:
             if self.gate_now():

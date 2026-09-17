@@ -173,6 +173,14 @@ def _connect():
         return None
 
 
+def _period_mean(samples, now):
+    """Mean of the (time, value) samples from the last PWM period; older
+    ones are dropped. None if there are none."""
+    while samples and samples[0][0] <= now - HEATER_PWM_PERIOD_S:
+        samples.popleft()
+    return sum(v for _, v in samples) / len(samples) if samples else None
+
+
 class _DeviceLost(Exception):
     """A read or write failed: end the session and reconnect."""
 
@@ -197,11 +205,13 @@ class _Session:
         self.cycle_start = now        # start of the current PWM period
         self.duty = 0.0
         self.out_high = False
-        # heater sense
-        win_len = max(1, int(round(HEATER_PWM_PERIOD_S * HEATER_TICK_HZ)))
-        self.v_win = deque(maxlen=win_len)    # measured V over one period
-        self.i_win = deque(maxlen=win_len)    # measured I over one period
-        self.p_win = deque(maxlen=win_len)    # measured V × I over one period
+        # heater sense: (time, value) samples from the last PWM period. Kept
+        # by time, not by count: ticks can run long (Windows rounds waits up
+        # to its ~15.6 ms timer steps), and a fixed count would then span
+        # more than one period and swing with the cycle.
+        self.v_win = deque()          # measured V
+        self.i_win = deque()          # measured I
+        self.p_win = deque()          # measured V × I
         self.low_i_ticks = 0          # gate ON but little current
         self.stray_i_ticks = 0        # gate OFF but current flowing
 
@@ -216,7 +226,7 @@ class _Session:
         try:
             while not shared.stop.is_set():
                 t0 = time.time()
-                self._sense_heater()
+                self._sense_heater(t0)
                 if t0 >= self.next_sensor:
                     self.next_sensor = t0 + 1.0 / LABJACK_SAMPLE_HZ
                     self._read_vacuum()
@@ -234,7 +244,7 @@ class _Session:
         shared.set_health(tc=ok)
 
     # ── heater V / I: calculated every tick, measured if wired ─────────────
-    def _sense_heater(self):
+    def _sense_heater(self, t0):
         # Read BEFORE this tick's output write, so the samples belong to
         # out_high as it is right now.
         lj, out_high = self.lj, self.out_high
@@ -245,10 +255,10 @@ class _Session:
             if HEATER_V_AIN is not None:
                 rail   = lj.getAIN(HEATER_V_AIN) * HEATER_V_SCALE + HEATER_V_OFFSET
                 v_meas = rail if out_high else 0.0
-                self.v_win.append(v_meas)
+                self.v_win.append((t0, v_meas))
             if HEATER_I_AIN is not None:
                 i_meas = lj.getAIN(HEATER_I_AIN) * HEATER_I_SCALE + HEATER_I_OFFSET
-                self.i_win.append(i_meas)
+                self.i_win.append((t0, i_meas))
         except Exception as e:
             log_event(f"Heater sense read error: {e}")
             raise _DeviceLost from e
@@ -257,20 +267,19 @@ class _Session:
         # V²/R if only the voltage is.
         if i_meas is not None:
             v_use = v_meas if v_meas is not None else v_now
-            self.p_win.append(v_use * i_meas)
+            self.p_win.append((t0, v_use * i_meas))
         elif v_meas is not None:
-            self.p_win.append(v_meas ** 2 / HEATER_R_OHM)
+            self.p_win.append((t0, v_meas ** 2 / HEATER_R_OHM))
 
         if i_meas is not None:
             self._check_current(i_meas)
 
-        v_win, i_win, p_win = self.v_win, self.i_win, self.p_win
         set_electrical(
             out_high=out_high, v_now=v_now, i_now=i_now, rail_meas=rail,
             v_meas=v_meas, i_meas=i_meas,
-            v_meas_mean=sum(v_win) / len(v_win) if v_win else None,
-            i_meas_mean=sum(i_win) / len(i_win) if i_win else None,
-            p_meas_mean=sum(p_win) / len(p_win) if p_win else None)
+            v_meas_mean=_period_mean(self.v_win, t0),
+            i_meas_mean=_period_mean(self.i_win, t0),
+            p_meas_mean=_period_mean(self.p_win, t0))
 
     def _check_current(self, i_meas):
         """Plausibility of the measured current against the gate state."""

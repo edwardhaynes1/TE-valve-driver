@@ -4,6 +4,16 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 15. Measured heater means cover one period of time — 17 Sept 2026
+The measured V, I and power means averaged the last 20 samples, assuming
+50 ms ticks. On Windows the waits are rounded up to the ~15.6 ms timer steps,
+so ticks run long; 20 samples then spanned more than one PWM period and the
+mean swung with the cycle (a test on the lab laptop read 40 % instead of
+50 %). The samples are now kept with their times and averaged over the last
+`HEATER_PWM_PERIOD_S` seconds. This only matters once the sense inputs are
+wired. The test now slows the ticks to 75 ms and watches the readout for two
+periods; the old code strays by 20 % of full power there.
+
 ## 14. devices.py split; the LabJack tick in named steps — 17 Sept 2026
 `devices.py` mixed the Keller, the LabJack, the thermocouple chip and a
 290-line loop. It is now `keller.py`, `thermocouple.py` and `labjack.py`.

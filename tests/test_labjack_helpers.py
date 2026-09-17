@@ -77,3 +77,15 @@ def test_thermocouple_temperature_decoding(celsius):
 ])
 def test_thermocouple_readback_hints(cr0, cr1, cause):
     assert cause in thermocouple._tc_readback_hint(cr0, cr1)
+
+
+def test_period_mean_keeps_only_the_last_period(monkeypatch):
+    from collections import deque
+    monkeypatch.setattr(labjack, "HEATER_PWM_PERIOD_S", 1.0)
+    samples = deque((t / 10, 1.0 if t % 10 < 5 else 0.0) for t in range(0, 31))
+    # 3.1 s of a 50 % square wave; only (2.0, 3.0] is kept
+    assert labjack._period_mean(samples, 3.0) == pytest.approx(0.5)
+    assert samples[0][0] == pytest.approx(2.1)
+    assert labjack._period_mean(deque(), 3.0) is None
+    old = deque([(0.0, 5.0)])
+    assert labjack._period_mean(old, 3.0) is None and not old

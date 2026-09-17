@@ -103,20 +103,33 @@ def test_absent_thermocouple_is_reported_once_and_retried(running, fake):
 
 # ── measured heater voltage and current ─────────────────────────────────────
 
-def test_measured_power_follows_the_duty(running, fake):
+# delay 0.0: ticks on time. 0.075: every tick takes ~75 ms instead of 50 (as
+# when Windows rounds waits up to its timer steps). The measured means must
+# still cover one PWM period: a fixed count of 20 samples would then span
+# 1.5 periods and swing with the cycle.
+@pytest.mark.parametrize("delay", [0.0, 0.075])
+def test_measured_power_follows_the_duty(running, fake, delay):
+    fake.sense_delay_s = delay
     running(**SENSE)
     assert fake.config["FIOAnalog"] == (1 << 1) | (1 << 2) | (1 << 3)
     control.heater_command(mode='manual', duty_cmd=0.5, armed=True)
     wait_for(lambda: fake.gate_now() == 1)
-    time.sleep(2.5 * PERIOD)
-    h = control.snapshot()
+    time.sleep(1.5 * PERIOD)
     full = 24.0 ** 2 / 88.0
-    slack = 2 * TICK / PERIOD                                # tick quantisation
+    tick = max(TICK, delay)
+    slack = 1.5 * tick / PERIOD            # one sample more or less per period
+    worst = 0.0
+    t_end = time.time() + 2 * PERIOD       # watch the readout for two periods
+    while time.time() < t_end:
+        h = control.snapshot()
+        worst = max(worst, abs(h['p_meas_mean'] / full - 0.5))
+        time.sleep(TICK)
+    assert worst <= slack, f"measured power strayed {worst:.3f} of full power from 50 %"
+    h = control.snapshot()
     assert h['rail_meas'] == pytest.approx(24.0)
-    assert h['p_meas_mean'] == pytest.approx(0.5 * full, abs=slack * full)
     assert h['v_meas_mean'] == pytest.approx(12.0, abs=slack * 24.0)
     assert h['i_meas_mean'] == pytest.approx(0.5 * 24 / 88, abs=slack * 24 / 88)
-    assert shared.charts()['power'][-1] == pytest.approx(h['p_meas_mean'], abs=slack * full)
+    assert shared.charts()['power'][-1] == pytest.approx(0.5 * full, abs=slack * full)
 
 
 def test_no_current_with_the_gate_on_is_warned(running, fake):
