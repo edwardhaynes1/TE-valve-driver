@@ -10,10 +10,8 @@ from pathlib import Path
 from . import logfile
 from . import shared
 from .config import LOG_INTERVAL_S
-from .devices import (
-    LABJACK_AVAILABLE, check_sense_pins, detect_keller_bus, keller_thread,
-    labjack_thread,
-)
+from .keller import detect_keller_bus, keller_thread
+from .labjack import LABJACK_AVAILABLE, check_sense_pins, labjack_thread
 from .gui import TEGui
 from .logfile import logger_thread
 from .shared import log_event

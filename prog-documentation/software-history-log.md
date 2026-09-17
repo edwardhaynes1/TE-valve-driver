@@ -4,6 +4,18 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 14. devices.py split; the LabJack tick in named steps — 17 Sept 2026
+`devices.py` mixed the Keller, the LabJack, the thermocouple chip and a
+290-line loop. It is now `keller.py`, `thermocouple.py` and `labjack.py`.
+In `labjack.py` one connection is a `_Session`, and each tick reads as
+`_sense_heater → [_read_vacuum → _service_thermocouple → _run_controller] →
+_drive_gate`; a device error raises `_DeviceLost`, which ends the session
+through `_release` (gate low, watchdog released) and reconnects. The
+statements inside each step are unchanged. Before the split, 9 tests were
+added for the loop's error and sensing paths (`test_device_faults.py`);
+they, the existing device tests and the golden record all pass on the new
+code, and deliberately broken versions of the new code make them fail.
+
 ## 13. Heater state fields are fixed — 17 Sept 2026
 The heater state is a dict with text keys, so a misspelt key on assignment
 used to create a new field silently while the real one stayed unchanged.

@@ -26,7 +26,10 @@ driver/
   controller.py       heater control law and interlocks: state, time and readings
                       in; duty and messages out. No threads, clock, files or hardware
   control.py          owns the heater state; the only way to command or read it
-  devices.py          Keller, LabJack, thermocouple, heater gate, their threads
+  keller.py           Keller upstream pressure sensor and its thread
+  labjack.py          LabJack thread: heater gate, vacuum gauge, sense inputs;
+                      each tick is a few named steps (sense, read, control, drive)
+  thermocouple.py     MAX31856 thermocouple chip (SPI)
   logfile.py          the two CSV logs
   schema.py           CSV column names (shared with the plotter)
   shared.py           readings, charts, event log, health flags — through functions only
@@ -36,7 +39,7 @@ tests/                pytest suite, scenarios and golden record
 ```
 
 Dependencies only point one way: `config` ← `controller`, `shared` ←
-`control` ← `devices`, `logfile` ← `gui` ← `app`. `controller` imports
+`control`, `thermocouple` ← `keller`, `labjack`, `logfile` ← `gui` ← `app`. `controller` imports
 nothing but `config` and pure standard modules; `test_architecture.py`
 enforces this, and that no module reaches into another's private names.
 
@@ -67,7 +70,7 @@ GitHub emails you if a run fails.
   a lost vacuum reading, gauge range changes, thermocouple faults and
   recovery, measured heater voltage and current (including the no-current
   warning and the stray-current trip), and a failed force-low at shutdown.
-- **`test_logfile.py`, `test_devices.py`, `test_plotter.py`** cover the logs,
+- **`test_logfile.py`, `test_labjack_helpers.py`, `test_plotter.py`** cover the logs,
   the gauge conversion, pin checks, and that the plotter reads what the
   driver writes.
 

@@ -5,7 +5,6 @@ import time
 
 import pytest
 
-pytest.importorskip("serial")
 
 from device_harness import STEP, TICK, edges_with, start, stop, wait_for  # noqa: E402
 from fake_u3 import FakeU3  # noqa: E402

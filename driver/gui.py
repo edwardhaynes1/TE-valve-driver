@@ -19,7 +19,8 @@ from .config import (
     PRESSURE_TRIP_MBAR, PRESSURE_TSP_MAX_C, PRESSURE_TSP_MIN_C, TEMP_TRIP_C,
 )
 from .control import AUTO_P, AUTO_T, MANUAL, MODES, heater_command, snapshot
-from .devices import FAULT_BITS, LABJACK_AVAILABLE
+from .labjack import LABJACK_AVAILABLE
+from .thermocouple import FAULT_BITS
 from .shared import log_event
 
 

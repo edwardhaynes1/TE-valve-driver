@@ -4,7 +4,7 @@ import time
 import types
 
 from driver import config, control, shared
-from driver import devices as DEVICE   # the module that holds labjack_thread
+from driver import labjack as DEVICE   # the module that holds labjack_thread
 
 TICK = 1.0 / config.HEATER_TICK_HZ      # 50 ms: the gate can only switch on a tick
 STEP = 1.0 / config.LABJACK_SAMPLE_HZ   # the controller runs this often (0.25 s)
