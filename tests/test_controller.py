@@ -136,3 +136,22 @@ def test_unknown_mode_is_refused(h):
 
 def test_mode_names_are_the_documented_ones():
     assert controller.MODES == ('manual', 'auto-t', 'auto-p')
+
+
+def test_a_misspelt_field_is_an_error_not_a_new_field(h):
+    with pytest.raises(KeyError):
+        h['p_targte_mbar'] = 1e-6
+    with pytest.raises(KeyError):
+        h.update(armd=True)
+    with pytest.raises(KeyError):
+        h['armd']
+    with pytest.raises(TypeError):
+        h.pop('armed')
+    h['armed'] = True                                    # real fields still work
+    h.update(duty_cmd=0.3)
+    assert h['armed'] and h['duty_cmd'] == 0.3
+
+
+def test_the_electrical_fields_exist():
+    h = controller.new_state()
+    assert set(controller.ELECTRICAL) <= set(h)

@@ -52,11 +52,33 @@ AUTO_P = 'auto-p'    # cascade: chamber pressure → temperature setpoint → PI
 MODES = (MANUAL, AUTO_T, AUTO_P)
 
 
+class HeaterState(dict):
+    """A dict whose fields are fixed when it is made. Reading or writing a
+    field that doesn't exist — a typo such as h['p_targte'] — raises
+    KeyError at once instead of quietly creating a new field. Fields can't
+    be removed either."""
+    __slots__ = ()
+
+    def __setitem__(self, key, value):
+        if key not in self:
+            raise KeyError(f"heater state has no field {key!r}")
+        super().__setitem__(key, value)
+
+    def update(self, *args, **kwargs):
+        for key, value in dict(*args, **kwargs).items():
+            self[key] = value
+
+    def _no_removal(self, *args, **kwargs):
+        raise TypeError("heater state fields can't be removed")
+
+    __delitem__ = pop = popitem = clear = setdefault = _no_removal
+
+
 def new_state():
     """A fresh heater state: operator commands, loop internals, and the
     live electrical readout the device thread writes. One dict, so the
     GUI and logger can read it under a single lock."""
-    return dict(
+    return HeaterState(
         armed        = False,      # operator has armed the heater
         mode         = MANUAL,     # one of MODES
         duty_cmd     = 0.0,        # commanded duty in manual mode, 0-1

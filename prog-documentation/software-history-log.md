@@ -4,6 +4,14 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 13. Heater state fields are fixed — 17 Sept 2026
+The heater state is a dict with text keys, so a misspelt key on assignment
+used to create a new field silently while the real one stayed unchanged.
+`controller.HeaterState` now refuses unknown or removed fields. A dataclass
+with named attributes would catch typos even earlier (in the editor), but
+means rewriting every access in the controller and GUI; this gets most of
+the benefit with no change to the code that uses the state.
+
 ## 12. Shared state only through functions — 17 Sept 2026
 `shared.py` used to hand out its dictionaries, lists and locks, and the GUI,
 logger and device thread reached straight in: the logger reset the heater's

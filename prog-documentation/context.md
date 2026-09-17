@@ -74,7 +74,7 @@ differently from this page, fix one of them. Add terms as they appear.
 | **Switching log** | `logs/te-sensor_<time>_pwm.csv`, one row per gate edge. |
 | **P20** | Upstream pressure referred to 20 °C using the Keller chip temperature. Not charted or used by the plotter any more (see entry 5 in [software-history-log.md](software-history-log.md)); shown in the text readout with a warning. |
 | **Golden record** | `tests/golden/control_trace.json.gz`: the control law's recorded behaviour. Tests require an exact match. |
-| **Heater state** | The dict `h` from `controller.new_state()`: operator commands, loop internals and the live electrical readout. At run time it is private to `control.py`; others see a copy via `control.snapshot()`. |
+| **Heater state** | The dict `h` from `controller.new_state()` (a `HeaterState`: its fields are fixed, so a misspelt field is an error): operator commands, loop internals and the live electrical readout. At run time it is private to `control.py`; others see a copy via `control.snapshot()`. |
 | **Readings** | The latest sensor values and chart history, private to `shared.py`; written with `store_…`, read with `latest()`, `charts()`, `health()`. |
 | **Control step** | One call of `controller.step`: interlocks, then the control law, every 0.25 s. |
 
