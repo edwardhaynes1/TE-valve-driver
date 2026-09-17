@@ -35,6 +35,11 @@ current-sense amplifier is wired to a spare analogue input, set HEATER_V_AIN /
 HEATER_I_AIN and the MEASURED values are shown and logged as well, with a
 plausibility check of current against gate state.
 
+HEATER POWER is charted as the mean over one switching period. The heater is
+time-proportioned (fully on or off), so mean power = duty × V²/R. Multiplying
+mean V by mean I would understate it (duty² × V²/R). With sensing wired, the
+measured power is the per-tick V × I averaged over the period.
+
 GUI (Tkinter, standard library): a single "Live Log" window with device status,
 live readouts, strip charts, heater controls, and a scrolling event log.
 
@@ -93,8 +98,21 @@ CSV columns
   heater_duty, heater_mode, heater_setpoint_degC,
   heater_V_mean_calc, heater_I_mean_calc, heater_V_mean_meas,
   heater_I_mean_meas, pressure_target_mbar, vacuum_status,
-  heater_duty_cmd, events, pressure_baseline_mbar
+  heater_duty_cmd, events, pressure_baseline_mbar,
+  heater_P_mean_calc, heater_P_mean_meas, heater_on_s
   (new columns are appended at the end, so existing parsers keep working)
+
+Heater switching log: te-sensor_<ts>_pwm.csv (one row per gate edge)
+  timestamp   ISO, ms — taken as the FIO0 write returns (tick resolution
+              1/HEATER_TICK_HZ; USB write latency a few ms)
+  gate        1 = switched ON, 0 = switched OFF
+  duty        applied duty (0-1) when the edge happened
+  on_s        OFF rows: how long the gate had been ON
+  note        blank for normal switching; otherwise why (connect,
+              shutdown/reconnect forced low, write error)
+  The gate state is what the software commanded, not a measured voltage.
+  heater_on_s in the main CSV is the ON time since the previous row, from
+  the same edge times, so energy = heater_on_s × V²/R exactly.
 
 Logging cadence
 ---------------
@@ -178,6 +196,7 @@ HEATER_PWM_PERIOD_S   = 2.0        # software time-proportioning period
 HEATER_TICK_HZ        = 20         # device-thread tick → 2.5 % duty resolution
 HEATER_MAX_DUTY       = 1.00       # hard ceiling on commanded duty (0-1)
 HEATER_R_OHM          = 88.0       # element resistance, for the power readout
+FLIGHT_POWER_BUDGET_W = 1.0        # drawn dashed on the heater power chart
 HEATER_V_RAIL         = 24.0       # switched rail voltage
 
 # ─── Heater voltage / current sensing (optional) ─────────────────────────────
@@ -404,8 +423,9 @@ KELLER_PORT        = None       # None = auto-detect
 KELLER_TIMEOUT     = 0.3
 KELLER_ECHO        = True       # K-114 adapter echoes TX
 KELLER_POLL_HZ     = 4          # Keller read rate
-P20_REF_K          = 293.15     # P20 = P * P20_REF_K / T_keller — upstream pressure
-                                # referred to 20 °C, proportional to the amount of gas
+P20_REF_K          = 293.15     # P20 = P * P20_REF_K / T_keller — text readout only.
+                                # T_keller is the sensor-chip temperature, not the gas
+                                # temperature, so P20 is not charted (17 Sept 2026).
 
 LOG_INTERVAL_S     = 0.5        # seconds between logged rows (drift-free)
 CHART_SECONDS      = 300        # strip-chart window for all live graphs (s)
@@ -502,6 +522,7 @@ def _make_log_path():
 
 
 LOG_FILE = _make_log_path()
+PWM_LOG_FILE = LOG_FILE[:-4] + "_pwm.csv" if LOG_FILE.endswith(".csv") else LOG_FILE + "_pwm.csv"
 
 # ─── Shared state ─────────────────────────────────────────────────────────────
 _lock        = threading.Lock()        # protects _state / _events / chart buffers
@@ -540,6 +561,10 @@ _heater = dict(
     i_meas       = None,       # measured element current right now, A
     v_meas_mean  = None,       # ... averaged over one switching period
     i_meas_mean  = None,
+    p_meas_mean  = None,       # measured power, mean of per-tick V × I over one period, W
+    on_since     = None,       # time.time() the gate last went ON (None while OFF)
+    on_acc_from  = None,       # start of the not-yet-counted part of the current ON time
+    on_time_acc  = 0.0,        # ON seconds since the last CSV row (logger resets it)
     # ── pressure (outer) loop ─────────────────────────────────────────────
     p_target_mbar   = PRESSURE_TARGET_DEFAULT,
     p_init          = True,    # re-initialise bumplessly on the next valid read
@@ -574,10 +599,10 @@ _heater = dict(
     p_warned_target = None,    # last target warned about (below what the valve can hold)
 )
 _events      = deque(maxlen=200)                            # (timestamp, text)
-_p20_chart   = deque(maxlen=CHART_SECONDS * KELLER_POLL_HZ)     # recent upstream P20 (bar at 20 °C)
+_up_chart    = deque(maxlen=CHART_SECONDS * KELLER_POLL_HZ)     # recent upstream pressure (bar abs, raw)
 _vac_chart   = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)  # recent vacuum readings
 _te_chart    = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)  # recent TE temperatures
-_heat_chart  = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)  # recent heater current (period mean)
+_heat_chart  = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)  # recent heater power (period mean, W)
 _keller_ok   = False
 _labjack_ok  = False   # vacuum gauge channel healthy
 _tc_ok       = False   # thermocouple channel healthy
@@ -585,6 +610,7 @@ _csv_ok      = None    # CSV logger: None = starting, True = writing, False = fa
 
 
 _events_pending = []    # events not yet written to the CSV (protected by _lock)
+_pwm_edges      = []    # gate edges not yet written to the _pwm CSV (protected by _lock)
 
 
 def log_event(text: str):
@@ -700,10 +726,9 @@ def keller_thread(initial_port: str, initial_bus):
                         _state['keller_pressure_samples'].append(round(p1, 4))
                         _state['keller_pressure_bar'] = p1
                         _state['keller_pressure_t']   = t0
+                        _up_chart.append(p1)
                     if tob1 is not None:
                         _state['keller_temperature_samples'].append(round(tob1, 2))
-                    if p1 is not None and tob1 is not None:
-                        _p20_chart.append(p1 * P20_REF_K / (tob1 + 273.15))
                 _stop.wait(timeout=max(0.0, interval - (time.time() - t0)))
 
         except Exception as e:
@@ -932,6 +957,26 @@ def heater_command(**kwargs):
         for k in ('mode', 'duty_cmd', 'setpoint_C', 'p_target_mbar'):
             if k in kwargs:
                 _heater[k] = kwargs[k]
+
+
+def _record_gate_edge(state, duty, note=""):
+    """Note a heater gate edge (call right after the FIO0 write succeeds).
+    Keeps the ON-time total for the main CSV and queues a row for the
+    _pwm CSV. File I/O stays on the logger thread."""
+    t = time.time()
+    on_s = ""
+    with _heater_lock:
+        since = _heater['on_since']
+        if state:
+            if since is None:
+                _heater['on_since'] = _heater['on_acc_from'] = t
+        elif since is not None:
+            _heater['on_time_acc'] += t - _heater['on_acc_from']
+            _heater['on_since'] = _heater['on_acc_from'] = None
+            on_s = round(t - since, 3)
+    with _lock:
+        _pwm_edges.append((datetime.fromtimestamp(t).isoformat(timespec='milliseconds'),
+                           1 if state else 0, round(duty, 4), on_s, note))
 
 
 def _hold_integral(t_sp):
@@ -1415,6 +1460,7 @@ def labjack_thread():
 
             # Heater OFF before anything else happens on this device.
             lj.setDOState(HEATER_FIO, 0)
+            _record_gate_edge(False, 0.0, "connect: forced low")
             with _heater_lock:
                 _heater['armed']       = False
                 _heater['duty_cmd']    = 0.0
@@ -1461,6 +1507,7 @@ def labjack_thread():
         win_len      = max(1, int(round(HEATER_PWM_PERIOD_S * HEATER_TICK_HZ)))
         v_win        = deque(maxlen=win_len)   # measured V over one period
         i_win        = deque(maxlen=win_len)   # measured I over one period
+        p_win        = deque(maxlen=win_len)   # measured V × I over one period
         low_i_ticks  = 0            # gate ON but little current
         stray_i_ticks = 0           # gate OFF but current flowing
         i_on_expect  = HEATER_V_RAIL / HEATER_R_OHM
@@ -1486,6 +1533,14 @@ def labjack_thread():
                 except Exception as e:
                     log_event(f"Heater sense read error: {e}")
                     break
+                # Instantaneous power from whatever is measured: V × I if the
+                # current is sensed (V measured, else the nominal rail while on),
+                # V²/R if only the voltage is.
+                if i_meas is not None:
+                    v_use = v_meas if v_meas is not None else v_now
+                    p_win.append(v_use * i_meas)
+                elif v_meas is not None:
+                    p_win.append(v_meas ** 2 / HEATER_R_OHM)
 
                 if i_meas is not None:
                     if out_high:
@@ -1511,6 +1566,7 @@ def labjack_thread():
                     _heater['i_meas']      = i_meas
                     _heater['v_meas_mean'] = sum(v_win) / len(v_win) if v_win else None
                     _heater['i_meas_mean'] = sum(i_win) / len(i_win) if i_win else None
+                    _heater['p_meas_mean'] = sum(p_win) / len(p_win) if p_win else None
 
                 # ── sensors, sub-sampled ───────────────────────────────────
                 if t0 >= next_sensor:
@@ -1588,11 +1644,11 @@ def labjack_thread():
                         vac_healthy=bad_vac_reads < PRESSURE_BAD_READS_TO_TRIP)
                     with _heater_lock:
                         _heater['duty_actual'] = duty
-                        i_mean = _heater['i_meas_mean']
-                    if i_mean is None:
-                        i_mean = duty * i_on_expect
+                        p_mean = _heater['p_meas_mean']
+                    if p_mean is None:
+                        p_mean = duty * HEATER_V_RAIL ** 2 / HEATER_R_OHM
                     with _lock:
-                        _heat_chart.append(i_mean)
+                        _heat_chart.append(p_mean)
 
                 # ── time-proportioning output on FIO0 ──────────────────────
                 # Plain digital toggling, no timers: FIO4-7 stay free for SPI.
@@ -1607,7 +1663,14 @@ def labjack_thread():
                         out_high = want_high
                     except Exception as e:
                         log_event(f"Heater output write error: {e}")
+                        with _lock:
+                            _pwm_edges.append((
+                                datetime.now().isoformat(timespec='milliseconds'),
+                                '', round(duty, 4), '',
+                                f"write error ({'ON' if want_high else 'OFF'} "
+                                f"requested), state unknown"))
                         break
+                    _record_gate_edge(out_high, duty)
 
                 _stop.wait(timeout=max(0.0, tick - (time.time() - t0)))
         finally:
@@ -1626,13 +1689,21 @@ def labjack_thread():
                 _heater['p_init']      = True
                 _heater.update(out_high=False, v_now=0.0, i_now=0.0,
                                rail_meas=None, v_meas=None, i_meas=None,
-                               v_meas_mean=None, i_meas_mean=None)
+                               v_meas_mean=None, i_meas_mean=None,
+                               p_meas_mean=None)
             # Belt and braces on the way out: force the gate low, then let go
             # of the watchdog so the device isn't left armed for the next user.
+            why = "shutdown" if _stop.is_set() else "reconnect"
             try:
                 lj.setDOState(HEATER_FIO, 0)
+                _record_gate_edge(False, 0.0, f"{why}: forced low")
             except Exception:
-                pass
+                with _heater_lock:
+                    stuck_on = _heater['on_since'] is not None
+                if stuck_on:
+                    _record_gate_edge(False, 0.0,
+                                      f"{why}: force-low write FAILED — gate state "
+                                      f"unknown, LabJack watchdog should drop it")
             try:
                 lj.watchdog(ResetOnTimeout=False, SetDIOStateOnTimeout=False,
                             TimeoutPeriod=LJ_WATCHDOG_S,
@@ -1656,7 +1727,7 @@ def labjack_thread():
 #   timestamp, keller_pressure_bar (mean), keller_temperature_degC (mean),
 #   n_keller_samples, vacuum_chamber_mbar, te_temperature_degC, tc_fault,
 #   heater_duty, heater_mode, heater_setpoint_degC, heater_V/I (calc + meas),
-#   pressure_target_mbar, vacuum_status
+#   pressure_target_mbar, vacuum_status, ..., heater_P (calc + meas)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def logger_thread():
@@ -1667,7 +1738,11 @@ def logger_thread():
     A failed row never kills the thread: the error is shown in the GUI
     ([CSV:ERR] plus an event-log line), the row's events are kept for the
     next attempt, and logging resumes as soon as a write succeeds."""
-    with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
+    with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f, \
+         open(PWM_LOG_FILE, 'a', newline='', encoding='utf-8') as fp:
+        pwm_writer = csv.writer(fp)
+        pwm_writer.writerow(['timestamp', 'gate', 'duty', 'on_s', 'note'])
+        fp.flush()
         writer = csv.writer(f)
         writer.writerow([
             'timestamp',
@@ -1689,11 +1764,30 @@ def logger_thread():
             'heater_duty_cmd',          # 0-1, operator's manual duty (blank unless manual)
             'events',                   # event-log lines since the previous row, ' | '-joined
             'pressure_baseline_mbar',   # pressure mode: chamber baseline, frozen once the valve opens
+            'heater_P_mean_calc',       # W, duty × rail² / R (period mean)
+            'heater_P_mean_meas',       # W, mean of V × I per tick, blank unless sensing wired
+            'heater_on_s',              # s, gate ON time since the previous row (from edge times)
         ])
         f.flush()
 
         def write_row():
             global _csv_ok
+            # gate edges first, so the _pwm file is never behind the main one
+            with _lock:
+                edges = list(_pwm_edges)
+                _pwm_edges.clear()
+            if edges:
+                try:
+                    pwm_writer.writerows(edges)
+                    fp.flush()
+                except Exception as e:
+                    with _lock:
+                        _pwm_edges[:0] = edges
+                    if _csv_ok is not False:
+                        _csv_ok = False
+                        log_event(f"PWM CSV WRITE FAILED — {type(e).__name__}: {e}")
+                    return
+
             with _lock:
                 p_samp = _state['keller_pressure_samples']
                 t_samp = _state['keller_temperature_samples']
@@ -1722,6 +1816,16 @@ def logger_thread():
                 i_m    = _heater['i_meas_mean']
                 v_m    = round(v_m, 3) if v_m is not None else ''
                 i_m    = round(i_m, 4) if i_m is not None else ''
+                p_calc = round(_heater['duty_actual'] * HEATER_V_RAIL ** 2 / HEATER_R_OHM, 4)
+                p_m    = _heater['p_meas_mean']
+                p_m    = round(p_m, 4) if p_m is not None else ''
+                now    = time.time()
+                on_s   = _heater['on_time_acc']
+                if _heater['on_acc_from'] is not None:
+                    on_s += now - _heater['on_acc_from']
+                    _heater['on_acc_from'] = now
+                _heater['on_time_acc'] = 0.0
+                on_s   = round(on_s, 3)
                 in_p   = _heater['mode'] == 'pressure' and not _heater['p_init']
                 p_tgt  = _heater['p_target_mbar'] if in_p else ''
                 p_base = (10 ** _heater['p_base']
@@ -1736,7 +1840,7 @@ def logger_thread():
                     fault if fault is not None else '',
                     h_duty, h_mode, h_set,
                     v_calc, i_calc, v_m, i_m, p_tgt, vac_st,
-                    d_cmd, events, p_base,
+                    d_cmd, events, p_base, p_calc, p_m, on_s,
                 ])
                 f.flush()
             except Exception as e:
@@ -1764,6 +1868,7 @@ def logger_thread():
                 sleep_for = max(0.0, target - time.time())
             _stop.wait(timeout=sleep_for)
 
+        time.sleep(0.2)    # let the device thread record its forced-low edge
         write_row()        # final row: captures the shutdown events
 
 
@@ -1780,7 +1885,8 @@ GRID   = "#1a1a1a"
 REF    = "#8a8a8a"   # dashed target / setpoint lines
 TEMP_LINE = "#ff2a2a"   # TE valve temperature curve (red)
 VAC_LINE  = "#2f8cff"   # vacuum chamber pressure curve (blue)
-P20_LINE  = "#7ed957"   # upstream P20 curve (light green)
+UP_LINE   = "#cfe6cf"   # upstream pressure curve (whitish green, secondary)
+PWR_LINE  = "#ff8c00"   # heater power curve (orange, matches TE_PLOTTER)
 
 # Operator-facing mode names. Internal values (and the CSV heater_mode
 # column) stay 'manual' / 'auto' / 'pressure'.
@@ -1828,7 +1934,7 @@ class TEGui:
         outer.pack(fill="both", expand=True, padx=8, pady=8)
 
         self.status_text = tk.Text(outer, bg=BG, fg=TEXT, font=self.f,
-                                   height=12, bd=0, highlightthickness=0,
+                                   height=13, bd=0, highlightthickness=0,
                                    state="disabled", wrap="none", cursor="arrow")
         self.status_text.pack(fill="x")
         self.status_text.tag_config("bright", foreground=BRIGHT)
@@ -1851,12 +1957,14 @@ class TEGui:
         charts = tk.Frame(outer, bg=BG)
         charts.pack(fill="both", expand=True)
         charts.columnconfigure(0, weight=1)
-        i_src = "measured" if HEATER_I_AIN is not None else "calculated"
-        self.p20_canvas = self._chart(charts, "upstream P20 (bar, referred to 20 °C)")
+        p_src = ("measured" if (HEATER_I_AIN is not None or HEATER_V_AIN is not None)
+                 else "calculated")
         self.vac_canvas = self._chart(charts, "vacuum chamber (mbar, log)   dashed = target")
         self.te_canvas  = self._chart(charts, "TE valve temperature (°C)   dashed = setpoint")
+        self.up_canvas  = self._chart(charts, "upstream pressure (bar abs, Keller raw)")
         self.heat_canvas = self._chart(
-            charts, f"heater current (A, {i_src}, {HEATER_PWM_PERIOD_S:g} s mean)")
+            charts, f"heater power (W, {p_src}, {HEATER_PWM_PERIOD_S:g} s mean)   "
+                    f"dashed = {FLIGHT_POWER_BUDGET_W:g} W flight budget")
 
     # ── heater panel ──────────────────────────────────────────────────────
     def _entry(self, parent, label, initial, width=8):
@@ -2129,7 +2237,8 @@ class TEGui:
         """Return [(label, value, note, value_tag)] for the V and I readouts."""
         if not _labjack_ok:
             return [("HEATER V     ", "---", "", "dim"),
-                    ("HEATER I     ", "---", "", "dim")]
+                    ("HEATER I     ", "---", "", "dim"),
+                    ("HEATER P     ", "---", "", "dim")]
         d      = h['duty_actual']
         v_mean = d * HEATER_V_RAIL
         i_mean = v_mean / HEATER_R_OHM
@@ -2154,6 +2263,17 @@ class TEGui:
             lines.append(("HEATER I     ",
                           f"{h['i_now']:6.3f} A {state} · {i_mean:6.3f} A mean",
                           f"  calc ({HEATER_R_OHM:g} Ω element)", "bright"))
+
+        p_full = HEATER_V_RAIL ** 2 / HEATER_R_OHM
+        p_calc = d * p_full
+        if h['p_meas_mean'] is not None:
+            lines.append(("HEATER P     ",
+                          f"{h['p_meas_mean']:6.3f} W mean",
+                          f"  meas · calc {p_calc:.3f} W", "bright"))
+        else:
+            lines.append(("HEATER P     ",
+                          f"{p_calc:6.3f} W mean",
+                          f"  calc (duty × {p_full:.2f} W full)", "bright"))
         return lines
 
     def _poll(self):
@@ -2167,7 +2287,7 @@ class TEGui:
             vac_u   = _state['vacuum_gauge_V']
             te_temp = _state['te_temperature_degC']
             fault   = _state['tc_fault']
-            p20_chart  = list(_p20_chart)
+            up_chart   = list(_up_chart)
             vac_chart  = list(_vac_chart)
             te_chart   = list(_te_chart)
             heat_chart = list(_heat_chart)
@@ -2209,7 +2329,7 @@ class TEGui:
         st.insert("end", "UPSTREAM T   ", "dim") ; st.insert("end", t_s + "\n",
                   "bright" if t is not None else "dim")
         st.insert("end", "UPSTREAM P20 ", "dim") ; st.insert("end", p20_s, "bright" if p20 is not None else "dim")
-        st.insert("end", "  (at 20 °C)\n", "dim")
+        st.insert("end", "  (at 20 °C, uses Keller chip T — not the gas T)\n", "dim")
         st.insert("end", "VACUUM       ", "dim")
         st.insert("end", v_s, "bright" if vac is not None else "dim")
         st.insert("end", vac_note, "err")
@@ -2306,16 +2426,17 @@ class TEGui:
 
         vac_ref = h['p_target_mbar'] if mode == 'pressure' else None
         te_ref  = h['setpoint_C'] if (h['armed'] and mode != 'manual') else None
-        i_full  = HEATER_V_RAIL / HEATER_R_OHM
+        p_full  = HEATER_V_RAIL ** 2 / HEATER_R_OHM
 
-        self._draw_chart(self.p20_canvas,  p20_chart,  fmt="{:.3f}", min_span=0.005,
-                         color=P20_LINE, width=2)
         self._draw_chart(self.vac_canvas,  vac_chart,  fmt="{:.1e}", log=True, ref=vac_ref,
                          min_span=0.05, color=VAC_LINE, width=2)
         self._draw_chart(self.te_canvas,   te_chart,   fmt="{:.1f}", ref=te_ref, min_span=0.5,
                          color=TEMP_LINE, width=2)
-        self._draw_chart(self.heat_canvas, heat_chart, fmt="{:.3f}",
-                         floor=(0.0, 1.05 * i_full))
+        self._draw_chart(self.up_canvas,   up_chart,   fmt="{:.3f}", min_span=0.005,
+                         color=UP_LINE, width=1)
+        self._draw_chart(self.heat_canvas, heat_chart, fmt="{:.2f}",
+                         ref=FLIGHT_POWER_BUDGET_W, floor=(0.0, 1.05 * p_full),
+                         color=PWR_LINE, width=1)
 
         text = "\n".join(f"> {s}  {m}" for s, m in events[-200:])
         if getattr(self, "_last_log_text", None) != text:
@@ -2337,6 +2458,7 @@ class TEGui:
         # watchdog before the process exits.
         time.sleep(0.5)
         print(f"Log saved: {LOG_FILE}")
+        print(f"Heater switching log: {PWM_LOG_FILE}")
         try:
             self.root.destroy()
         except Exception:
@@ -2386,6 +2508,7 @@ def main():
         print("LabJack not available — vacuum and TE temperature disabled.")
 
     print(f"\nLogging to: {LOG_FILE}")
+    print(f"Heater switching log: {PWM_LOG_FILE}")
     print(f"Log cadence: every {LOG_INTERVAL_S:g} s (drift-free)")
     print("─" * 50)
 

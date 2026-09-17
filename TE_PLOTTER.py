@@ -6,10 +6,11 @@ Plot and characterise a TE-Valve sensor log.
 
 Panels (only those whose data is present are drawn):
   A  Supporting traces vs time, each on its own y-axis:
-       upstream P20 (light green) and heater current (orange)
-       upstream P20 is the upstream pressure referred to 20 °C,
-       P20 = P * 293.15 K / T_Keller, which is proportional to the amount
-       of gas. Falls back to raw upstream pressure if no Keller temperature.
+       raw upstream pressure (muted green, thin) and heater power (orange).
+       Heater power is the switching-period mean: measured if the log has
+       it, else calculated (duty × V²/R, or mean current × rail for older
+       logs). P20 is no longer used: the Keller temperature is the sensor
+       chip's, not the gas's, so the correction added artefacts.
   B  Main plot, larger, same time axis: chamber pressure (blue, log,
      left axis) and TE temperature (red, right axis). In pressure-mode
      runs the driver's pressure target is drawn dashed blue; while the
@@ -20,8 +21,8 @@ Valve open/close times are detected from the chamber pressure: the valve
 counts as open while the pressure sits clearly above its fitted baseline
 (dotted blue). Both plots get dashed vertical lines at those times.
 
-Step-response fits, upstream decay rates (of P20 when available) and the
-outgassing fit are printed to the terminal.
+Step-response fits, upstream decay rates (raw pressure), heater energy and
+the outgassing fit are printed to the terminal.
 
 Column names are matched loosely, so logs from different driver versions
 work without editing this file. Whatever it matched is printed at the top
@@ -78,6 +79,9 @@ COLUMN_ALIASES = {
     "current_meas": ["heaterimeanmeas", "currentmeas", "imeas"],
     "current_calc": ["heaterimeancalc", "currentcalc", "icalc",
                      "heatercurrent", "current"],
+    # power: measured preferred, then calculated, then derived (see load)
+    "power_meas": ["heaterpmeanmeas", "powermeas", "pmeas"],
+    "power_calc": ["heaterpmeancalc", "powercalc", "pcalc", "heaterpower"],
     "fault":    ["tcfault", "fault"],
     "mode":     ["heatermode", "mode"],
 }
@@ -91,6 +95,7 @@ COLUMN_EXCLUDE = {
     "keller_temp": ["samples", "count", "setpoint"],
     "duty":     ["setpoint", "samples", "count", "cmd"],
     "current_calc": ["meas"],
+    "power_calc": ["meas"],
 }
 
 # Trace colours for the combined chart. Yellow and light green are the
@@ -100,11 +105,14 @@ COLOURS = {
     "chamber":  "#1f4fe0",   # blue
     "current":  "#ff8c00",   # orange
     "duty":     "#e6c000",   # yellow
-    "upstream": "#6fd04a",   # light green
-    "p20":      "#6fd04a",   # light green (replaces raw upstream when available)
+    "upstream": "#8cbf8c",   # muted green, secondary (whitish green would
+                             # vanish on white; the driver's dark UI uses #cfe6cf)
+    "power":    "#ff8c00",   # orange
 }
-P20_REF_K = 293.15         # reference temperature for P20
-KELVIN = 273.15
+LINE_WIDTH = {"upstream": 1.0}   # thinner than the default 1.4: secondary trace
+HEATER_V_RAIL = 24.0       # for logs without a power column (match the driver)
+HEATER_R_OHM = 88.0
+FLIGHT_POWER_BUDGET_W = 1.0  # drawn dashed on the power axis
 AXIS_OFFSET_PT = 62        # spacing between stacked y-axes on the same side
 
 # Valve open/close detection on chamber pressure (all in log10 decades)
@@ -216,7 +224,8 @@ def load(path, cols):
         print("  note: no usable timestamp column, using sample index as time")
 
     for role in ("temp", "chamber", "upstream", "duty", "keller_temp",
-                 "current_meas", "current_calc", "p_target", "t_setpoint"):
+                 "current_meas", "current_calc", "power_meas", "power_calc",
+                 "p_target", "t_setpoint"):
         if cols[role]:
             df[cols[role]] = numeric(df, cols[role])
 
@@ -225,12 +234,20 @@ def load(path, cols):
     meas, calc = cols["current_meas"], cols["current_calc"]
     cols["current"] = meas if meas and df[meas].notna().any() else calc
 
-    # Temperature-corrected upstream pressure (ideal gas, fixed volume).
-    cols["p20"] = None
-    kt = cols["keller_temp"]
-    if cols["upstream"] and kt and df[kt].notna().any():
-        df["p20_bar"] = df[cols["upstream"]] * P20_REF_K / (df[kt] + KELVIN)
-        cols["p20"] = "p20_bar"
+    # Heater power (switching-period mean). The heater is fully on or off,
+    # so mean power = duty × V²/R = mean current × rail — NOT mean V × mean I.
+    cols["power"], cols["power_src"] = None, None
+    pm, pc = cols["power_meas"], cols["power_calc"]
+    if pm and df[pm].notna().any():
+        cols["power"], cols["power_src"] = pm, "measured"
+    elif pc and df[pc].notna().any():
+        cols["power"], cols["power_src"] = pc, "calculated (logged)"
+    elif cols["current"] and df[cols["current"]].notna().any():
+        df["power_W"] = df[cols["current"]] * HEATER_V_RAIL
+        cols["power"], cols["power_src"] = "power_W", "derived: mean current × rail"
+    elif cols["duty"] and df[cols["duty"]].notna().any():
+        df["power_W"] = df[cols["duty"]] * HEATER_V_RAIL ** 2 / HEATER_R_OHM
+        cols["power"], cols["power_src"] = "power_W", "derived: duty × V²/R"
 
     if cols["temp"]:
         df = df.dropna(subset=[cols["temp"]])
@@ -300,9 +317,8 @@ def fit_steps(df, cols, ambient):
 
 
 def upstream_segments(df, cols):
-    """Split the upstream trace at refills and fit a decay rate to each piece.
-    Uses P20 when available, so rates are free of gas-temperature drift."""
-    col = cols["p20"] or cols["upstream"]
+    """Split the upstream trace at refills and fit a decay rate to each piece."""
+    col = cols["upstream"]
     if not col:
         return []
     p = df[col]
@@ -439,14 +455,11 @@ def panel_timeseries(ax, df, cols, roles=None, sides=None):
 
     The first trace present uses the host axis on the left; the rest get
     twin axes, stacked outward on the left or right side."""
-    if cols.get("p20"):
-        upstream = ("p20", "upstream P20 (bar, at 20 °C)", 1, "left", "line")
-    else:
-        upstream = ("upstream", "upstream pressure (bar)", 1, "left", "line")
     series = [  # role, axis label, scale, side, style
         ("temp",     "TE temperature (°C)",          1,   "left",  "line"),
-        upstream,
+        ("upstream", "upstream pressure (bar abs)",  1,   "left",  "line"),
         ("chamber",  "chamber pressure (mbar)",      1,   "right", "log"),
+        ("power",    "heater power (W)",             1,   "right", "line"),
         ("current",  "heater current (A)",           1,   "right", "line"),
         ("duty",     "heater duty (%)",              100, "right", "step"),
     ]
@@ -483,11 +496,16 @@ def panel_timeseries(ax, df, cols, roles=None, sides=None):
             (h,) = a.step(df.t, y, where="post", lw=1.4, color=colour)
             a.set_ylim(0, 105)
         else:
-            (h,) = a.plot(df.t, y, lw=1.4, color=colour)
+            (h,) = a.plot(df.t, y, lw=LINE_WIDTH.get(role, 1.4), color=colour)
         h.set_label(label.split(" (")[0])
         handles.append(h)
         axes_by_role[role] = a
 
+        if role == "power":
+            hb = a.axhline(FLIGHT_POWER_BUDGET_W, ls="--", lw=1.0, color=colour,
+                           alpha=0.7, label=f"{FLIGHT_POWER_BUDGET_W:g} W flight budget")
+            handles.append(hb)
+            a.set_ylim(bottom=0)
         a.set_ylabel(label, color=colour)
         a.tick_params(axis="y", colors=colour)
         a.spines[side].set_color(colour)
@@ -504,8 +522,8 @@ def panel_timeseries(ax, df, cols, roles=None, sides=None):
 
 MAIN_ROLES = ("chamber", "temp")                      # lower, larger plot
 MAIN_SIDES = {"chamber": "left", "temp": "right"}
-TOP_ROLES = ("p20", "upstream", "current")              # upper overview (duty
-                                                       # omitted: current tracks it)
+TOP_ROLES = ("upstream", "power")                      # upper overview (duty and
+                                                       # current omitted: power tracks them)
 
 
 def add_to_legend(ax, handle):
@@ -598,9 +616,21 @@ def report(path, df, cols, steps, segs, outgas, ambient, valve=(None, [])):
             print(f"\nK-per-duty droop across the staircase: {droop:.1f}% "
                   "(thermal resistance falling as the element gets hotter)")
 
+    if cols.get("power"):
+        pw = df[cols["power"]]
+        ok = pw.notna()
+        if ok.sum() > 1:
+            energy = np.trapezoid(pw[ok], df.t[ok]) if hasattr(np, "trapezoid") \
+                else np.trapz(pw[ok], df.t[ok])
+            print(f"\nheater power ({cols['power_src']})")
+            print(f"  mean {pw.mean():.3f} W   peak {pw.max():.3f} W   "
+                  f"energy {energy:.0f} J over the log")
+            above = (pw > FLIGHT_POWER_BUDGET_W).mean() * 100
+            print(f"  above the {FLIGHT_POWER_BUDGET_W:g} W flight budget "
+                  f"{above:.0f} % of the time")
+
     if segs:
-        which = "P20, referred to 20 °C" if cols["p20"] else "raw pressure"
-        print(f"\nupstream segments ({which})")
+        print("\nupstream segments (raw pressure, bar abs)")
         for s in segs:
             T = f"{s['mean_T']:5.1f} °C" if np.isfinite(s["mean_T"]) else "  n/a"
             print(f"  t {s['t0']:6.0f}-{s['t1']:<6.0f}s  "
@@ -672,7 +702,8 @@ def main():
     cols = resolve_columns(raw)
 
     if not any(cols[r] for r in ("temp", "chamber", "upstream", "duty",
-                                 "current_meas", "current_calc")):
+                                 "current_meas", "current_calc",
+                                 "power_meas", "power_calc")):
         fail("None of the expected data columns were found in this file.\n\n"
              f"Columns present:\n  {', '.join(raw.columns)}\n\n"
              "If a column simply has a new name, add a fragment of it to "
@@ -683,11 +714,10 @@ def main():
         fail("The file parsed but contains no usable rows.")
 
     print("\ncolumns matched")
-    for role in ("time", "temp", "chamber", "upstream", "keller_temp",
-                 "current", "duty"):
+    for role in ("time", "temp", "chamber", "upstream", "current", "duty"):
         print(f"  {role:<11} -> {cols[role] or '(not found — trace skipped)'}")
-    print(f"  {'p20':<11} -> " + ("computed from upstream / keller_temp"
-          if cols["p20"] else "(not available — raw upstream plotted)"))
+    print(f"  {'power':<11} -> " + (f"{cols['power']}  [{cols['power_src']}]"
+          if cols["power"] else "(not available — trace skipped)"))
 
     ambient = (df.loc[df.t < AMBIENT_WINDOW_S, cols["temp"]].mean()
                if cols["temp"] else np.nan)
