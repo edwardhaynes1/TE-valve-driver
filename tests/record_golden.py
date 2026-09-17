@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Re-record tests/golden/control_trace.json.gz after an INTENTIONAL change
-to the control law or its tuning in tevalve/config.py.
+to the control law or its tuning in driver/config.py.
 
     python tests/record_golden.py            show what changed, don't write
     python tests/record_golden.py --write    show what changed, then save

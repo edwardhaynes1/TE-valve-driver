@@ -24,7 +24,7 @@ counts as open while the pressure sits clearly above its fitted baseline
 Step-response fits, upstream decay rates (raw pressure), heater energy and
 the outgassing fit are printed to the terminal.
 
-Column names come from tevalve/schema.py, the same definition the driver
+Column names come from driver/schema.py, the same definition the driver
 writes with. Logs from older driver versions, whose names differ, fall back
 to loose matching (COLUMN_ALIASES). Whatever it matched is printed at the
 top of every run; anything it cannot match is skipped rather than fatal.
@@ -61,12 +61,12 @@ except ImportError as _exc:
     sys.exit(1)
 
 # ---------------------------------------------------------------------------
-# Column names written by the current driver (tevalve/schema.py). If the
+# Column names written by the current driver (driver/schema.py). If the
 # package isn't next to this file, the plotter still works on the aliases.
 # ---------------------------------------------------------------------------
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 try:
-    from tevalve import schema as _schema
+    from driver import schema as _schema
     SCHEMA_COLUMNS = set(_schema.MAIN)
 except ImportError:
     SCHEMA_COLUMNS = set()
@@ -89,7 +89,7 @@ ROLE_COLUMNS = {
     "mode": "heater_mode",
 }
 assert not SCHEMA_COLUMNS or set(ROLE_COLUMNS.values()) <= SCHEMA_COLUMNS, \
-    "TE_PLOTTER.ROLE_COLUMNS names a column that tevalve/schema.py doesn't define"
+    "TE_PLOTTER.ROLE_COLUMNS names a column that driver/schema.py doesn't define"
 
 # ---------------------------------------------------------------------------
 # Fallback for older logs. Each role lists candidate name fragments, best first.

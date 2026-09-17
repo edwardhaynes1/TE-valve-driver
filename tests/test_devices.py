@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("serial")   # devices.py needs pyserial, like the real driver
 
-from tevalve import config, devices  # noqa: E402
+from driver import config, devices  # noqa: E402
 
 
 def gauge_to_labjack(u):

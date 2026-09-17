@@ -2,7 +2,7 @@
 import ast
 from pathlib import Path
 
-PKG = Path(__file__).resolve().parent.parent / "tevalve"
+PKG = Path(__file__).resolve().parent.parent / "driver"
 
 # module -> package modules it may import
 ALLOWED = {

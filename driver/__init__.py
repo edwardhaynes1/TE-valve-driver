@@ -1,4 +1,4 @@
-"""tevalve — driver package for the TE-Valve test setup.
+"""driver — the parts of the TE-Valve driver program.
 
 Run it with `python TE-VALVE-DRIVER.py`. The overview below is the
 original driver's header, kept as the package documentation.

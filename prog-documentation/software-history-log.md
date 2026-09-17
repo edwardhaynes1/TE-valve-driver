@@ -14,7 +14,7 @@ longer land halfway through one), and logs the messages afterwards. The
 state stays a dict, changed in place, because the GUI and logger read it.
 Behaviour is unchanged: the golden record matches through both paths.
 
-## 9. Split the driver into the `tevalve` package — 17 Sept 2026
+## 9. Split the driver into the `driver` package — 17 Sept 2026
 The single file had grown to ~2,550 lines mixing GUI, threads, control law,
 interlocks and logging, so any change risked the rest. It is now a package
 with one job per module (see README). Before splitting, the control law's
@@ -24,7 +24,7 @@ not change. Importing the package no longer creates log files; `app.main()`
 does that at start-up.
 
 ## 8. CSV columns are append-only and defined once — 17 Sept 2026
-`tevalve/schema.py` defines both logs' columns; the driver writes with it and
+`driver/schema.py` defines both logs' columns; the driver writes with it and
 the plotter reads with it. Columns are only ever appended, never renamed or
 reordered, so old logs and old readers keep working. The plotter keeps its
 loose name matching only for logs from before the schema existed.

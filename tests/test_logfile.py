@@ -5,7 +5,7 @@ import threading
 import time
 from pathlib import Path
 
-from tevalve import control, logfile, schema, shared
+from driver import control, logfile, schema, shared
 
 GOLDEN_HEADERS = json.loads(
     (Path(__file__).parent / "golden" / "csv_headers.json").read_text())
@@ -83,9 +83,9 @@ def test_importing_the_package_creates_no_files(tmp_path):
     repo = Path(__file__).resolve().parent.parent
     logs = repo / "logs"
     before = sorted(logs.iterdir()) if logs.exists() else None
-    code = ("import tevalve.config, tevalve.shared, tevalve.control, "
-            "tevalve.schema, tevalve.logfile; "
-            "assert tevalve.logfile.LOG_FILE is None")
+    code = ("import driver.config, driver.shared, driver.control, "
+            "driver.schema, driver.logfile; "
+            "assert driver.logfile.LOG_FILE is None")
     subprocess.run([sys.executable, "-c", code], cwd=repo, check=True)
     after = sorted(logs.iterdir()) if logs.exists() else None
     assert before == after

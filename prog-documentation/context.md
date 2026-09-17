@@ -52,7 +52,7 @@ differently from this page, fix one of them. Add terms as they appear.
 
 | Term | Meaning |
 |---|---|
-| **Main log** | `logs/te-sensor_<time>.csv`, one row every 0.5 s. Columns in `tevalve/schema.py`. |
+| **Main log** | `logs/te-sensor_<time>.csv`, one row every 0.5 s. Columns in `driver/schema.py`. |
 | **Switching log** | `logs/te-sensor_<time>_pwm.csv`, one row per gate edge. |
 | **P20** | Upstream pressure referred to 20 °C using the Keller chip temperature. Not charted or used by the plotter any more (see entry 5 in [software-history-log.md](software-history-log.md)); shown in the text readout with a warning. |
 | **Golden record** | `tests/golden/control_trace.json.gz`: the control law's recorded behaviour. Tests require an exact match. |

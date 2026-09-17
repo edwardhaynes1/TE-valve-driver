@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from tevalve import config, control, controller, shared  # noqa: E402
+from driver import config, control, controller, shared  # noqa: E402
 
 _FRESH_HEATER = copy.deepcopy(shared.heater)
 _FRESH_READINGS = copy.deepcopy(shared.readings)
@@ -26,7 +26,7 @@ def reset_shared():
 
 
 class PackageAdapter:
-    """Scenario adapter (see scenarios.py) for the tevalve package."""
+    """Scenario adapter (see scenarios.py) for the driver package."""
     VAC_OVER = config.VAC_OVER
     VAC_SATURATED = config.VAC_SATURATED
     VAC_ERROR = config.VAC_ERROR

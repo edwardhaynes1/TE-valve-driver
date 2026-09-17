@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("matplotlib")
 
-from tevalve import schema  # noqa: E402
+from driver import schema  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 

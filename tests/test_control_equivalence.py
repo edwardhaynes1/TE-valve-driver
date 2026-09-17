@@ -1,7 +1,7 @@
 """The control law must reproduce the recorded behaviour exactly.
 
 tests/golden/control_trace.json.gz was recorded from the single-file driver
-(17 Sept 2026) before it was split into the tevalve package. Every duty,
+(17 Sept 2026) before it was split into the driver package. Every duty,
 setpoint, phase, trip and event line must match, step by step.
 
 Each scenario runs twice: through control.py (locks, shared state, event

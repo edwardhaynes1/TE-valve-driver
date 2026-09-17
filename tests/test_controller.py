@@ -2,7 +2,7 @@
 small examples. No threads, clock or shared state are involved."""
 import pytest
 
-from tevalve import config, controller
+from driver import config, controller
 
 T0 = 1_000.0
 

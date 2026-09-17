@@ -1,8 +1,8 @@
 # TE-Valve driver
 
 Live display, logging and heater control for the TE-Valve test setup, plus
-a plotter for the logs. Terms used here are defined in [docs/context.md](docs/context.md);
-the reasons behind the design are in [docs/software-history-log.md](docs/software-history-log.md).
+a plotter for the logs. Terms used here are defined in [prog-documentation/context.md](prog-documentation/context.md);
+the reasons behind the design are in [prog-documentation/software-history-log.md](prog-documentation/software-history-log.md).
 
 ## Run
 
@@ -21,7 +21,7 @@ Requirements: `pip install -r requirements.txt`
 ```
 TE-VALVE-DRIVER.py    launcher (keep double-clicking this)
 TE_PLOTTER.py         log plotter
-tevalve/
+driver/
   config.py           every tunable number: wiring, calibration, limits, tuning
   controller.py       heater control law and interlocks: state, time and readings
                       in; duty and messages out. No threads, clock, files or hardware
@@ -67,12 +67,12 @@ no hardware.
 
 ## Changing things
 
-- **Tuning or control changes.** Change `tevalve/config.py` or
-  `tevalve/controller.py`, then run `python tests/record_golden.py`. It lists
+- **Tuning or control changes.** Change `driver/config.py` or
+  `driver/controller.py`, then run `python tests/record_golden.py`. It lists
   which scenarios changed, where, and whether any trip changed. If every
   change is one you meant, save with `--write` and commit the new golden
   file together with the change.
-- **New log column.** Append it to `MAIN_COLUMNS` in `tevalve/schema.py`,
+- **New log column.** Append it to `MAIN_COLUMNS` in `driver/schema.py`,
   fill it in `logfile.py`. Never rename or reorder existing columns.
-- **New term.** Add it to docs/context.md.
-- **A choice someone might question later.** Add a line to docs/software-history-log.md.
+- **New term.** Add it to prog-documentation/context.md.
+- **A choice someone might question later.** Add a line to prog-documentation/software-history-log.md.

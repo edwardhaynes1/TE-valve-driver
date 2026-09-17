@@ -3,7 +3,7 @@
 Used two ways:
   * once, against the original single-file driver, to record what the
     control law did (tests/golden/control_trace.json);
-  * by test_control_equivalence.py, against the tevalve package, which must
+  * by test_control_equivalence.py, against the driver package, which must
     reproduce that record exactly.
 
 The plant is deliberately simple. It is not a model of the real valve; it

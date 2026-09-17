@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("serial")
 
 from fake_u3 import FakeU3  # noqa: E402
-from tevalve import config, control, devices, shared  # noqa: E402
+from driver import config, control, devices, shared  # noqa: E402
 
 PERIOD = 1.0
 TICK = 1.0 / config.HEATER_TICK_HZ   # 50 ms: the gate can only switch on a tick
