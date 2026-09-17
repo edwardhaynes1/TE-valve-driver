@@ -12,7 +12,8 @@ pytest.importorskip("serial")
 from fake_u3 import FakeU3  # noqa: E402
 from tevalve import config, control, devices, shared  # noqa: E402
 
-PERIOD = 0.5
+PERIOD = 1.0
+TICK = 1.0 / config.HEATER_TICK_HZ   # 50 ms: the gate can only switch on a tick
 STEP = 1.0 / config.LABJACK_SAMPLE_HZ   # the controller runs this often (0.25 s)
 
 @pytest.fixture
@@ -58,14 +59,18 @@ def test_manual_duty_becomes_gate_switching(lj):
     control.heater_command(mode='manual', duty_cmd=0.4, armed=True)
     wait_for(lambda: lj.gate_now() == 1)
     t0 = time.time()
-    time.sleep(4 * PERIOD)
+    time.sleep(3 * PERIOD)
     frac = lj.on_fraction(t0, time.time())
-    assert frac == pytest.approx(0.4, abs=0.06)               # 50 ms tick resolution
+    # each edge lands on a tick, and Windows stretches ticks: allow 1.5 ticks per period
+    assert frac == pytest.approx(0.4, abs=1.5 * TICK / PERIOD)
     with shared.lock:
         on_edges = [e for e in shared.pwm_edges if e['gate'] == 1]
         off_edges = [e for e in shared.pwm_edges if e['gate'] == 0 and e['on_s'] != '']
     assert len(on_edges) >= 3
-    assert all(e['on_s'] == pytest.approx(0.4 * PERIOD, abs=0.06) for e in off_edges)
+    # the first on-period can be partial: arming lands anywhere in the running PWM cycle
+    full = [e['on_s'] for e in off_edges[1:]]
+    assert full, "no complete on-periods recorded"
+    assert all(s == pytest.approx(0.4 * PERIOD, abs=2 * TICK) for s in full), full
 
 
 def test_disarm_stops_heating_within_a_control_step(lj):
