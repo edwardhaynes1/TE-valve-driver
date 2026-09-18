@@ -13,10 +13,14 @@ ALLOWED = {
     "shared": {"config"},
     "control": {"config", "shared", "controller"},
     "thermocouple": {"config", "shared"},
+    "palette": set(),
+    "charts": {"config", "palette"},
+    "readout": {"config", "control", "thermocouple"},
     "keller": {"config", "shared"},
     "labjack": {"config", "shared", "control", "thermocouple"},
     "logfile": {"config", "shared", "control", "schema"},
-    "gui": {"config", "shared", "control", "labjack", "thermocouple", "logfile"},
+    "gui": {"config", "shared", "control", "labjack", "logfile", "palette",
+            "charts", "readout"},
     "app": {"config", "shared", "control", "keller", "labjack", "logfile", "gui"},
 }
 HARDWARE_OR_GUI = {"serial", "u3", "keller_protocol", "tkinter"}

@@ -33,13 +33,17 @@ driver/
   logfile.py          the two CSV logs
   schema.py           CSV column names (shared with the plotter)
   shared.py           readings, charts, event log, health flags — through functions only
-  gui.py              the Live Log window
+  gui.py              the Live Log window: widgets, input handling, polling
+  readout.py          what the window says, as pure text functions (tested)
+  charts.py           strip charts on a Tk canvas
+  palette.py          the GUI's colours
   app.py              start-up
 tests/                pytest suite, scenarios and golden record
 ```
 
 Dependencies only point one way: `config` ← `controller`, `shared` ←
-`control`, `thermocouple` ← `keller`, `labjack`, `logfile` ← `gui` ← `app`. `controller` imports
+`control`, `thermocouple` ← `keller`, `labjack`, `logfile`, `readout` ←
+`gui` ← `app` (with `palette` ← `charts` alongside). `controller` imports
 nothing but `config` and pure standard modules; `test_architecture.py`
 enforces this, and that no module reaches into another's private names.
 
@@ -70,6 +74,11 @@ GitHub emails you if a run fails.
   a lost vacuum reading, gauge range changes, thermocouple faults and
   recovery, measured heater voltage and current (including the no-current
   warning and the stray-current trip), and a failed force-low at shutdown.
+- **`test_readout.py`** checks every line the window displays — readings,
+  faults, the armed/tripped line and the loop's phases — without opening a
+  window.
+- **`test_shared.py`** covers the shared readings, the heater output record,
+  health flags and the hand-over to the logger.
 - **`test_logfile.py`, `test_labjack_helpers.py`, `test_plotter.py`** cover the logs,
   the gauge conversion, pin checks, and that the plotter reads what the
   driver writes.

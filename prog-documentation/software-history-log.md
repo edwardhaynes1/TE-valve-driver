@@ -4,6 +4,16 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 18. gui.py split; the window's text is now testable — 17 Sept 2026
+`gui.py` was 628 lines doing layout, formatting, chart drawing and input
+handling. The text is now `readout.py` (pure functions: readings in, strings
+and tags out), the charts are `charts.py`, the colours are `palette.py`, and
+`gui.py` (376 lines) builds the window and feeds them. `readout.py` needs no
+Tk, so `test_readout.py` checks every displayed line directly; deliberately
+broken versions (swapped labels, a trip shown as armed, a missing fault note,
+a stale reading) all make it fail. The window renders pixel-identically to
+before the split.
+
 ## 17. The measured readout belongs to the device thread — 17 Sept 2026
 The heater state held three different things: the operator's commands, the
 controller's internals, and the measured voltage / current the device thread
