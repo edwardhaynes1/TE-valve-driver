@@ -44,7 +44,7 @@ from .config import (
 )
 from .control import (
     apply_duty, compute_duty, force_off, gate_on_recorded, heater_trip,
-    record_gate_edge, set_electrical,
+    record_gate_edge,
 )
 from .shared import log_event
 
@@ -275,7 +275,7 @@ class _Session:
         if i_meas is not None:
             self._check_current(i_meas)
 
-        set_electrical(
+        shared.store_heater_output(
             out_high=out_high, v_now=v_now, i_now=i_now, rail_meas=rail,
             v_meas=v_meas, i_meas=i_meas,
             v_meas_mean=_period_mean(self.v_win, t0),
@@ -360,7 +360,8 @@ class _Session:
             now_r['te_temperature_degC'], healthy, dt,
             vac=now_r['vacuum_chamber_mbar'], vac_status=now_r['vacuum_status'],
             vac_healthy=self.bad_vac_reads < PRESSURE_BAD_READS_TO_TRIP)
-        p_mean = apply_duty(self.duty)
+        apply_duty(self.duty)
+        p_mean = shared.heater_output()['p_meas_mean']
         if p_mean is None:
             p_mean = heater_power_w(self.duty)
         shared.push_power(p_mean)
@@ -394,6 +395,7 @@ class _Session:
         shared.set_health(labjack=False)
         self._set_tc(False)
         shared.clear_labjack()
+        shared.clear_heater_output()
         force_off(device_lost=True)
         # Belt and braces on the way out: force the gate low, then let go
         # of the watchdog so the device isn't left armed for the next user.

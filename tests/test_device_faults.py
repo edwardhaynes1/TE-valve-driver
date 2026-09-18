@@ -121,14 +121,13 @@ def test_measured_power_follows_the_duty(running, fake, delay):
     worst = 0.0
     t_end = time.time() + 2 * PERIOD       # watch the readout for two periods
     while time.time() < t_end:
-        h = control.snapshot()
-        worst = max(worst, abs(h['p_meas_mean'] / full - 0.5))
+        worst = max(worst, abs(shared.heater_output()['p_meas_mean'] / full - 0.5))
         time.sleep(TICK)
     assert worst <= slack, f"measured power strayed {worst:.3f} of full power from 50 %"
-    h = control.snapshot()
-    assert h['rail_meas'] == pytest.approx(24.0)
-    assert h['v_meas_mean'] == pytest.approx(12.0, abs=slack * 24.0)
-    assert h['i_meas_mean'] == pytest.approx(0.5 * 24 / 88, abs=slack * 24 / 88)
+    out = shared.heater_output()
+    assert out['rail_meas'] == pytest.approx(24.0)
+    assert out['v_meas_mean'] == pytest.approx(12.0, abs=slack * 24.0)
+    assert out['i_meas_mean'] == pytest.approx(0.5 * 24 / 88, abs=slack * 24 / 88)
     assert shared.charts()['power'][-1] == pytest.approx(0.5 * full, abs=slack * full)
 
 

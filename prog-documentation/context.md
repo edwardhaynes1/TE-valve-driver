@@ -76,6 +76,7 @@ differently from this page, fix one of them. Add terms as they appear.
 | **Golden record** | `tests/golden/control_trace.json.gz`: the control law's recorded behaviour. Tests require an exact match. |
 | **Heater state** | The dict `h` from `controller.new_state()` (a `HeaterState`: its fields are fixed, so a misspelt field is an error): operator commands, loop internals and the live electrical readout. At run time it is private to `control.py`; others see a copy via `control.snapshot()`. |
 | **Readings** | The latest sensor values and chart history, private to `shared.py`; written with `store_…`, read with `latest()`, `charts()`, `health()`. |
+| **Heater output** | What the device thread measures on the heater circuit (gate state, voltage, current, power). In `shared.py`, read with `heater_output()`. Not part of the heater state. |
 | **Control step** | One call of `controller.step`: interlocks, then the control law, every 0.25 s. |
 
 ## Mission context

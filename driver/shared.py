@@ -9,9 +9,10 @@ are private, so the locking rules live in this file only.
 
     device threads write:         store_keller, clear_keller, store_vacuum,
                                   store_valve_temp, clear_valve_temp,
-                                  clear_labjack, push_power, set_health
+                                  clear_labjack, push_power, set_health,
+                                  store_heater_output, clear_heater_output
     anyone reads:                 latest, upstream, charts, recent_events,
-                                  health
+                                  health, heater_output
     the logger takes:             take_log_readings, take_events,
                                   put_back_events, take_edges, put_back_edges
     control.py queues:            queue_edge
@@ -53,7 +54,23 @@ def _fresh_charts():
     )
 
 
+def _fresh_output():
+    """What the heater circuit is doing, as the device thread sees it."""
+    return dict(
+        out_high    = False,  # FIO0 state right now
+        v_now       = 0.0,    # calculated element voltage right now, V
+        i_now       = 0.0,    # calculated element current right now, A
+        rail_meas   = None,   # measured supply (HEATER_V_AIN), V
+        v_meas      = None,   # measured element voltage right now, V
+        i_meas      = None,   # measured element current right now, A
+        v_meas_mean = None,   # ... averaged over one switching period
+        i_meas_mean = None,
+        p_meas_mean = None,   # measured power, mean of per-tick V x I over a period, W
+    )
+
+
 _readings = _fresh_readings()
+_output = _fresh_output()
 _charts = _fresh_charts()
 _events = deque(maxlen=200)       # (timestamp, text) for the GUI
 _events_pending = []              # texts not yet written to the CSV
@@ -122,6 +139,21 @@ def push_power(watts):
         _charts['power'].append(watts)
 
 
+def store_heater_output(**values):
+    """The device thread's live view of the heater circuit."""
+    unknown = set(values) - set(_output)
+    if unknown:
+        raise KeyError(f"not heater output fields: {sorted(unknown)}")
+    with _lock:
+        _output.update(values)
+
+
+def clear_heater_output():
+    """LabJack lost: nothing is known about the heater circuit."""
+    with _lock:
+        _output.update(_fresh_output())
+
+
 def set_health(**flags):
     """set_health(keller=True), set_health(labjack=False, tc=False), …"""
     unknown = set(flags) - set(_health)
@@ -140,6 +172,12 @@ def latest():
         out['keller_pressure_samples'] = list(_readings['keller_pressure_samples'])
         out['keller_temperature_samples'] = list(_readings['keller_temperature_samples'])
     return out
+
+
+def heater_output():
+    """A copy of the heater circuit readout (see store_heater_output)."""
+    with _lock:
+        return dict(_output)
 
 
 def upstream():
@@ -261,6 +299,7 @@ def reset():
     global _readings, _charts
     with _lock:
         _readings = _fresh_readings()
+        _output.update(_fresh_output())
         _charts = _fresh_charts()
         _events.clear()
         _events_pending.clear()

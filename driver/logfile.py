@@ -95,6 +95,7 @@ def logger_thread():
             events = ' | '.join(ascii_text(e) for e in taken)
 
             h = control.snapshot()
+            out = shared.heater_output()
             on_s = round(control.take_on_time(), 3)
             duty = h['duty_actual']
             in_p = h['mode'] == AUTO_P and not h['p_init']
@@ -117,8 +118,8 @@ def logger_thread():
                                          if h['mode'] in (AUTO_T, AUTO_P) else ''),
                 'heater_V_mean_calc': round(heater_voltage_v(duty), 3),
                 'heater_I_mean_calc': round(heater_current_a(duty), 4),
-                'heater_V_mean_meas': blank_or(h['v_meas_mean'], 3),
-                'heater_I_mean_meas': blank_or(h['i_meas_mean'], 4),
+                'heater_V_mean_meas': blank_or(out['v_meas_mean'], 3),
+                'heater_I_mean_meas': blank_or(out['i_meas_mean'], 4),
                 'pressure_target_mbar': h['p_target_mbar'] if in_p else '',
                 'vacuum_status': r['vac_status'] or '',
                 'heater_duty_cmd': round(h['duty_cmd'], 4) if h['mode'] == MANUAL else '',
@@ -126,7 +127,7 @@ def logger_thread():
                 'pressure_baseline_mbar': (10 ** h['p_base']
                                            if in_p and h['p_base'] is not None else ''),
                 'heater_P_mean_calc': round(heater_power_w(duty), 4),
-                'heater_P_mean_meas': blank_or(h['p_meas_mean'], 4),
+                'heater_P_mean_meas': blank_or(out['p_meas_mean'], 4),
                 'heater_on_s': on_s,
             }
             try:

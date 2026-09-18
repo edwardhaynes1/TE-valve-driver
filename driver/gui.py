@@ -390,8 +390,10 @@ class TEGui:
         c.create_line(*pts, fill=color, width=width)
         c.tag_raise("title")
 
-    def _heater_vi_lines(self, h):
-        """Return [(label, value, note, value_tag)] for the V and I readouts."""
+    def _heater_vi_lines(self, h, out):
+        """Return [(label, value, note, value_tag)] for the V and I readouts.
+        h: heater state (control.snapshot()); out: what the device
+        thread measures (shared.heater_output())."""
         if not shared.health()['labjack']:
             return [("HEATER V     ", "---", "", "dim"),
                     ("HEATER I     ", "---", "", "dim"),
@@ -399,33 +401,33 @@ class TEGui:
         d      = h['duty_actual']
         v_mean = heater_voltage_v(d)
         i_mean = heater_current_a(d)
-        state  = "ON " if h['out_high'] else "off"
+        state  = "ON " if out['out_high'] else "off"
         lines  = []
 
-        if h['v_meas'] is not None and h['v_meas_mean'] is not None:
-            rail = h['rail_meas']
+        if out['v_meas'] is not None and out['v_meas_mean'] is not None:
+            rail = out['rail_meas']
             lines.append(("HEATER V     ",
-                          f"{h['v_meas']:6.2f} V {state} · {h['v_meas_mean']:6.2f} V mean",
+                          f"{out['v_meas']:6.2f} V {state} · {out['v_meas_mean']:6.2f} V mean",
                           f"  meas · rail {rail:.2f} V · calc {v_mean:.2f} V", "bright"))
         else:
             lines.append(("HEATER V     ",
-                          f"{h['v_now']:6.2f} V {state} · {v_mean:6.2f} V mean",
+                          f"{out['v_now']:6.2f} V {state} · {v_mean:6.2f} V mean",
                           "  calc — assumes SW171 on, 24 V present", "bright"))
 
-        if h['i_meas'] is not None and h['i_meas_mean'] is not None:
+        if out['i_meas'] is not None and out['i_meas_mean'] is not None:
             lines.append(("HEATER I     ",
-                          f"{h['i_meas']:6.3f} A {state} · {h['i_meas_mean']:6.3f} A mean",
+                          f"{out['i_meas']:6.3f} A {state} · {out['i_meas_mean']:6.3f} A mean",
                           f"  meas · calc {i_mean:.3f} A", "bright"))
         else:
             lines.append(("HEATER I     ",
-                          f"{h['i_now']:6.3f} A {state} · {i_mean:6.3f} A mean",
+                          f"{out['i_now']:6.3f} A {state} · {i_mean:6.3f} A mean",
                           f"  calc ({HEATER_R_OHM:g} Ω element)", "bright"))
 
         p_full = heater_power_w()
         p_calc = heater_power_w(d)
-        if h['p_meas_mean'] is not None:
+        if out['p_meas_mean'] is not None:
             lines.append(("HEATER P     ",
-                          f"{h['p_meas_mean']:6.3f} W mean",
+                          f"{out['p_meas_mean']:6.3f} W mean",
                           f"  meas · calc {p_calc:.3f} W", "bright"))
         else:
             lines.append(("HEATER P     ",
@@ -496,7 +498,7 @@ class TEGui:
         st.insert("end", te_s, "bright" if te_temp is not None else "dim")
         st.insert("end", fault_note + "\n", "err" if fault_note else "dim")
         st.insert("end", "\n")
-        for lbl, val, note, tag in self._heater_vi_lines(h):
+        for lbl, val, note, tag in self._heater_vi_lines(h, shared.heater_output()):
             st.insert("end", lbl, "dim")
             st.insert("end", val, tag)
             st.insert("end", note + "\n", "dim")

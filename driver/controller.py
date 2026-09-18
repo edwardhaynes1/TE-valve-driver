@@ -76,8 +76,8 @@ class HeaterState(dict):
 
 def new_state():
     """A fresh heater state: operator commands, loop internals, and the
-    live electrical readout the device thread writes. One dict, so the
-    GUI and logger can read it under a single lock."""
+    and the duty being applied. The measured voltage / current readout is
+    not here: the device thread owns that, in shared.py."""
     return HeaterState(
         armed        = False,      # operator has armed the heater
         mode         = MANUAL,     # one of MODES
@@ -89,16 +89,7 @@ def new_state():
         integral     = 0.0,        # PI integral term
         d_prev       = None,       # last valve temperature seen by the D term
         d_filt       = 0.0,        # filtered dT/dt, °C/s
-        # ── live electrical readout (written by the device thread) ────────────
-        out_high     = False,      # FIO0 state right now
-        v_now        = 0.0,        # calculated element voltage right now, V
-        i_now        = 0.0,        # calculated element current right now, A
-        rail_meas    = None,       # measured supply (HEATER_V_AIN), V
-        v_meas       = None,       # measured element voltage right now, V
-        i_meas       = None,       # measured element current right now, A
-        v_meas_mean  = None,       # ... averaged over one switching period
-        i_meas_mean  = None,
-        p_meas_mean  = None,       # measured power, mean of per-tick V × I over one period, W
+        # ── gate ON-time accounting ───────────────────────────────────────────
         on_since     = None,       # time.time() the gate last went ON (None while OFF)
         on_acc_from  = None,       # start of the not-yet-counted part of the current ON time
         on_time_acc  = 0.0,        # ON seconds since the last CSV row (logger resets it)
@@ -291,23 +282,16 @@ def record_edge(h, state, duty, now, note=""):
                 gate=1 if state else 0, duty=round(duty, 4), on_s=on_s, note=note)
 
 
-# Live electrical readout fields, written by the device thread.
-ELECTRICAL = ('out_high', 'v_now', 'i_now', 'rail_meas', 'v_meas', 'i_meas',
-              'v_meas_mean', 'i_meas_mean', 'p_meas_mean')
-
-
 def force_off(h, device_lost=False):
     """Heater off and disarmed by the device thread (not the operator): on
     connecting, and — with device_lost — when the LabJack goes away, which
-    also restarts auto-p and clears the electrical readout."""
+    also restarts auto-p. The measured readout is the device thread's own
+    (shared.clear_heater_output)."""
     h['armed'] = False
     h['duty_cmd'] = 0.0
     h['duty_actual'] = 0.0
     if device_lost:
         h['p_init'] = True
-        h.update(out_high=False, v_now=0.0, i_now=0.0, rail_meas=None,
-                 v_meas=None, i_meas=None, v_meas_mean=None,
-                 i_meas_mean=None, p_meas_mean=None)
 
 
 def take_on_time(h, now):

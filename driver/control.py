@@ -9,9 +9,7 @@ through these functions; the state and its lock are private.
                              ON-time accounting; queues the PWM log row
     snapshot()               copy of the heater state, for display and logging
     take_on_time()           gate ON seconds since the previous call (logger)
-    apply_duty(duty)         device thread: the duty now applied; returns the
-                             measured mean power, or None
-    set_electrical(**v)      device thread: live voltage / current readout
+    apply_duty(duty)         device thread: the duty now applied
     gate_on_recorded()       is an ON edge recorded without its OFF?
     force_off(device_lost)   device thread: disarm on connect / on loss
     MANUAL, AUTO_T, AUTO_P, MODES   the mode names
@@ -30,8 +28,8 @@ from .shared import log_event
 
 __all__ = ['MANUAL', 'AUTO_T', 'AUTO_P', 'MODES', 'clock', 'heater_command',
            'compute_duty', 'heater_trip', 'record_gate_edge', 'snapshot',
-           'take_on_time', 'apply_duty', 'set_electrical', 'gate_on_recorded',
-           'force_off', 'reset']
+           'take_on_time', 'apply_duty', 'gate_on_recorded', 'force_off',
+           'reset']
 
 # Time source. Tests replace it with a fake clock.
 clock = time.time
@@ -89,17 +87,9 @@ def take_on_time():
 
 
 def apply_duty(duty):
+    """The device thread: this duty is now being applied."""
     with _lock:
         _heater['duty_actual'] = duty
-        return _heater['p_meas_mean']
-
-
-def set_electrical(**values):
-    unknown = set(values) - set(controller.ELECTRICAL)
-    if unknown:
-        raise KeyError(f"not electrical readout fields: {sorted(unknown)}")
-    with _lock:
-        _heater.update(values)
 
 
 def gate_on_recorded():

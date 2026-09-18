@@ -4,6 +4,19 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 17. The measured readout belongs to the device thread — 17 Sept 2026
+The heater state held three different things: the operator's commands, the
+controller's internals, and the measured voltage / current the device thread
+writes. The measurements now live in `shared.py`
+(`store_heater_output` / `heater_output`), so the controller's state is only
+what the controller decides. The GUI and logger read the two separately.
+
+## 16. Heater electrical arithmetic in one place — 17 Sept 2026
+`duty x V^2 / R` and its relatives appeared seven times across four files.
+They are now `config.heater_power_w()`, `heater_current_a()`,
+`heater_voltage_v()` and `power_from_voltage_w()`, and a test fails if the
+formulas reappear anywhere else.
+
 ## 15. Measured heater means cover one period of time — 17 Sept 2026
 The measured V, I and power means averaged the last 20 samples, assuming
 50 ms ticks. On Windows the waits are rounded up to the ~15.6 ms timer steps,

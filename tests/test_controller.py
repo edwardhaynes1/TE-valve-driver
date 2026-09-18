@@ -152,6 +152,7 @@ def test_a_misspelt_field_is_an_error_not_a_new_field(h):
     assert h['armed'] and h['duty_cmd'] == 0.3
 
 
-def test_the_electrical_fields_exist():
+def test_the_state_holds_no_measured_readout():
+    # the measured voltage / current belongs to the device thread (shared.py)
     h = controller.new_state()
-    assert set(controller.ELECTRICAL) <= set(h)
+    assert not [k for k in h if 'meas' in k or k in ('out_high', 'v_now', 'i_now')]
