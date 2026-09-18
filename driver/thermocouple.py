@@ -8,7 +8,9 @@
 
 import time
 
-from .config import TC_FIO_CS, TC_FIO_SCK, TC_FIO_SDI, TC_FIO_SDO, TC_RETRY_S
+from .config import (
+    TC_FIO_CS, TC_FIO_SCK, TC_FIO_SDI, TC_FIO_SDO, TC_RETRY_S,
+)
 from .shared import log_event
 
 

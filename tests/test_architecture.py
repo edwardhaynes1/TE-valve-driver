@@ -1,5 +1,6 @@
 """Dependency rules from the README, enforced."""
 import ast
+import re
 from pathlib import Path
 
 PKG = Path(__file__).resolve().parent.parent / "driver"
@@ -88,3 +89,17 @@ def test_shared_and_control_expose_no_raw_state():
             if isinstance(obj, (types.FunctionType, types.ModuleType, type)) or callable(obj):
                 continue
             assert isinstance(obj, allowed), f"{mod.__name__}.{name} is a {type(obj).__name__}"
+
+
+def test_heater_formulas_live_only_in_config():
+    # duty x V^2 / R and friends: config.heater_power_w() and the other
+    # helpers are the one definition; nothing else recomputes them.
+    formulas = ("HEATER_V_RAIL ** 2", "HEATER_V_RAIL / HEATER_R_OHM",
+                "/ HEATER_R_OHM", "* HEATER_V_RAIL")
+    for path in PKG.glob("*.py"):
+        if path.name == "config.py":
+            continue
+        source = path.read_text(encoding="utf-8")
+        code = "\n".join(re.sub(r"#.*", "", line) for line in source.splitlines())
+        for formula in formulas:
+            assert formula not in code, f"{path.name}: use the config.heater_… helpers"

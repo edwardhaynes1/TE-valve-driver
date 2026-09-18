@@ -32,14 +32,15 @@ except ImportError:
 from . import shared, thermocouple
 from .config import (
     HEATER_FIO, HEATER_I_AIN, HEATER_I_OFFSET, HEATER_I_SCALE,
-    HEATER_PWM_PERIOD_S, HEATER_R_OHM, HEATER_SENSE_TICKS, HEATER_TICK_HZ,
-    HEATER_V_AIN, HEATER_V_OFFSET, HEATER_V_RAIL, HEATER_V_SCALE,
-    LABJACK_AIN_SAT_V, LABJACK_FIO2_CHANNEL, LABJACK_SAMPLE_HZ, LJ_WATCHDOG_S,
-    PRESSURE_BAD_READS_TO_TRIP, TC_BAD_READS_TO_TRIP, TC_FIO_CS, TC_FIO_SCK,
-    TC_FIO_SDI, TC_FIO_SDO, TC_RETRY_S, VACUUM_AIN_SPECIAL,
-    VACUUM_DIVIDER_RATIO, VACUUM_GAUGE_ERROR_V, VACUUM_GAUGE_MAX_V,
-    VACUUM_GAUGE_MIN_V, VACUUM_INTERCEPT, VACUUM_SLOPE, VAC_ERROR, VAC_OVER,
-    VAC_SATURATED, VAC_UNDER,
+    HEATER_PWM_PERIOD_S, HEATER_SENSE_TICKS, HEATER_TICK_HZ, HEATER_V_AIN,
+    HEATER_V_OFFSET, HEATER_V_SCALE, LABJACK_AIN_SAT_V, LABJACK_FIO2_CHANNEL,
+    LABJACK_SAMPLE_HZ, LJ_WATCHDOG_S, PRESSURE_BAD_READS_TO_TRIP,
+    TC_BAD_READS_TO_TRIP, TC_FIO_CS, TC_FIO_SCK, TC_FIO_SDI, TC_FIO_SDO,
+    TC_RETRY_S, VACUUM_AIN_SPECIAL, VACUUM_DIVIDER_RATIO,
+    VACUUM_GAUGE_ERROR_V, VACUUM_GAUGE_MAX_V, VACUUM_GAUGE_MIN_V,
+    VACUUM_INTERCEPT, VACUUM_SLOPE, VAC_ERROR, VAC_OVER, VAC_SATURATED,
+    VAC_UNDER, heater_current_a, heater_power_w, heater_voltage_v,
+    power_from_voltage_w,
 )
 from .control import (
     apply_duty, compute_duty, force_off, gate_on_recorded, heater_trip,
@@ -248,8 +249,8 @@ class _Session:
         # Read BEFORE this tick's output write, so the samples belong to
         # out_high as it is right now.
         lj, out_high = self.lj, self.out_high
-        v_now  = HEATER_V_RAIL if out_high else 0.0
-        i_now  = v_now / HEATER_R_OHM
+        v_now  = heater_voltage_v() if out_high else 0.0
+        i_now  = heater_current_a() if out_high else 0.0
         rail = v_meas = i_meas = None
         try:
             if HEATER_V_AIN is not None:
@@ -269,7 +270,7 @@ class _Session:
             v_use = v_meas if v_meas is not None else v_now
             self.p_win.append((t0, v_use * i_meas))
         elif v_meas is not None:
-            self.p_win.append((t0, v_meas ** 2 / HEATER_R_OHM))
+            self.p_win.append((t0, power_from_voltage_w(v_meas)))
 
         if i_meas is not None:
             self._check_current(i_meas)
@@ -283,7 +284,7 @@ class _Session:
 
     def _check_current(self, i_meas):
         """Plausibility of the measured current against the gate state."""
-        i_on_expect = HEATER_V_RAIL / HEATER_R_OHM
+        i_on_expect = heater_current_a()
         if self.out_high:
             self.low_i_ticks = self.low_i_ticks + 1 if i_meas < 0.5 * i_on_expect else 0
         else:
@@ -361,7 +362,7 @@ class _Session:
             vac_healthy=self.bad_vac_reads < PRESSURE_BAD_READS_TO_TRIP)
         p_mean = apply_duty(self.duty)
         if p_mean is None:
-            p_mean = self.duty * HEATER_V_RAIL ** 2 / HEATER_R_OHM
+            p_mean = heater_power_w(self.duty)
         shared.push_power(p_mean)
 
     # ── time-proportioning output on FIO0 ──────────────────────────────────

@@ -66,6 +66,30 @@ HEATER_I_SCALE        = 0.5        # amps per LabJack volt
 HEATER_I_OFFSET       = 0.0
 HEATER_SENSE_TICKS    = 20         # consecutive implausible ticks before acting (1 s)
 
+# ─── Heater electrical arithmetic — the only place these formulas live ───────
+# The heater is switched fully on or off within a PWM period, so the mean over
+# a period is the full-power value times the duty.
+
+def heater_voltage_v(duty=1.0):
+    """Mean element voltage at this duty, V."""
+    return duty * HEATER_V_RAIL
+
+
+def heater_current_a(duty=1.0):
+    """Mean element current at this duty, A."""
+    return duty * HEATER_V_RAIL / HEATER_R_OHM
+
+
+def heater_power_w(duty=1.0):
+    """Mean heater power at this duty, W (duty x V^2 / R)."""
+    return duty * HEATER_V_RAIL ** 2 / HEATER_R_OHM
+
+
+def power_from_voltage_w(volts):
+    """Power for a measured element voltage, W."""
+    return volts ** 2 / HEATER_R_OHM
+
+
 # ─── Heater interlocks ───────────────────────────────────────────────────────
 TEMP_TRIP_C           = 160.0      # latch off above this valve temperature
 HEATER_MAX_RUN_S      = 3600       # auto-disarm after this long armed (s)

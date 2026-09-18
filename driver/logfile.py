@@ -10,7 +10,10 @@ from datetime import datetime
 
 from . import control, schema, shared
 from .control import AUTO_P, AUTO_T, MANUAL
-from .config import HEATER_R_OHM, HEATER_V_RAIL, LOG_DIR, LOG_INTERVAL_S
+from .config import (
+    LOG_DIR, LOG_INTERVAL_S, heater_current_a, heater_power_w,
+    heater_voltage_v,
+)
 from .shared import ascii_text, log_event
 
 
@@ -112,8 +115,8 @@ def logger_thread():
                 'heater_mode': h['mode'] if h['armed'] else 'off',
                 'heater_setpoint_degC': (round(h['setpoint_C'], 2)
                                          if h['mode'] in (AUTO_T, AUTO_P) else ''),
-                'heater_V_mean_calc': round(duty * HEATER_V_RAIL, 3),
-                'heater_I_mean_calc': round(duty * HEATER_V_RAIL / HEATER_R_OHM, 4),
+                'heater_V_mean_calc': round(heater_voltage_v(duty), 3),
+                'heater_I_mean_calc': round(heater_current_a(duty), 4),
                 'heater_V_mean_meas': blank_or(h['v_meas_mean'], 3),
                 'heater_I_mean_meas': blank_or(h['i_meas_mean'], 4),
                 'pressure_target_mbar': h['p_target_mbar'] if in_p else '',
@@ -122,7 +125,7 @@ def logger_thread():
                 'events': events,
                 'pressure_baseline_mbar': (10 ** h['p_base']
                                            if in_p and h['p_base'] is not None else ''),
-                'heater_P_mean_calc': round(duty * HEATER_V_RAIL ** 2 / HEATER_R_OHM, 4),
+                'heater_P_mean_calc': round(heater_power_w(duty), 4),
                 'heater_P_mean_meas': blank_or(h['p_meas_mean'], 4),
                 'heater_on_s': on_s,
             }

@@ -13,10 +13,11 @@ from . import shared
 from .config import (
     CHART_SECONDS, FLIGHT_POWER_BUDGET_W, HEATER_I_AIN, HEATER_MAX_DUTY,
     HEATER_MAX_RUN_S, HEATER_PWM_PERIOD_S, HEATER_R_OHM, HEATER_V_AIN,
-    HEATER_V_RAIL, P20_REF_K, PID_SETPOINT_DEFAULT, PRESSURE_BURST_BRAKE_K,
+    P20_REF_K, PID_SETPOINT_DEFAULT, PRESSURE_BURST_BRAKE_K,
     PRESSURE_MIN_STEP_MBAR, PRESSURE_OPEN_FLOOR_C, PRESSURE_SEEK_RATE_C_MIN,
     PRESSURE_SEEK_START_C, PRESSURE_TARGET_DEFAULT, PRESSURE_TARGET_MIN,
     PRESSURE_TRIP_MBAR, PRESSURE_TSP_MAX_C, PRESSURE_TSP_MIN_C, TEMP_TRIP_C,
+    heater_current_a, heater_power_w, heater_voltage_v,
 )
 from .control import AUTO_P, AUTO_T, MANUAL, MODES, heater_command, snapshot
 from .labjack import LABJACK_AVAILABLE
@@ -396,8 +397,8 @@ class TEGui:
                     ("HEATER I     ", "---", "", "dim"),
                     ("HEATER P     ", "---", "", "dim")]
         d      = h['duty_actual']
-        v_mean = d * HEATER_V_RAIL
-        i_mean = v_mean / HEATER_R_OHM
+        v_mean = heater_voltage_v(d)
+        i_mean = heater_current_a(d)
         state  = "ON " if h['out_high'] else "off"
         lines  = []
 
@@ -420,8 +421,8 @@ class TEGui:
                           f"{h['i_now']:6.3f} A {state} · {i_mean:6.3f} A mean",
                           f"  calc ({HEATER_R_OHM:g} Ω element)", "bright"))
 
-        p_full = HEATER_V_RAIL ** 2 / HEATER_R_OHM
-        p_calc = d * p_full
+        p_full = heater_power_w()
+        p_calc = heater_power_w(d)
         if h['p_meas_mean'] is not None:
             lines.append(("HEATER P     ",
                           f"{h['p_meas_mean']:6.3f} W mean",
@@ -505,7 +506,7 @@ class TEGui:
         mode = h['mode']
         self.arm_btn.configure(text="DISARM" if h['armed'] else "ARM",
                                fg=WARN if h['armed'] else TEXT)
-        power = h['duty_actual'] * HEATER_V_RAIL ** 2 / HEATER_R_OHM
+        power = heater_power_w(h['duty_actual'])
         if h['trip_reason']:
             self.heater_status.configure(
                 text=f"TRIPPED — {h['trip_reason']}   (disarm, then arm to clear)",
@@ -583,7 +584,7 @@ class TEGui:
 
         vac_ref = h['p_target_mbar'] if mode == AUTO_P else None
         te_ref  = h['setpoint_C'] if (h['armed'] and mode != 'manual') else None
-        p_full  = HEATER_V_RAIL ** 2 / HEATER_R_OHM
+        p_full  = heater_power_w()
 
         self._draw_chart(self.vac_canvas,  vac_chart,  fmt="{:.1e}", log=True, ref=vac_ref,
                          min_span=0.05, color=VAC_LINE, width=2)
