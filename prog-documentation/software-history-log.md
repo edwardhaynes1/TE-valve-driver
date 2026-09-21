@@ -4,6 +4,51 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 23. Seek reference calibrated by seat screw torque — 21 Sept 2026
+At 0.30 N·m, `te-sensor_20260921_142905.csv` (an auto-t run at a fixed
+110 °C, used to find the cracking point directly) showed the valve opening
+at 92.67 °C, upstream 4.49 bar — over 50 K above the 16 Sept reference
+(40.5 °C, at an unrecorded torque, since the input didn't exist then).
+Separately, `te-sensor_20260921_144015.csv` shows auto-p itself computing a
+seek goal of only 31.8 °C under the old model and creeping from there —
+Edward disarmed it after 68 s rather than let it run. Two compounding
+causes, both now fixed: (1) nothing in the seek/goal logic used seat screw
+torque at all; (2) `PRESSURE_FF_MAX_C`, an absolute 55 °C ceiling, would
+have capped the goal there regardless, since it didn't move with the
+upstream/torque shift the way every other pressure-loop temperature does —
+so even a correct torque model would have been clamped uselessly low.
+
+`SEAT_SCREW_CRACKING_C` (config.py) now holds real cracking points by
+torque — one entry so far, `{0.30: (92.7, 4.49)}`. When the entered torque
+matches an entry within `SEAT_SCREW_CRACKING_TOL_NM`, it replaces
+`PRESSURE_SEEK_START_C` as the seek/goal reference, and the upstream shift
+applies relative to *that entry's own* upstream pressure, not
+`PRESSURE_UP_REF_BAR` — the calibration already includes whatever upstream
+effect was present when it was measured, so shifting from the historical
+2.76 bar reference as well would double-count it. `PRESSURE_FF_MAX_C` now
+moves with the same combined shift, so a calibrated reference above the old
+55 °C ceiling is no longer clamped. An entered torque matching nothing logs
+a one-time "UNVERIFIED for this torque" warning and falls back to the
+historical reference — unchanged from today's behaviour, since we still
+know nothing about any other torque. Replayed against the real upstream
+pressure from the second file (4.60 bar), the new seek starts at 91.4 °C —
+1.3 °C from the measured cracking point, versus the old model's 30.5 °C.
+
+The golden record needed no changes: with no torque entered, the new code
+path is bit-for-bit the old one (proven — all 15 scenarios still match
+exactly), including a floating-point trap found along the way (adding a
+zero-valued torque offset flipped a logged `-0.0 K` to `+0.0 K`). 8 new
+tests cover the calibrated and uncalibrated paths, tolerance matching, the
+upstream shift anchored to the calibration's own reference, and the
+feedforward-ceiling fix specifically — each planted back as a bug to
+confirm the tests catch it, including a repeat of today's actual fault.
+
+Still open: only one torque is calibrated. A different, uncalibrated torque
+falls back to the 16 Sept reference exactly as before, which we now know
+can be wrong by 50+ K — the warning makes that visible, but doesn't fix it.
+Calibrating more torques needs more auto-t characterisation runs like the
+first file here.
+
 ## 22. Valve-opening marker could go missing — 21 Sept 2026
 `TE_PLOTTER` seeded its chamber-pressure baseline from the globally lowest
 2% of readings. If the chamber kept pumping down over a run, so the pressure

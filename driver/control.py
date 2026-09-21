@@ -47,11 +47,12 @@ def heater_command(**kwargs):
 def compute_duty(temp, tc_healthy, dt, vac=None, vac_status=None, vac_healthy=True):
     now = clock()
     p_up, p_up_t = shared.upstream()          # never while holding _lock
+    seat_nm = shared.seat_screw_torque()
     with _lock:
         duty, msgs = controller.step(
             _heater, now, dt, temp, tc_healthy, vac=vac,
             vac_status=vac_status, vac_healthy=vac_healthy,
-            p_up=p_up, p_up_t=p_up_t)
+            p_up=p_up, p_up_t=p_up_t, seat_nm=seat_nm)
     for m in msgs:
         log_event(m)
     return duty

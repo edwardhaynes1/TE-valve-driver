@@ -250,6 +250,33 @@ PRESSURE_UP_K_PER_BAR   = 12.0     # K of shift per bar
 PRESSURE_UP_MAX_SHIFT_K = 10.0     # clamp: the correction is only a local fit
 PRESSURE_UP_MAX_AGE_S   = 5.0      # ignore Keller readings older than this
 
+# Seat screw torque changes the seat preload, and so the cracking point —
+# far more than upstream pressure does (see below). PRESSURE_SEEK_START_C is
+# from 16 Sept 2026, at whatever torque was on the screw then; unrecorded,
+# since this input didn't exist yet. Every torque below has a real
+# measurement (open temperature, at the upstream pressure recorded with it)
+# and REPLACES PRESSURE_SEEK_START_C as the seek/goal reference when the
+# entered torque matches within SEAT_SCREW_CRACKING_TOL_NM; the upstream
+# shift then applies relative to that entry's own upstream pressure, not
+# PRESSURE_UP_REF_BAR — the calibration already includes whatever upstream
+# effect existed when it was measured, so shifting from PRESSURE_UP_REF_BAR
+# as well would double-count it. An entered torque that matches nothing
+# here falls back to PRESSURE_SEEK_START_C, logged as unverified for that
+# torque: with only one torque calibrated, nothing is known about any other.
+#
+# 0.30 N·m: opened at 92.7 °C, upstream 4.49 bar (21 Sept 2026 14:29,
+# te-sensor_20260921_142905.csv — an auto-t run at a fixed 110 °C setpoint,
+# used to find the cracking point directly; auto-p's own seek, still using
+# the 16 Sept reference, was watched separately over the same torque
+# (te-sensor_20260921_144015.csv, 14:40) creeping from a seek goal of only
+# 31.8 °C — a ~61 K gap at PRESSURE_SEEK_RATE_C_MIN, and also above
+# PRESSURE_FF_MAX_C's old absolute ceiling — so it was disarmed well short
+# of opening rather than run for the hour that would have taken).
+SEAT_SCREW_CRACKING_C = {
+    0.30: (92.7, 4.49),    # torque_Nm: (cracking_C, upstream_bar_at_measurement)
+}
+SEAT_SCREW_CRACKING_TOL_NM = 0.02  # entered torque must be at least this close to reuse a point
+
 # Burst — from a cool start, heat at full power until the TC reaches
 # PRESSURE_BURST_BRAKE_K below the seek goal, then coast (heater off) until
 # the TC peaks, then seek.

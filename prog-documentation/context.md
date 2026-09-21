@@ -16,7 +16,7 @@ differently from this page, fix one of them. Add terms as they appear.
 | Term | Meaning |
 |---|---|
 | **TE-Valve** | Thermally Enabled Valve: the Max Planck prototype under test. Heating it opens it. Final name (ARIEL or TERP) still to be decided. |
-| **Seat screw torque** | Torque applied to the TE-Valve's seat screw with the torque wrench, in N·m. Entered in the driver (`SEAT SCREW`), logged in every CSV row (`seat_screw_torque_Nm`), and noted in the event log when it changes. Blank at the start of every session until entered: blank means *not recorded*, never zero. It is the torque, not the clamping force on the seat, which also depends on thread friction. |
+| **Seat screw torque** | Torque applied to the TE-Valve's seat screw with the torque wrench, in N·m. Entered in the driver (`SEAT SCREW`), logged in every CSV row (`seat_screw_torque_Nm`), and noted in the event log when it changes. Blank at the start of every session until entered: blank means *not recorded*, never zero. It is the torque, not the clamping force on the seat, which also depends on thread friction. Changes the cracking point far more than upstream pressure does: `SEAT_SCREW_CRACKING_C` in config.py calibrates auto-p's seek reference by torque (one entry so far, 0.30 N·m → 92.7 °C at 4.49 bar); an uncalibrated torque falls back to the 16 Sept reference with a logged warning. |
 | **ARIEL PCB** | The heater control board (FIO0 drives the MOSFET gate Q171; SW171 enables the 24 V rail). Not the valve, whatever the valve ends up being called. |
 | **Heater** | The 88 Ω element on the valve, 24 V rail: 6.55 W at full duty. |
 | **Upstream pressure** | Gas pressure before the valve, from the Keller PAA-23SX-H2. Absolute, in bar. |
@@ -29,7 +29,7 @@ differently from this page, fix one of them. Add terms as they appear.
 
 | Term | Meaning |
 |---|---|
-| **Cracking point** | Valve temperature at which the valve opens: about 40.1–40.6 °C in the 16 Sept runs. |
+| **Cracking point** | Valve temperature at which the valve opens: about 40.1–40.6 °C in the 16 Sept runs (torque unrecorded — the input didn't exist yet), 92.67 °C at 0.30 N·m / 4.49 bar upstream (21 Sept). Depends strongly on seat screw torque; see `SEAT_SCREW_CRACKING_C`. |
 | **Snap open** | The valve goes from shut to open in one step rather than throttling gradually (16 Sept runs). Whether it throttles at all above the cracking point is still open. |
 | **Closing hysteresis** | The valve closes about 1 K below where it opened. |
 | **Baseline** | Chamber pressure with the valve shut. Measured during seek, frozen once the valve opens. |

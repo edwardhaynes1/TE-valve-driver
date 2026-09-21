@@ -5,8 +5,9 @@ locks, clock, logging, files or hardware.
     command(h, now, **kw)                operator commands: armed, mode,
                                          duty_cmd, setpoint_C, p_target_mbar
     step(h, now, dt, temp, tc_healthy, vac, vac_status, vac_healthy,
-         p_up, p_up_t) -> (duty, msgs)   one control step: interlocks first,
-                                         then manual / auto-t / auto-p
+         p_up, p_up_t, seat_nm) -> (duty, msgs)   one control step:
+                                         interlocks first, then manual /
+                                         auto-t / auto-p
     trip(h, reason, msgs)                latch the heater off
     record_edge(h, state, duty, now, note) -> row
                                          ON-time accounting for one gate edge
@@ -36,7 +37,7 @@ from .config import (
     PRESSURE_NO_AUTHORITY_S, PRESSURE_OPEN_DEC, PRESSURE_OPEN_FLOOR_C,
     PRESSURE_SEEK_BAND_C, PRESSURE_SEEK_HOLD_S, PRESSURE_SEEK_MAX_C,
     PRESSURE_SEEK_RATE_C_MIN, PRESSURE_SEEK_START_C, PRESSURE_TARGET_DEFAULT,
-    PRESSURE_TRIP_ALL_MODES, PRESSURE_TRIP_MBAR, PRESSURE_TSP_MAX_C,
+    SEAT_SCREW_CRACKING_C, SEAT_SCREW_CRACKING_TOL_NM, PRESSURE_TRIP_ALL_MODES, PRESSURE_TRIP_MBAR, PRESSURE_TSP_MAX_C,
     PRESSURE_TSP_MIN_C, PRESSURE_UP_ENABLE, PRESSURE_UP_K_PER_BAR,
     PRESSURE_UP_MAX_AGE_S, PRESSURE_UP_MAX_SHIFT_K, PRESSURE_UP_REF_BAR,
     TEMP_BURST_BRAKE_K, TEMP_BURST_ENABLE, TEMP_BURST_LEARN, TEMP_BURST_MAX_S,
@@ -170,7 +171,7 @@ def command(h, now, **kwargs):
 
 
 def step(h, now, dt, temp, tc_healthy, vac=None, vac_status=None,
-         vac_healthy=True, p_up=None, p_up_t=None):
+         vac_healthy=True, p_up=None, p_up_t=None, seat_nm=None):
     """One control step: evaluate all interlocks, then the control law.
 
     Returns (duty 0-1, event messages). Duty is 0.0 unless every interlock
@@ -223,7 +224,8 @@ def step(h, now, dt, temp, tc_healthy, vac=None, vac_status=None,
                     f"needs a live gauge", msgs)
             return 0.0, msgs
         if vac is not None:
-            setpoint = _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs)
+            setpoint = _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t,
+                                            seat_nm, msgs)
         elif p_init:
             return 0.0, msgs      # not initialised yet — don't heat on a stale setpoint
         # else: a single missed read — hold the last setpoint / override
@@ -374,7 +376,7 @@ def _pressure_baseline(h, now):
     return ys[n // 2] if n % 2 else 0.5 * (ys[n // 2 - 1] + ys[n // 2])
 
 
-def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
+def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, seat_nm, msgs):
     """Outer loop of the cascade: chamber pressure → valve temperature setpoint.
 
     SEEK (valve shut). The setpoint jumps to PRESSURE_SEEK_START_C, at or just
@@ -405,6 +407,10 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
         stops only when it would push further into a clamp.
 
     p_up is the upstream pressure (bar abs.) and p_up_t when it was read.
+    seat_nm is the operator-entered seat screw torque, N·m (None if not
+    entered): see SEAT_SCREW_CRACKING_C — a matching calibrated torque
+    replaces PRESSURE_SEEK_START_C as the reference everything else in this
+    function (seek start/goal, parking, open floor) is offset from.
 
     Returns the temperature setpoint in °C (also written to h)."""
     y      = math.log10(vac)
@@ -412,16 +418,20 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
     tsp_hi = min(PRESSURE_TSP_MAX_C, TEMP_TRIP_C - 5.0)
     if p_up is not None and (p_up_t is None or now - p_up_t > PRESSURE_UP_MAX_AGE_S):
         p_up = None
-    shift = _upstream_shift(p_up)
+    ref_C, ref_bar, calibrated = _cracking_reference(seat_nm)
+    up_shift = _upstream_shift(p_up, ref_bar)
+    # Only add the torque offset when calibrated: uncalibrated, ref_C and
+    # ref_bar are exactly PRESSURE_SEEK_START_C/PRESSURE_UP_REF_BAR, so this
+    # must reduce to exactly _upstream_shift(p_up) — bit for bit, so a shift
+    # of -0.0 (p_up == PRESSURE_UP_REF_BAR) doesn't round-trip to +0.0.
+    shift = up_shift if not calibrated else (ref_C - PRESSURE_SEEK_START_C) + up_shift
 
     h['p_shift'], h['p_up_bar'] = shift, p_up
     starting = h['p_init'] or h['p_filt'] is None     # start-up logs it itself
-    if PRESSURE_UP_ENABLE and not starting and (
+    if not starting and (
             h['p_shift_logged'] is None or abs(shift - h['p_shift_logged']) >= 0.5):
         h['p_shift_logged'] = shift
-        msgs.append(f"Pressure loop: upstream {p_up:.3f} bar → temperatures shifted "
-                    f"{shift:+.1f} K" if p_up is not None else
-                    "Pressure loop: no upstream pressure reading — no upstream shift")
+        msgs.append(_shift_message(seat_nm, ref_C, ref_bar, calibrated, p_up, shift))
 
     # ── (re)start: always begin by seeking ────────────────────────────
     if h['p_init'] or h['p_filt'] is None:
@@ -439,7 +449,10 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
                  p_seek_capped=False, p_base=None,
                  p_warned_target=None,
                  p_pinned_since=None, p_pinned_warned=False)
-        if PRESSURE_UP_ENABLE:
+        if seat_nm is not None:
+            msgs.append(_shift_message(seat_nm, ref_C, ref_bar, calibrated, p_up, shift))
+            h['p_shift_logged'] = shift
+        elif PRESSURE_UP_ENABLE:
             msgs.append("Pressure loop: upstream "
                         + (f"{p_up:.3f} bar → temperatures shifted {shift:+.1f} K"
                            if p_up is not None else "pressure unavailable — no shift"))
@@ -527,11 +540,41 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
     return tsp
 
 
-def _upstream_shift(p_up):
+def _cracking_reference(seat_nm):
+    """(reference_C, reference_upstream_bar, calibrated) for this seat screw
+    torque. calibrated is True only if seat_nm is within
+    SEAT_SCREW_CRACKING_TOL_NM of a SEAT_SCREW_CRACKING_C entry; otherwise
+    the historical reference applies, unverified for this torque."""
+    if seat_nm is not None:
+        for torque_nm, (cracking_c, upstream_bar) in SEAT_SCREW_CRACKING_C.items():
+            if abs(seat_nm - torque_nm) <= SEAT_SCREW_CRACKING_TOL_NM:
+                return cracking_c, upstream_bar, True
+    return PRESSURE_SEEK_START_C, PRESSURE_UP_REF_BAR, False
+
+
+def _shift_message(seat_nm, ref_c, ref_bar, calibrated, p_up, shift):
+    """The one event-log line for the combined torque + upstream shift,
+    logged once whenever it changes appreciably."""
+    up = (f"{p_up:.3f} bar" if p_up is not None else "no reading")
+    if seat_nm is None:
+        return (f"Pressure loop: upstream {up} → temperatures shifted "
+                f"{shift:+.1f} K" if p_up is not None else
+                "Pressure loop: no upstream pressure reading — no upstream shift")
+    if calibrated:
+        return (f"Pressure loop: seat screw {seat_nm:.2f} N·m calibrated — "
+                f"cracking reference {ref_c:.1f} °C at {ref_bar:g} bar, "
+                f"upstream {up} → temperatures shifted {shift:+.1f} K")
+    return (f"Pressure loop: seat screw {seat_nm:.2f} N·m has no calibration "
+            f"(only {', '.join(f'{t:g}' for t in sorted(SEAT_SCREW_CRACKING_C))} N·m) — "
+            f"using the {ref_c:.1f} °C historical reference, UNVERIFIED for this "
+            f"torque; upstream {up} → temperatures shifted {shift:+.1f} K")
+
+
+def _upstream_shift(p_up, ref_bar=PRESSURE_UP_REF_BAR):
     """Temperature shift for upstream pressure p_up (bar abs.), K."""
     if not PRESSURE_UP_ENABLE or p_up is None:
         return 0.0
-    shift = -PRESSURE_UP_K_PER_BAR * (p_up - PRESSURE_UP_REF_BAR)
+    shift = -PRESSURE_UP_K_PER_BAR * (p_up - ref_bar)
     return max(-PRESSURE_UP_MAX_SHIFT_K, min(PRESSURE_UP_MAX_SHIFT_K, shift))
 
 
@@ -545,7 +588,7 @@ def _seek_goal(h):
         if rise > 0:
             goal = max(goal, PRESSURE_FF_REF_C + PRESSURE_FF_EFOLD_K * math.log(
                 PRESSURE_FF_FRACTION * rise / PRESSURE_FF_REF_RISE_MBAR))
-    return min(goal + h['p_shift'], PRESSURE_FF_MAX_C)
+    return min(goal + h['p_shift'], PRESSURE_FF_MAX_C + h['p_shift'])
 
 
 def _burst_step(h, temp, tsp, now, msgs):

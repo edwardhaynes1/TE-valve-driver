@@ -156,3 +156,78 @@ def test_the_state_holds_no_measured_readout():
     # the measured voltage / current belongs to the device thread (shared.py)
     h = controller.new_state()
     assert not [k for k in h if 'meas' in k or k in ('out_high', 'v_now', 'i_now')]
+
+
+# ── seat screw torque calibration ───────────────────────────────────────────
+
+def arm_pressure(h, target=1e-6, seat_nm=None, **kw):
+    armed(h, mode=controller.AUTO_P, p_target_mbar=target)
+    return step(h, temp=25.0, vac=1.5e-7, seat_nm=seat_nm, **kw)
+
+
+def test_uncalibrated_torque_behaves_exactly_like_no_torque(h):
+    # 0.75 N·m has no calibration entry: must fall back to the historical
+    # reference bit-for-bit, same as when nothing is entered at all.
+    h2 = controller.new_state()
+    duty1, msgs1 = arm_pressure(h, seat_nm=None, p_up=2.76, p_up_t=T0)
+    duty2, msgs2 = arm_pressure(h2, seat_nm=0.75, p_up=2.76, p_up_t=T0)
+    assert duty1 == duty2
+    assert h['setpoint_C'] == h2['setpoint_C'] == config.PRESSURE_SEEK_START_C
+    assert not any("calibrated" in m for m in msgs1)
+    assert any("0.75 N·m has no calibration" in m and "UNVERIFIED" in m for m in msgs2)
+
+
+def test_calibrated_torque_sets_the_seek_start(h):
+    cracking_C, ref_bar = config.SEAT_SCREW_CRACKING_C[0.30]
+    duty, msgs = arm_pressure(h, seat_nm=0.30, p_up=ref_bar, p_up_t=T0)
+    # at exactly the calibration's own upstream pressure, no further shift
+    assert h['setpoint_C'] == pytest.approx(cracking_C)
+    assert any("0.30 N·m calibrated" in m and f"{cracking_C:.1f}" in m for m in msgs)
+    assert duty == config.HEATER_MAX_DUTY   # cold start: burst, not creep from 40.5
+
+
+def test_within_tolerance_still_matches(h):
+    # Clearly inside SEAT_SCREW_CRACKING_TOL_NM (0.02), not sitting on the
+    # boundary itself, which is fuzzy at floating-point precision.
+    cracking_C, ref_bar = config.SEAT_SCREW_CRACKING_C[0.30]
+    entered = 0.30 + config.SEAT_SCREW_CRACKING_TOL_NM / 2
+    _, msgs = arm_pressure(h, seat_nm=entered, p_up=ref_bar, p_up_t=T0)
+    assert h['setpoint_C'] == pytest.approx(cracking_C)
+    assert any("calibrated" in m for m in msgs)
+
+
+def test_clearly_outside_tolerance_does_not_match(h):
+    entered = 0.30 + config.SEAT_SCREW_CRACKING_TOL_NM * 5
+    _, msgs = arm_pressure(h, seat_nm=entered, p_up=2.76, p_up_t=T0)
+    assert h['setpoint_C'] == config.PRESSURE_SEEK_START_C
+    assert any("no calibration" in m for m in msgs)
+
+
+def test_upstream_shift_applies_relative_to_the_calibrated_reference(h):
+    # Testing 1 bar BELOW the calibration's own upstream: less push open,
+    # so the reference goes UP, not down, by K_PER_BAR × 1 bar.
+    cracking_C, ref_bar = config.SEAT_SCREW_CRACKING_C[0.30]
+    _, msgs = arm_pressure(h, seat_nm=0.30, p_up=ref_bar - 1.0, p_up_t=T0)
+    expected = cracking_C + config.PRESSURE_UP_K_PER_BAR * 1.0
+    assert h['setpoint_C'] == pytest.approx(min(expected, h['setpoint_C']) if
+                                            config.PRESSURE_UP_K_PER_BAR * 1.0
+                                            <= config.PRESSURE_UP_MAX_SHIFT_K
+                                            else cracking_C + config.PRESSURE_UP_MAX_SHIFT_K)
+    assert any(f"{ref_bar - 1.0:.3f} bar" in m for m in msgs)
+
+
+def test_the_feedforward_ceiling_moves_with_a_calibrated_reference(h):
+    # Without this, PRESSURE_FF_MAX_C (an absolute 55 °C) would silently cap
+    # the goal far below a calibrated cracking point above it.
+    cracking_C, ref_bar = config.SEAT_SCREW_CRACKING_C[0.30]
+    assert cracking_C > config.PRESSURE_FF_MAX_C   # the case that broke, concretely
+    armed(h, mode=controller.AUTO_P, p_target_mbar=5e-5)   # a big target: feedforward engages
+    for _ in range(4):
+        step(h, temp=25.0, vac=1.5e-7, seat_nm=0.30, p_up=ref_bar, p_up_t=T0)
+    assert h['setpoint_C'] >= cracking_C - 1.0   # not clamped down to ~55 °C
+
+
+def test_no_torque_entered_logs_the_old_message_unchanged(h):
+    _, msgs = arm_pressure(h, seat_nm=None, p_up=2.76, p_up_t=T0)
+    assert any(m == "Pressure loop: upstream 2.760 bar → temperatures shifted -0.0 K"
+              for m in msgs)
