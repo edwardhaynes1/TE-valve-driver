@@ -15,16 +15,20 @@ are private, so the locking rules live in this file only.
                                   health, heater_output
     the logger takes:             take_log_readings, take_events,
                                   put_back_events, take_edges, put_back_edges
+    the operator enters:          set_seat_screw_torque (read: seat_screw_torque)
     control.py queues:            queue_edge
     events:                       log_event, ascii_text
     tests:                        reset, pending_edges
 """
 
+import math
 import threading
 from collections import deque
 from datetime import datetime
 
-from .config import CHART_SECONDS, KELLER_POLL_HZ, LABJACK_SAMPLE_HZ
+from .config import (
+    CHART_SECONDS, KELLER_POLL_HZ, LABJACK_SAMPLE_HZ, SEAT_SCREW_TORQUE_MAX_NM,
+)
 
 stop = threading.Event()
 
@@ -71,6 +75,7 @@ def _fresh_output():
 
 _readings = _fresh_readings()
 _output = _fresh_output()
+_seat_screw_nm = None             # seat screw torque as entered; None = not recorded
 _charts = _fresh_charts()
 _events = deque(maxlen=200)       # (timestamp, text) for the GUI
 _events_pending = []              # texts not yet written to the CSV
@@ -163,6 +168,26 @@ def set_health(**flags):
         _health.update(flags)
 
 
+# ─── the operator enters ────────────────────────────────────────────────────
+
+def set_seat_screw_torque(nm):
+    """Record the seat screw torque the operator entered, N·m, and note it
+    in the event log. Raises ValueError outside 0 … SEAT_SCREW_TORQUE_MAX_NM."""
+    global _seat_screw_nm
+    if not (isinstance(nm, (int, float)) and math.isfinite(nm)
+            and 0.0 <= nm <= SEAT_SCREW_TORQUE_MAX_NM):
+        raise ValueError(f"seat screw torque must be 0 to "
+                         f"{SEAT_SCREW_TORQUE_MAX_NM:g} N·m, not {nm!r}")
+    with _lock:
+        old, _seat_screw_nm = _seat_screw_nm, float(nm)
+    if old is None:
+        log_event(f"Seat screw torque set to {nm:.2f} N·m")
+    elif old != nm:
+        log_event(f"Seat screw torque {old:.2f} → {nm:.2f} N·m")
+    else:
+        log_event(f"Seat screw torque unchanged ({nm:.2f} N·m)")
+
+
 # ─── anyone reads ───────────────────────────────────────────────────────────
 
 def latest():
@@ -195,6 +220,12 @@ def charts():
 def recent_events():
     with _lock:
         return list(_events)
+
+
+def seat_screw_torque():
+    """The seat screw torque entered this session, N·m, or None if not yet."""
+    with _lock:
+        return _seat_screw_nm
 
 
 def health():
@@ -283,6 +314,7 @@ _ASCII_MAP = str.maketrans({'→': '->', '·': ';', '—': '-', '–': '-',
 
 def ascii_text(text: str) -> str:
     """Plain-ASCII version of an event line, for the CSV and odd consoles."""
+    text = text.replace('N·m', 'Nm')
     return text.translate(_ASCII_MAP).encode('ascii', 'replace').decode('ascii')
 
 
@@ -296,8 +328,9 @@ def pending_edges():
 
 def reset():
     """Back to the start-up state."""
-    global _readings, _charts
+    global _readings, _charts, _seat_screw_nm
     with _lock:
+        _seat_screw_nm = None
         _readings = _fresh_readings()
         _output.update(_fresh_output())
         _charts = _fresh_charts()

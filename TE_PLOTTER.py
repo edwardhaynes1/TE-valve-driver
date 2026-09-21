@@ -21,6 +21,11 @@ Valve open/close times are detected from the chamber pressure: the valve
 counts as open while the pressure sits clearly above its fitted baseline
 (dotted blue). Both plots get dashed vertical lines at those times.
 
+The seat screw torque (N·m, as entered in the driver) goes in the figure
+title and the terminal summary; if it changed during the run, both plots
+get a dotted vertical line at each change. Logs from before the column
+existed say "not recorded".
+
 Step-response fits, upstream decay rates (raw pressure), heater energy and
 the outgassing fit are printed to the terminal.
 
@@ -87,6 +92,7 @@ ROLE_COLUMNS = {
     "power_calc": "heater_P_mean_calc",
     "fault": "tc_fault",
     "mode": "heater_mode",
+    "seat_screw": "seat_screw_torque_Nm",
 }
 assert not SCHEMA_COLUMNS or set(ROLE_COLUMNS.values()) <= SCHEMA_COLUMNS, \
     "TE_PLOTTER.ROLE_COLUMNS names a column that driver/schema.py doesn't define"
@@ -118,6 +124,7 @@ COLUMN_ALIASES = {
     "power_calc": ["heaterpmeancalc", "powercalc", "pcalc", "heaterpower"],
     "fault":    ["tcfault", "fault"],
     "mode":     ["heatermode", "mode"],
+    "seat_screw": ["seatscrewtorque", "seatscrew"],
 }
 
 # Fragments that disqualify a column for a given role, so that e.g.
@@ -156,6 +163,7 @@ VALVE_MIN_OPEN_S = 3.0     # ignore excursions shorter than this
 VALVE_MERGE_GAP_S = 3.0    # join excursions separated by a shorter dip
 VALVE_BASELINE_DEG = 1     # polynomial order of the baseline drift (1 = linear)
 VALVE_LINE_COLOUR = "0.15"
+SEAT_SCREW_COLOUR = "#7b3fa0"      # seat screw torque changes (purple, dotted)
 
 MIN_STEP_SAMPLES = 120     # ignore duty segments shorter than this
 JUMP_BAR = 0.02            # upstream step that marks a refill/adjustment
@@ -262,7 +270,7 @@ def load(path, cols):
 
     for role in ("temp", "chamber", "upstream", "duty", "keller_temp",
                  "current_meas", "current_calc", "power_meas", "power_calc",
-                 "p_target", "t_setpoint"):
+                 "p_target", "t_setpoint", "seat_screw"):
         if cols[role]:
             df[cols[role]] = numeric(df, cols[role])
 
@@ -465,6 +473,48 @@ def detect_valve_events(df, cols):
     return baseline, events
 
 
+def seat_screw_history(df, cols):
+    """[(t, N·m or None), …]: the value at the start and at each change.
+    None means not recorded. Returns None if the log has no such column."""
+    col = cols.get("seat_screw")
+    if not col:
+        return None
+    history, last = [], object()
+    for t, v in zip(df.t, df[col]):
+        v = None if pd.isna(v) else float(v)
+        if v != last:
+            history.append((float(t), v))
+            last = v
+    return history
+
+
+def seat_screw_text(history):
+    """'seat screw torque 0.40 N·m', or the sequence of values if it changed."""
+    if history is None:
+        return "seat screw torque not recorded (log predates the column)"
+    def fmt(v):
+        return "not recorded" if v is None else f"{v:.2f} N·m"
+    if not history:
+        return "seat screw torque not recorded"
+    text = "seat screw torque " + fmt(history[0][1])
+    for t, v in history[1:]:
+        text += f" → {fmt(v)} at {t:.1f} s"
+    return text
+
+
+def mark_seat_screw(axes, history, label_ax):
+    """Dotted vertical lines where the seat screw torque changed mid-run."""
+    trans = matplotlib.transforms.blended_transform_factory(
+        label_ax.transData, label_ax.transAxes)
+    for t, v in (history or [])[1:]:
+        for ax in axes:
+            ax.axvline(t, ls=":", lw=1.4, color=SEAT_SCREW_COLOUR, zorder=5)
+        label = "seat screw not recorded" if v is None else f"seat screw {v:.2f} N·m"
+        label_ax.text(t, 0.02, f" {label} ", transform=trans, rotation=90,
+                      ha="right", va="bottom", fontsize=8, color=SEAT_SCREW_COLOUR,
+                      zorder=6, bbox=dict(fc="white", ec="none", alpha=0.8, pad=1))
+
+
 def mark_valve_events(axes, events, label_ax):
     """Dashed vertical lines at valve open/close; labels on label_ax."""
     trans = matplotlib.transforms.blended_transform_factory(
@@ -574,7 +624,8 @@ def add_to_legend(ax, handle):
               fontsize=9, handlelength=1.8, borderaxespad=0)
 
 
-def make_figure(df, cols, steps, segs, outgas, title, valve=(None, [])):
+def make_figure(df, cols, steps, segs, outgas, title, valve=(None, []),
+                seat_screw=None):
     """Supporting traces on top; larger chamber + temperature plot below.
     Both share one time axis."""
     has_main = any(cols.get(r) for r in MAIN_ROLES)
@@ -586,7 +637,7 @@ def make_figure(df, cols, steps, segs, outgas, title, valve=(None, [])):
     else:
         fig, ax = plt.subplots(figsize=(14, 7 if has_main else 5.5))
         ax_t, ax_m = (None, ax) if has_main else (ax, None)
-    fig.suptitle(title, fontsize=12, y=0.99)
+    fig.suptitle(f"{title}  ·  {seat_screw_text(seat_screw)}", fontsize=12, y=0.99)
 
     if ax_t is not None:
         panel_timeseries(ax_t, df, cols, roles=TOP_ROLES)
@@ -622,17 +673,21 @@ def make_figure(df, cols, steps, segs, outgas, title, valve=(None, [])):
                                           color=COLOURS["temp"], label="temperature setpoint")
             add_to_legend(ax_m, h)
 
+    hosts = [a for a in (ax_t, ax_m) if a is not None]
     if events:
-        hosts = [a for a in (ax_t, ax_m) if a is not None]
         mark_valve_events(hosts, events, ax_m if ax_m is not None else ax_t)
+    if seat_screw and len(seat_screw) > 1:
+        mark_seat_screw(hosts, seat_screw, ax_m if ax_m is not None else ax_t)
 
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     return fig
 
 
-def report(path, df, cols, steps, segs, outgas, ambient, valve=(None, [])):
+def report(path, df, cols, steps, segs, outgas, ambient, valve=(None, []),
+           seat_screw=None):
     print(f"\nfile      : {path}")
     print(f"duration  : {df.t.iloc[-1]:.0f} s   samples: {len(df)}")
+    print(f"TE-Valve  : {seat_screw_text(seat_screw)}")
     if cols["temp"]:
         print(f"ambient   : {ambient:.1f} °C")
         print(f"max |ΔT| between samples: "
@@ -766,10 +821,13 @@ def main():
 
     valve = detect_valve_events(df, cols)
 
-    report(args.logfile, df, cols, steps, segs, outgas, ambient, valve)
+    seat_screw = seat_screw_history(df, cols)
+
+    report(args.logfile, df, cols, steps, segs, outgas, ambient, valve, seat_screw)
 
     fig = make_figure(df, cols, steps, segs, outgas,
-                      args.logfile.replace("\\", "/").split("/")[-1], valve)
+                      args.logfile.replace("\\", "/").split("/")[-1], valve,
+                      seat_screw)
     out = args.output or args.logfile.rsplit(".", 1)[0] + ".png"
     fig.savefig(out, dpi=150)
     print(f"\nfigure written to {out}\n")

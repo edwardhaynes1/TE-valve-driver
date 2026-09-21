@@ -3,6 +3,7 @@ and heater state to strings. No Tk and no shared state, so every line can be
 checked directly (tests/test_readout.py).
 
     status_segments(...)      -> [(text, tag)] for the status panel
+    parse_seat_screw_torque(text) -> N·m, or ValueError with the reason
     heater_vi_lines(...)      -> [(label, value, note, tag)] for V / I / P
     heater_status(heater)     -> (text, tag)   the armed / tripped line
     loop_status(heater)       -> (text, tag)   what the control loop is doing
@@ -18,7 +19,7 @@ from .config import (
     HEATER_MAX_RUN_S, HEATER_R_OHM, P20_REF_K,
     PRESSURE_BURST_BRAKE_K, PRESSURE_MIN_STEP_MBAR, PRESSURE_OPEN_FLOOR_C,
     PRESSURE_SEEK_RATE_C_MIN, PRESSURE_SEEK_START_C, PRESSURE_TSP_MAX_C,
-    PRESSURE_TSP_MIN_C, TEMP_TRIP_C, heater_current_a, heater_power_w,
+    PRESSURE_TSP_MIN_C, SEAT_SCREW_TORQUE_MAX_NM, TEMP_TRIP_C, heater_current_a, heater_power_w,
     heater_voltage_v,
 )
 from .control import AUTO_P, AUTO_T, MANUAL
@@ -29,9 +30,10 @@ def _mean(values):
     return (sum(values) / len(values)) if values else None
 
 
-def status_segments(readings, health, heater, output, labjack_available):
-    """The status panel, top to bottom: title, health flags, sensor readings
-    and the heater's voltage / current / power lines."""
+def status_segments(readings, health, heater, output, labjack_available,
+                    seat_screw_nm=None):
+    """The status panel, top to bottom: title, health flags, sensor readings,
+    the seat screw torque, and the heater's voltage / current / power lines."""
     r, ok, h = readings, health, heater
     p = _mean(r['keller_pressure_samples'])
     t = _mean(r['keller_temperature_samples'])
@@ -73,10 +75,31 @@ def status_segments(readings, health, heater, output, labjack_available):
             (vac_note, "err"), (vac_volt + "\n", "dim"),
             ("VALVE T      ", "dim"), (te_s, "bright" if te_temp is not None else "dim"),
             (fault_note + "\n", "err" if fault_note else "dim"),
-            ("\n", "dim")]
+            ("SEAT SCREW   ", "dim")]
+    if seat_screw_nm is None:
+        seg += [("---", "dim"), ("  (not entered)\n", "err")]
+    else:
+        seg += [(f"{seat_screw_nm:.2f} N·m\n", "bright")]
+    seg.append(("\n", "dim"))
     for label, value, note, tag in heater_vi_lines(h, output, ok['labjack']):
         seg += [(label, "dim"), (value, tag), (note + "\n", "dim")]
     return seg
+
+
+def parse_seat_screw_torque(text):
+    """The operator's entry as N·m. Accepts a decimal point or comma;
+    anything else, or a value outside 0 … SEAT_SCREW_TORQUE_MAX_NM, raises
+    ValueError saying why."""
+    cleaned = text.strip().replace(",", ".")
+    try:
+        nm = float(cleaned)
+    except ValueError:
+        raise ValueError(f"Seat screw torque: '{text.strip()}' is not a number "
+                         f"(enter N·m, e.g. 0.4)") from None
+    if not (0.0 <= nm <= SEAT_SCREW_TORQUE_MAX_NM):
+        raise ValueError(f"Seat screw torque {nm:g} N·m is outside "
+                         f"0 to {SEAT_SCREW_TORQUE_MAX_NM:g} N·m — not changed")
+    return nm
 
 
 def heater_vi_lines(h, out, labjack_ok):

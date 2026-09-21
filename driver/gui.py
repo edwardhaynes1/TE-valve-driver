@@ -63,7 +63,7 @@ class TEGui:
         outer.pack(fill="both", expand=True, padx=8, pady=8)
 
         self.status_text = tk.Text(outer, bg=BG, fg=TEXT, font=self.f,
-                                   height=13, bd=0, highlightthickness=0,
+                                   height=14, bd=0, highlightthickness=0,
                                    state="disabled", wrap="none", cursor="arrow")
         self.status_text.pack(fill="x")
         self.status_text.tag_config("bright", foreground=BRIGHT)
@@ -154,6 +154,14 @@ class TEGui:
         self.p_entry    = self._entry(row2, "target mbar", f"{PRESSURE_TARGET_DEFAULT:.1e}", width=9)
         tk.Button(row2, text="update", command=self._send_update, **btn).pack(side="left")
 
+        # Seat screw torque: a TE-Valve setting, not a heater setting, so it
+        # has its own row and "set" button. Blank until the operator enters it.
+        row3 = tk.Frame(parent, bg=BG)
+        row3.pack(fill="x", pady=(0, 4))
+        self.seat_entry = self._entry(row3, "seat screw N·m", "", width=6)
+        self.seat_entry.bind("<Return>", lambda _ev: self._set_seat_screw())
+        tk.Button(row3, text="set", command=self._set_seat_screw, **btn).pack(side="left")
+
         self.heater_status = tk.Label(parent, text="", font=self.f, fg=DIM,
                                       bg=BG, anchor="w")
         self.heater_status.pack(fill="x")
@@ -162,6 +170,18 @@ class TEGui:
         self.loop_status.pack(fill="x")
         self._update_inputs()
         self._send_update()
+
+    def _set_seat_screw(self):
+        """Record the seat screw torque typed in the box."""
+        try:
+            nm = readout.parse_seat_screw_torque(self.seat_entry.get())
+        except ValueError as err:
+            log_event(str(err))
+            current = shared.seat_screw_torque()      # show what is really in use
+            self._set_entry(self.seat_entry, "" if current is None else f"{current:g}")
+            return
+        shared.set_seat_screw_torque(nm)
+        self._set_entry(self.seat_entry, f"{nm:g}")
 
     def _toggle_arm(self):
         if snapshot()['armed']:
@@ -316,7 +336,8 @@ class TEGui:
         st.configure(state="normal")
         st.delete("1.0", "end")
         for text, tag in readout.status_segments(
-                r, shared.health(), h, shared.heater_output(), LABJACK_AVAILABLE):
+                r, shared.health(), h, shared.heater_output(), LABJACK_AVAILABLE,
+                shared.seat_screw_torque()):
             st.insert("end", text, tag)
         st.configure(state="disabled")
 

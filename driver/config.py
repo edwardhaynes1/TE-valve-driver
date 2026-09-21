@@ -90,6 +90,10 @@ def power_from_voltage_w(volts):
     return volts ** 2 / HEATER_R_OHM
 
 
+# ─── TE-Valve settings the operator enters ───────────────────────────────────
+SEAT_SCREW_TORQUE_MAX_NM = 5.0     # highest seat screw torque the driver accepts, N·m.
+                                   # Blank at start-up until entered (see context.md).
+
 # ─── Heater interlocks ───────────────────────────────────────────────────────
 TEMP_TRIP_C           = 160.0      # latch off above this valve temperature
 HEATER_MAX_RUN_S      = 3600       # auto-disarm after this long armed (s)

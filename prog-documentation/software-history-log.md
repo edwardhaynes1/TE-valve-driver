@@ -4,6 +4,20 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 19. Seat screw torque — 18 Sept 2026
+The operator can now record the torque on the TE-Valve's seat screw, in N·m
+(see context.md). Agreed before any code: the name (seat screw torque, the
+shortest unambiguous one), and that it starts blank every session, because
+a remembered value could silently outlive a re-torque. It is entered in its
+own row under the heater controls (a decimal point or comma both work;
+0–5 N·m, `SEAT_SCREW_TORQUE_MAX_NM`), shown as `SEAT SCREW` in the readout,
+written to every CSV row (`seat_screw_torque_Nm`, appended; blank = not
+recorded, never 0) and logged as an event on every entry. A refused entry
+leaves the box showing the value actually in use. TE_PLOTTER puts the value
+in the figure title and summary and marks mid-run changes with dotted
+purple lines; older logs say "not recorded". The tests were written first
+(`test_seat_screw.py`, plus five in `test_plotter.py`).
+
 ## 18. gui.py split; the window's text is now testable — 17 Sept 2026
 `gui.py` was 628 lines doing layout, formatting, chart drawing and input
 handling. The text is now `readout.py` (pure functions: readings in, strings

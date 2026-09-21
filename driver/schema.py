@@ -32,6 +32,7 @@ MAIN_COLUMNS = (
     ("heater_P_mean_calc",      "W, duty x rail^2 / R (switching-period mean)"),
     ("heater_P_mean_meas",      "W, mean of per-tick V x I, blank unless sensing is wired"),
     ("heater_on_s",             "s, gate ON time since the previous row (from edge times)"),
+    ("seat_screw_torque_Nm",    "N·m, TE-Valve seat screw torque as entered; blank = not recorded"),
 )
 
 # Switching log: te-sensor_<timestamp>_pwm.csv, one row per heater gate edge

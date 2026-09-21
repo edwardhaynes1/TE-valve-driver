@@ -96,6 +96,7 @@ def logger_thread():
 
             h = control.snapshot()
             out = shared.heater_output()
+            seat_nm = shared.seat_screw_torque()
             on_s = round(control.take_on_time(), 3)
             duty = h['duty_actual']
             in_p = h['mode'] == AUTO_P and not h['p_init']
@@ -129,6 +130,7 @@ def logger_thread():
                 'heater_P_mean_calc': round(heater_power_w(duty), 4),
                 'heater_P_mean_meas': blank_or(out['p_meas_mean'], 4),
                 'heater_on_s': on_s,
+                'seat_screw_torque_Nm': blank_or(seat_nm, 3),
             }
             try:
                 writer.writerow([row[c] for c in schema.MAIN])
