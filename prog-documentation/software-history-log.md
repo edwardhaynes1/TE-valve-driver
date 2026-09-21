@@ -4,6 +4,15 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 20. The README is the front page again — 18 Sept 2026
+The old single-file driver opened with a ~125-line description (sensors,
+modes, wiring, why the heater is switched in software, safety, logs). The
+split moved it into `driver/__init__.py`, where nobody reads it, and it went
+out of date there. It is now in README.md, rewritten with current names and
+features; the CSV column list is replaced by a pointer to `driver/schema.py`
+so it can't go stale again, and `driver/__init__.py` just points to the
+README.
+
 ## 19. Seat screw torque — 18 Sept 2026
 The operator can now record the torque on the TE-Valve's seat screw, in N·m
 (see context.md). Agreed before any code: the name (seat screw torque, the
