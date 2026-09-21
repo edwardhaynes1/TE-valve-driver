@@ -162,6 +162,7 @@ VALVE_NOISE_SIGMAS = 6.0   # ...or this many noise sigmas, whichever is larger
 VALVE_MIN_OPEN_S = 3.0     # ignore excursions shorter than this
 VALVE_MERGE_GAP_S = 3.0    # join excursions separated by a shorter dip
 VALVE_BASELINE_DEG = 1     # polynomial order of the baseline drift (1 = linear)
+VALVE_SEED_BIN_PERCENTILE = 40  # percentile of time-bin minima used to seed the baseline
 VALVE_LINE_COLOUR = "0.15"
 SEAT_SCREW_COLOUR = "#7b3fa0"      # seat screw torque changes (purple, dotted)
 
@@ -431,13 +432,29 @@ def detect_valve_events(df, cols):
     sigma = 1.4826 * np.median(np.abs(d - np.median(d))) / np.sqrt(2)
     thresh = max(VALVE_MIN_RISE_DEC, VALVE_NOISE_SIGMAS * sigma)
 
-    # Start from the samples near the very lowest pressure (the valve only
-    # adds gas, so the baseline is the floor of the trace, even if the valve
-    # was open for most of the log), then refit with everything clearly above
-    # the baseline left out. Fit a drift slope only if the shut periods cover
-    # enough of the log; otherwise a short stretch would be extrapolated.
+    # Find the seed level from each time bin's own lowest point, not from
+    # an overall percentile of all points: if the chamber keeps pumping down
+    # over the run, the end of the log can sit below the start, and whichever
+    # side happens to hold more samples then dominates an overall percentile,
+    # hiding a real opening on the other side (bug: 21 Sept 2026 — see
+    # software-history-log.md).
+    #
+    # A bin fully inside an open period has no genuinely quiet sample, so its
+    # minimum is not trustworthy on its own; VALVE_SEED_BIN_PERCENTILE (40)
+    # takes the level below which a bin's minimum typically falls, which is
+    # only close to the true baseline for the bins that actually reach it, at
+    # any level of imbalance up to the valve being open in most of the log.
+    # Seeding straight from these bin minima, rather than from this derived
+    # level, would instead let an all-open bin's minimum anchor the baseline:
+    # the refinement below only excludes points *above* the fit, so a run of
+    # such points, once seeded, never gets removed.
     span = t[-1] - t[0]
-    quiet = y <= np.percentile(y, 2) + thresh / 2
+    n_bins = min(30, max(6, len(t) // 20))
+    bin_of = np.clip(np.searchsorted(
+        np.linspace(t[0], t[-1], n_bins + 1)[1:-1], t), 0, n_bins - 1)
+    bin_mins = [y[bin_of == b].min() for b in range(n_bins) if (bin_of == b).any()]
+    seed_level = np.percentile(bin_mins, VALVE_SEED_BIN_PERCENTILE)
+    quiet = y <= seed_level + thresh / 2
     for _ in range(20):
         deg = VALVE_BASELINE_DEG if np.ptp(t[quiet]) >= 0.4 * span else 0
         coef = np.polyfit(t[quiet], y[quiet], deg)

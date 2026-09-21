@@ -4,6 +4,27 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 22. Valve-opening marker could go missing — 21 Sept 2026
+`TE_PLOTTER` seeded its chamber-pressure baseline from the globally lowest
+2% of readings. If the chamber kept pumping down over a run, so the pressure
+after the valve closed sat lower than before it opened, that seed grabbed
+almost entirely from the low end, spanned too little time to fit a drift
+line, and the whole pre-open period then read as "above baseline" — merging
+with the real opening into one run with no recorded start, so no opening
+marker was drawn (closing still was). Nothing tested this function.
+
+The seed level is now taken from each time bin's own lowest point (so both
+ends of the log contribute, whichever sits lower), using the 40th percentile
+of the bins' minima as the level rather than seeding from the minima
+directly — a bin fully inside an open period has no genuinely quiet sample,
+and the existing refinement only ever excludes points *above* the fit, so
+seeding from such a bin's minimum directly would anchor the baseline to it
+permanently. 12 tests were added (there were none before): no event, drift
+alone, a clean open/close, both baseline directions, open before the log,
+still open at the end, a short blip ignored, two openings merged or kept
+separate, and a missing chamber column. 3 of the 12 fail against the old
+code; the other 9 already worked and still do.
+
 ## 21. Measured heater means are time-weighted — 21 Sept 2026
 GitHub's test run failed: on its busy shared machine, ticks came irregularly,
 and the mean over the last period (entry 15) gave every sample equal weight,
