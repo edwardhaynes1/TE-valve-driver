@@ -4,6 +4,19 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 21. Measured heater means are time-weighted — 21 Sept 2026
+GitHub's test run failed: on its busy shared machine, ticks came irregularly,
+and the mean over the last period (entry 15) gave every sample equal weight,
+so a stall during one gate state over-counted the other. Each sample now
+counts for the time since the previous one, which is what mean power means.
+The end-to-end test compared the reading with an ideal 50 %, but a stalled
+tick really does keep the heater on (or off) longer; it now compares with
+the fake gate's own record, and its tolerance comes from the sample spacing
+it actually observes. Tested under full CPU load: 8 of 8 passes. The exact
+weighting is pinned by a timing-free unit test
+(`test_period_mean_weights_samples_by_time`), which the old equal weights
+fail; the end-to-end test still catches the count-of-samples bug of entry 15.
+
 ## 20. The README is the front page again — 18 Sept 2026
 The old single-file driver opened with a ~125-line description (sensors,
 modes, wiring, why the heater is switched in software, safety, logs). The

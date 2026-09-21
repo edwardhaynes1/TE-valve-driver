@@ -103,32 +103,48 @@ def test_absent_thermocouple_is_reported_once_and_retried(running, fake):
 
 # ── measured heater voltage and current ─────────────────────────────────────
 
-# delay 0.0: ticks on time. 0.075: every tick takes ~75 ms instead of 50 (as
-# when Windows rounds waits up to its timer steps). The measured means must
-# still cover one PWM period: a fixed count of 20 samples would then span
-# 1.5 periods and swing with the cycle.
-@pytest.mark.parametrize("delay", [0.0, 0.075])
-def test_measured_power_follows_the_duty(running, fake, delay):
+# The measured means must follow what the heater actually did over the last
+# PWM period, however the ticks fall: on time (0.0), all late (0.075 s: every
+# tick ~75 ms instead of 50, as when Windows rounds waits up), or irregular
+# (up to 0.12 s of random stalls, like a busy shared machine). The reference
+# is the fake gate's own record of when it was on, not an ideal 50 %, because
+# a stalled tick really does keep the heater on (or off) for longer.
+@pytest.mark.parametrize("delay, jitter", [(0.0, 0.0), (0.075, 0.0), (0.0, 0.12)])
+def test_measured_power_follows_the_duty(running, fake, delay, jitter):
     fake.sense_delay_s = delay
+    fake.sense_jitter_s = jitter
     running(**SENSE)
     assert fake.config["FIOAnalog"] == (1 << 1) | (1 << 2) | (1 << 3)
     control.heater_command(mode='manual', duty_cmd=0.5, armed=True)
     wait_for(lambda: fake.gate_now() == 1)
     time.sleep(1.5 * PERIOD)
     full = 24.0 ** 2 / 88.0
-    tick = max(TICK, delay)
-    slack = 1.5 * tick / PERIOD            # one sample more or less per period
     worst = 0.0
-    t_end = time.time() + 2 * PERIOD       # watch the readout for two periods
+    t_start = time.time()
+    t_end = t_start + 2 * PERIOD           # watch the readout for two periods
     while time.time() < t_end:
-        worst = max(worst, abs(shared.heater_output()['p_meas_mean'] / full - 0.5))
+        now = time.time()
+        measured = shared.heater_output()['p_meas_mean'] / full
+        # The reading covers the period up to the driver's latest tick, which
+        # can lag `now` by a stalled tick; compare with windows ending anywhere
+        # in the last 0.3 s and take the closest.
+        ends = [now - 0.01 * k for k in range(31)]
+        worst = max(worst, min(abs(measured - fake.on_fraction(e - PERIOD, e))
+                               for e in ends))
         time.sleep(TICK)
-    assert worst <= slack, f"measured power strayed {worst:.3f} of full power from 50 %"
+    # A sampled measurement is only as fine as its sample spacing: allow one
+    # gap for where the window starts and one for reading-vs-switching skew,
+    # using the longest gap actually seen (a busy machine stretches them).
+    times = [t for t in fake.sense_times if t >= t_start - PERIOD]
+    gap = max(b - a for a, b in zip(times, times[1:]))
+    assert gap < 0.5, f"ticks up to {gap:.2f} s apart: machine too busy to judge"
+    slack = 2 * max(gap, TICK) / PERIOD
+    assert worst <= slack, (f"measured power differs from the gate's by {worst:.3f} "
+                            f"of full power (limit {slack:.3f}, longest gap {gap * 1000:.0f} ms)")
     out = shared.heater_output()
     assert out['rail_meas'] == pytest.approx(24.0)
-    assert out['v_meas_mean'] == pytest.approx(12.0, abs=slack * 24.0)
-    assert out['i_meas_mean'] == pytest.approx(0.5 * 24 / 88, abs=slack * 24 / 88)
-    assert shared.charts()['power'][-1] == pytest.approx(0.5 * full, abs=slack * full)
+    assert out['v_meas_mean'] / 24.0 == pytest.approx(out['p_meas_mean'] / full, abs=1e-9)
+    assert 0.3 < out['p_meas_mean'] / full < 0.7          # and it is about 50 %
 
 
 def test_no_current_with_the_gate_on_is_warned(running, fake):

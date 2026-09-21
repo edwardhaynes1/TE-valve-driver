@@ -175,11 +175,27 @@ def _connect():
 
 
 def _period_mean(samples, now):
-    """Mean of the (time, value) samples from the last PWM period; older
-    ones are dropped. None if there are none."""
-    while samples and samples[0][0] <= now - HEATER_PWM_PERIOD_S:
+    """Time-weighted mean of the (time, value) samples over the last PWM
+    period, ending at `now` (the newest sample's time); older samples are
+    dropped. None if there are none.
+
+    Each sample describes the heater from the previous sample's time up to
+    its own — it is read before the tick switches the gate — so it is
+    weighted by that interval. Equal weights would let an irregular tick
+    (a busy machine stalling for a moment) tip the mean towards whichever
+    state happened to be sampled more often."""
+    start = now - HEATER_PWM_PERIOD_S
+    while samples and samples[0][0] <= start:
         samples.popleft()
-    return sum(v for _, v in samples) / len(samples) if samples else None
+    if not samples:
+        return None
+    total = span = 0.0
+    prev = start                  # the first interval is clipped to the window
+    for t, value in samples:
+        total += value * (t - prev)
+        span += t - prev
+        prev = t
+    return total / span if span > 0 else samples[-1][1]
 
 
 class _DeviceLost(Exception):

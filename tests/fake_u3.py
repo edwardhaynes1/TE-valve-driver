@@ -3,6 +3,7 @@ without hardware: a MAX31856 behind SPI, the IKR 270 on FIO2, optional
 heater voltage / current sense inputs, and a gate output whose every write
 is recorded. Faults can be switched on to exercise the error paths."""
 import math
+import random
 import threading
 import time
 
@@ -27,6 +28,10 @@ class FakeU3:
         self.element_ohm = 88.0          # None = open element / SW171 off
         self.stray_a = 0.0               # current flowing with the gate OFF
         self.sense_delay_s = 0.0         # slow sense reads stretch every tick
+        self.sense_jitter_s = 0.0        # random extra delay: irregular ticks, like
+                                         # a busy shared machine (GitHub runners)
+        self.rng = random.Random(7)
+        self.sense_times = []            # when each voltage sample was read
         # faults
         self.fail_next_on_write = False
         self.fail_all_writes = False
@@ -56,7 +61,8 @@ class FakeU3:
                        else (math.log10(self.vac_mbar) + 12.75) / 1.25)
             return u_gauge / self.divider
         if channel == V_SENSE_FIO:
-            time.sleep(self.sense_delay_s)
+            self.sense_times.append(time.time())
+            time.sleep(self.sense_delay_s + self.rng.uniform(0, self.sense_jitter_s))
             return self.rail_v / self.v_scale
         if channel == I_SENSE_FIO:
             if self.gate_now():

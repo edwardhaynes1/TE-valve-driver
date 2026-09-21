@@ -89,3 +89,15 @@ def test_period_mean_keeps_only_the_last_period(monkeypatch):
     assert labjack._period_mean(deque(), 3.0) is None
     old = deque([(0.0, 5.0)])
     assert labjack._period_mean(old, 3.0) is None and not old
+
+
+def test_period_mean_weights_samples_by_time(monkeypatch):
+    # Irregular ticks: the heater is ON from 0 to 0.5 s (two samples, the
+    # second after a long stall) and OFF from 0.5 to 1.0 s (five quick
+    # samples). Each sample covers the time since the previous one, so the
+    # true mean is 50 %; counting samples would say 2 of 7.
+    from collections import deque
+    monkeypatch.setattr(labjack, "HEATER_PWM_PERIOD_S", 1.0)
+    samples = deque([(0.10, 1.0), (0.50, 1.0),
+                     (0.60, 0.0), (0.70, 0.0), (0.80, 0.0), (0.90, 0.0), (1.00, 0.0)])
+    assert labjack._period_mean(samples, 1.0) == pytest.approx(0.5)
