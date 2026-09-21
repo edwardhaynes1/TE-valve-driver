@@ -16,6 +16,7 @@ differently from this page, fix one of them. Add terms as they appear.
 | Term | Meaning |
 |---|---|
 | **TE-Valve** | Thermally Enabled Valve: the Max Planck prototype under test. Heating it opens it. Final name (ARIEL or TERP) still to be decided. |
+| **Seat screw torque** | Torque applied to the TE-Valve's seat screw with the torque wrench, in N·m. Entered in the driver (`SEAT SCREW`), logged in every CSV row (`seat_screw_torque_Nm`), and noted in the event log when it changes. Blank at the start of every session until entered: blank means *not recorded*, never zero. It is the torque, not the clamping force on the seat, which also depends on thread friction. |
 | **ARIEL PCB** | The heater control board (FIO0 drives the MOSFET gate Q171; SW171 enables the 24 V rail). Not the valve, whatever the valve ends up being called. |
 | **Heater** | The 88 Ω element on the valve, 24 V rail: 6.55 W at full duty. |
 | **Upstream pressure** | Gas pressure before the valve, from the Keller PAA-23SX-H2. Absolute, in bar. |
@@ -74,7 +75,7 @@ differently from this page, fix one of them. Add terms as they appear.
 | **Switching log** | `logs/te-sensor_<time>_pwm.csv`, one row per gate edge. |
 | **P20** | Upstream pressure referred to 20 °C using the Keller chip temperature. Not charted or used by the plotter any more (see entry 5 in [software-history-log.md](software-history-log.md)); shown in the text readout with a warning. |
 | **Golden record** | `tests/golden/control_trace.json.gz`: the control law's recorded behaviour. Tests require an exact match. |
-| **Heater state** | The dict `h` from `controller.new_state()` (a `HeaterState`: its fields are fixed, so a misspelt field is an error): operator commands, loop internals and the live electrical readout. At run time it is private to `control.py`; others see a copy via `control.snapshot()`. |
+| **Heater state** | The dict `h` from `controller.new_state()` (a `HeaterState`: its fields are fixed, so a misspelt field is an error): operator commands, loop internals and the duty being applied. At run time it is private to `control.py`; others see a copy via `control.snapshot()`. |
 | **Readings** | The latest sensor values and chart history, private to `shared.py`; written with `store_…`, read with `latest()`, `charts()`, `health()`. |
 | **Heater output** | What the device thread measures on the heater circuit (gate state, voltage, current, power). In `shared.py`, read with `heater_output()`. Not part of the heater state. |
 | **Control step** | One call of `controller.step`: interlocks, then the control law, every 0.25 s. |
