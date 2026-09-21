@@ -4,13 +4,14 @@ checked directly (tests/test_readout.py).
 
     status_segments(...)      -> [(text, tag)] for the status panel
     parse_seat_screw_torque(text) -> N·m, or ValueError with the reason
+    torque_gate(seat_screw_nm) -> (locked, tag)   controls locked until entered
     heater_vi_lines(...)      -> [(label, value, note, tag)] for V / I / P
     heater_status(heater)     -> (text, tag)   the armed / tripped line
     loop_status(heater)       -> (text, tag)   what the control loop is doing
     mode_summary(mode, …)     -> "auto-t · setpoint 60.0 °C"
 
 A tag names a colour, which gui.py looks up in the palette: 'bright', 'dim',
-'ok', 'err' or 'warn'.
+'ok', 'err', 'warn' or 'prompt' (an input still to be filled in).
 """
 
 import time
@@ -77,13 +78,23 @@ def status_segments(readings, health, heater, output, labjack_available,
             (fault_note + "\n", "err" if fault_note else "dim"),
             ("SEAT SCREW   ", "dim")]
     if seat_screw_nm is None:
-        seg += [("---", "dim"), ("  (not entered)\n", "err")]
+        seg += [("---", "dim"), ("  (not entered)\n", "prompt")]
     else:
         seg += [(f"{seat_screw_nm:.2f} N·m\n", "bright")]
     seg.append(("\n", "dim"))
     for label, value, note, tag in heater_vi_lines(h, output, ok['labjack']):
         seg += [(label, "dim"), (value, tag), (note + "\n", "dim")]
     return seg
+
+
+def torque_gate(seat_screw_nm):
+    """(locked, tag) for the window. Until the seat screw torque is entered,
+    every other control is locked and the torque input is shown in the
+    'prompt' colour; once entered (0 counts), everything unlocks and the
+    torque input turns 'bright'."""
+    if seat_screw_nm is None:
+        return True, "prompt"
+    return False, "bright"
 
 
 def parse_seat_screw_torque(text):

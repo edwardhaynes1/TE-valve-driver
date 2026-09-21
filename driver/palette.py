@@ -8,6 +8,7 @@ BRIGHT    = "#ffffff"   # highlighted values
 DIM       = "#505050"   # labels, inactive items
 BORDER    = "#2a2a2a"   # chart and entry borders
 WARN      = "#ff4040"   # errors, trips, warnings
+PROMPT    = "#ff9a1f"   # an input the operator must fill in before anything else (orange)
 FIELD     = "#1a1a1a"   # entry boxes and buttons
 FIELD_HOT = "#303030"   # button while pressed
 

@@ -4,6 +4,14 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 24. Seat screw torque must be entered before anything else — 21 Sept 2026
+At start-up the seat screw torque input is the only working control: ARM,
+the mode buttons, the duty / setpoint / target boxes and "update" are locked
+until a valid torque is entered. While it waits the torque input is orange
+(`PROMPT` in palette.py) and the rest white; once entered it turns white and
+the rest unlocks. Why: every run needs its torque recorded, and auto-p's
+seek reference depends on it, so a run without one is not worth starting.
+
 ## 23. Seek reference calibrated by seat screw torque — 21 Sept 2026
 At 0.30 N·m, `te-sensor_20260921_142905.csv` (an auto-t run at a fixed
 110 °C, used to find the cracking point directly) showed the valve opening

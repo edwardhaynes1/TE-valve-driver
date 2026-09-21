@@ -20,11 +20,13 @@ from .control import AUTO_P, AUTO_T, MANUAL, MODES, heater_command, snapshot
 from .charts import draw_chart, make_chart
 from .labjack import LABJACK_AVAILABLE
 from .palette import (
-    BG, BORDER, BRIGHT, DIM, FIELD, FIELD_HOT, PWR_LINE, TEMP_LINE, TEXT, UP_LINE, VAC_LINE, WARN,
+    BG, BORDER, BRIGHT, DIM, FIELD, FIELD_HOT, PROMPT, PWR_LINE, TEMP_LINE, TEXT, UP_LINE,
+    VAC_LINE, WARN,
 )
 
 # readout.py returns a tag per line; the window turns it into a colour.
-TAG_COLOUR = {'bright': BRIGHT, 'dim': DIM, 'warn': WARN, 'err': WARN, 'ok': BRIGHT}
+TAG_COLOUR = {'bright': BRIGHT, 'dim': DIM, 'warn': WARN, 'err': WARN, 'ok': BRIGHT,
+              'prompt': PROMPT}
 from .shared import log_event
 
 
@@ -70,6 +72,7 @@ class TEGui:
         self.status_text.tag_config("dim",    foreground=DIM)
         self.status_text.tag_config("ok",     foreground=BRIGHT)
         self.status_text.tag_config("err",    foreground=WARN)
+        self.status_text.tag_config("prompt", foreground=PROMPT)
 
         self._build_heater_panel(outer)
 
@@ -140,27 +143,33 @@ class TEGui:
         self.arm_btn.pack(side="left", padx=(0, 10))
 
         self.mode_var = tk.StringVar(value=MANUAL)
+        self.mode_buttons = []
         for mode in MODES:
-            tk.Radiobutton(row1, text=mode, value=mode, variable=self.mode_var,
-                           command=self._on_mode, font=self.f, fg=TEXT, bg=BG,
-                           selectcolor=BG, activebackground=BG,
-                           activeforeground=BRIGHT, bd=0,
-                           highlightthickness=0).pack(side="left", padx=(0, 6))
+            rb = tk.Radiobutton(row1, text=mode, value=mode, variable=self.mode_var,
+                                command=self._on_mode, font=self.f, fg=TEXT, bg=BG,
+                                selectcolor=BG, activebackground=BG,
+                                activeforeground=BRIGHT, bd=0,
+                                highlightthickness=0)
+            rb.pack(side="left", padx=(0, 6))
+            self.mode_buttons.append(rb)
 
         row2 = tk.Frame(parent, bg=BG)
         row2.pack(fill="x", pady=(0, 4))
         self.duty_entry = self._entry(row2, "duty %", "0", width=6)
         self.sp_entry   = self._entry(row2, "setpoint °C", f"{PID_SETPOINT_DEFAULT:g}", width=6)
         self.p_entry    = self._entry(row2, "target mbar", f"{PRESSURE_TARGET_DEFAULT:.1e}", width=9)
-        tk.Button(row2, text="update", command=self._send_update, **btn).pack(side="left")
+        self.update_btn = tk.Button(row2, text="update", command=self._send_update, **btn)
+        self.update_btn.pack(side="left")
 
         # Seat screw torque: a TE-Valve setting, not a heater setting, so it
-        # has its own row and "set" button. Blank until the operator enters it.
+        # has its own row and "set" button. Blank until the operator enters it,
+        # and until then it is the only control that works (_apply_gate).
         row3 = tk.Frame(parent, bg=BG)
         row3.pack(fill="x", pady=(0, 4))
         self.seat_entry = self._entry(row3, "seat screw N·m", "", width=6)
         self.seat_entry.bind("<Return>", lambda _ev: self._set_seat_screw())
-        tk.Button(row3, text="set", command=self._set_seat_screw, **btn).pack(side="left")
+        self.seat_btn = tk.Button(row3, text="set", command=self._set_seat_screw, **btn)
+        self.seat_btn.pack(side="left")
 
         self.heater_status = tk.Label(parent, text="", font=self.f, fg=DIM,
                                       bg=BG, anchor="w")
@@ -170,6 +179,39 @@ class TEGui:
         self.loop_status.pack(fill="x")
         self._update_inputs()
         self._send_update()
+        self._apply_gate()
+
+    def _apply_gate(self):
+        """Lock every other control until the seat screw torque is entered.
+        While locked the torque input is orange and the rest white; once a
+        torque is in, the torque input turns white and the rest work as usual
+        (readout.torque_gate)."""
+        locked, tag = readout.torque_gate(shared.seat_screw_torque())
+        self._locked = locked
+        colour = TAG_COLOUR[tag]
+        # The focus ring (highlightcolor) matches the border, or the box would
+        # lose its colour the moment the cursor is in it.
+        self.seat_entry.configure(fg=colour, insertbackground=colour,
+                                  highlightbackground=colour, highlightcolor=colour,
+                                  highlightthickness=2 if locked else 1)
+        self.seat_entry.label.configure(fg=colour)
+        self.seat_btn.configure(fg=colour,
+                                highlightbackground=PROMPT if locked else BORDER)
+        buttons = [self.arm_btn, *self.mode_buttons, self.update_btn]
+        entries = [self.duty_entry, self.sp_entry, self.p_entry]
+        if locked:
+            for w in buttons + entries:
+                w.configure(state="disabled", disabledforeground=BRIGHT)
+            for e in entries:
+                e.configure(highlightbackground=BORDER)
+                e.label.configure(fg=BRIGHT)
+            self.seat_entry.focus_set()
+        else:
+            for w in buttons:
+                w.configure(state="normal", disabledforeground=DIM)
+            for e in entries:
+                e.configure(disabledforeground=DIM)
+            self._update_inputs()          # the selected mode's box only, as before
 
     def _set_seat_screw(self):
         """Record the seat screw torque typed in the box."""
@@ -179,11 +221,16 @@ class TEGui:
             log_event(str(err))
             current = shared.seat_screw_torque()      # show what is really in use
             self._set_entry(self.seat_entry, "" if current is None else f"{current:g}")
+            self._apply_gate()
             return
         shared.set_seat_screw_torque(nm)
         self._set_entry(self.seat_entry, f"{nm:g}")
+        self._apply_gate()
 
     def _toggle_arm(self):
+        if self._locked and not snapshot()['armed']:
+            log_event("Enter the seat screw torque first — ARM is locked until then")
+            return
         if snapshot()['armed']:
             heater_command(armed=False)
             log_event("Heater DISARMED by operator")
@@ -343,7 +390,13 @@ class TEGui:
 
         self.arm_btn.configure(text="DISARM" if h['armed'] else "ARM",
                                fg=WARN if h['armed'] else TEXT)
-        text, tag = readout.heater_status(h)
+        if self._locked != (shared.seat_screw_torque() is None):
+            self._apply_gate()
+        if self._locked:
+            text, tag = ("Enter the seat screw torque (N·m) to begin — "
+                         "everything else is locked until then", 'prompt')
+        else:
+            text, tag = readout.heater_status(h)
         self.heater_status.configure(text=text, fg=TAG_COLOUR[tag])
         text, tag = readout.loop_status(h)
         self.loop_status.configure(text=text, fg=TAG_COLOUR[tag])
