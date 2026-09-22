@@ -37,8 +37,8 @@ with the 1 W flight budget dashed) and a scrolling event log.
 | Mode | What it does |
 |---|---|
 | **manual** | A fixed duty. |
-| **auto-t** | A PI loop holds a valve temperature setpoint. From a cool start it bursts at full power, coasts with the heater off to the peak, then hands over to the PI. |
-| **auto-p** | A cascade holding a chamber pressure target. It *seeks* first: burst, coast, then a setpoint of `PRESSURE_SEEK_START_C` creeping up at `PRESSURE_SEEK_RATE_C_MIN` with the valve shut, measuring the chamber baseline. When the pressure snaps up (the valve has opened) it *tracks* the target with a PI on log10(pressure), moving the auto-t setpoint. The baseline also shows which targets the valve can't hold. |
+| **auto-t** | Holds a valve temperature setpoint: the measured hold power for that temperature (`HEATER_HOLD_*`), plus a PID that only trims. For a step up of `TEMP_BURST_MIN_STEP_K` or more it bursts at full power, cuts when the TC is predicted to coast onto the setpoint (T + tau × rate of rise, tau learned from every coast), and hands over at the peak. |
+| **auto-p** | A cascade holding a chamber pressure target, set relative to the valve's *opening point*: from the seat screw torque (`SEAT_SCREW_VALVE`), shifted for upstream pressure, and replaced by the point actually seen once the valve opens. It *seeks* first: burst (if well below), coast, then a setpoint creeping up with the valve shut, measuring the chamber baseline. When the pressure rises (the valve has opened) it *tracks* the target with a PI on log10(pressure), moving the auto-t setpoint; the gains and creep scale with the torque's e-fold, and upstream pressure changes are fed forward. The baseline also shows which targets the valve can't hold. |
 
 The heater can only add heat: auto-p can't cool the valve, so a target that
 would need that gets a warning and the minimum setpoint.
@@ -92,6 +92,12 @@ SPI lines stay free.
   faulted, valve temperature above `TEMP_TRIP_C` (160 °C), armed longer than
   `HEATER_MAX_RUN_S` (60 min), or current flowing with the gate off (only
   with current sensing wired).
+- **Thermocouple plausibility** (added after the 21 Sept 2026 17:20 fault,
+  when a bad reading raised no fault bit): a reading changing faster than
+  `TC_MAX_RATE_K_S`, or one that rises less than `TC_RESPONSE_MIN_K` in
+  `TC_RESPONSE_S` at full power (a dead TC, or SW171 off). Set
+  `TC_RESPONSE_S = None` where full power can't reach the setpoint (a cold
+  test), since a TC levelling off at full power looks the same.
 - **auto-p adds:** no valid gauge reading for `PRESSURE_BAD_READS_TO_TRIP`
   reads, gauge over range or LabJack input saturated, or chamber pressure
   above `PRESSURE_TRIP_MBAR` (5e-4 mbar). Its temperature setpoint is limited

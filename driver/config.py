@@ -100,6 +100,23 @@ HEATER_MAX_RUN_S      = 3600       # auto-disarm after this long armed (s)
 TC_BAD_READS_TO_TRIP  = 3          # consecutive bad TC reads before tripping
 TC_RETRY_S            = 5.0        # re-initialise a non-responding MAX31856 this often
 LJ_WATCHDOG_S         = 10         # U3 firmware watchdog → FIO0 low if we die
+# Thermocouple plausibility. On 21 Sept 2026 (17:20-17:31, logs _172024,
+# _172612, _172933, _173050) the TC gave nonsense with no MAX31856 fault bit:
+# stuck near 72 °C, then FALLING to -70 °C while the heater ran at full power
+# for ~40 s; rising 1 °C/s with the heater off; jumping 26 → 51 → 27 → 77 °C
+# within 3 s. The controller kept bursting on those readings. Two checks now
+# trip the heater instead. Real behaviour the same day: at most +2.5 °C/s at
+# full power and -1.6 °C/s cooling; at full power the TC never rose less than
+# 0.7 °C/s below 160 °C (full power only balances the losses near ~210 °C).
+TC_MAX_RATE_K_S       = 20.0       # a reading changing faster than this is not the valve
+TC_RESPONSE_DUTY      = 0.9        # duty counted as "full power" for the response check
+TC_RESPONSE_S         = 15.0       # after this long at full power… (None = no check. Needed
+                                   # where full power cannot reach the setpoint — e.g. a cold
+                                   # thermal-vacuum test — since a TC levelling off at full
+                                   # power looks the same as a dead heater)
+TC_RESPONSE_MIN_K     = 1.0        # …the TC must have risen at least this much (smallest real
+                                   # rise in 15 s at full power, 21 Sept: 3.5 K, at 151 °C just
+                                   # after a coast; the faulty TC fell 50 K)
 
 # ─── Closed-loop temperature control (mode auto-t) ───────────────────────────
 # Tuned 15 Sept 2026 from bench data. The valve fits a first-order plant with
@@ -128,25 +145,44 @@ LJ_WATCHDOG_S         = 10         # U3 firmware watchdog → FIO0 low if we die
 # the valve by accident, so the ~10 s speed gain is not worth it.
 PID_KP                = 0.050      # duty per °C of error
 PID_KI                = 0.0010     # duty per °C·s of accumulated error (Ti = 50 s)
+# Hold-power feedforward. auto-t (and auto-p's inner loop) applies
+#     duty = hold(T_sp) + PI(error)
+# so the PI only trims. Measured 21 Sept 2026 from 9 steady holds at
+# 40-146 °C (three runs, lab ~23 °C), within ±14 %:
+#     P_hold ≈ HOLD_W_PER_K·(T − HOLD_AMBIENT_C) + HOLD_W_PER_K2·(T − HOLD_AMBIENT_C)²
+# = 0.47 W at 40 °C, 1.98 W at 90 °C, 4.07 W at 150 °C. The rule it
+# replaces (15 % duty at 40 °C, linear from 26 °C) was about twice that at
+# every temperature, and full power above ~120 °C: every burst ended with a
+# 5-8 K overshoot as the PI started from it (90 → 94 °C; 155 → 159.5 °C,
+# 0.5 K below the trip).
+HEATER_HOLD_AMBIENT_C = 23.0       # °C — the lab, 21 Sept 2026
+HEATER_HOLD_W_PER_K   = 0.0269     # W per K above ambient
+HEATER_HOLD_W_PER_K2  = 4.05e-5    # W per K² (losses grow a little faster when hot)
+
 # Burst — for upward steps of at least TEMP_BURST_MIN_STEP_K (on arming or
 # when the setpoint is raised), heat at full power, cut early, coast with
-# the heater off until the TC peaks, then hand back to the PI preloaded near
-# holding power. Same idea as the pressure-mode burst. The heater keeps
-# ~HEATER_LAG_S worth of heat when cut, which carried the TC on by
-# 2.4-3 K in the 16 Sept 2026 runs (12 s and 21 s bursts), so the cut comes
-# brake × (1 − e^(−t/HEATER_LAG_S)) below the setpoint. The brake starts at
-# TEMP_BURST_BRAKE_K and is re-estimated from each coast's measured rise
-# (for this session), so a wrong starting value only costs the first step.
+# the heater off until the TC peaks, then hand back to feedforward + PI.
+# The cut is predicted from how fast the TC is rising: cut when
+#     T + tau · dT/dt ≥ setpoint
+# because the heat still in the element carries the TC on by about
+# tau × the rate at the cut. That rate already reflects the starting
+# temperature (losses at 150 °C leave 0.7-1 °C/s at full power, 1.9-2.3 °C/s
+# near 30 °C), which a fixed brake did not. 21 Sept 2026 coasts: tau
+# 0.8-2.8 s (12 bursts). tau starts at TEMP_BURST_TAU_S and is re-estimated
+# from every coast (for this session). The old fixed brake overshot small
+# low-temperature steps by 3-4 K (35 → 38.6 °C).
 TEMP_BURST_ENABLE     = True
 TEMP_BURST_MIN_STEP_K = 4.0        # smaller steps are left to the PI
-TEMP_BURST_BRAKE_K    = 3.0        # rise after the cut, fully heated heater (starting value)
-TEMP_BURST_LEARN      = 0.5        # weight of each new measurement in the brake estimate
-TEMP_BURST_MAX_S      = 90.0       # never burst longer than this
+TEMP_BURST_TAU_S      = 2.5        # coast rise ÷ rate at the cut, s (starting value; errs
+                                   # towards landing short, which the PI finishes)
+TEMP_BURST_TAU_MIN_S  = 0.5        # learning limits
+TEMP_BURST_TAU_MAX_S  = 6.0
+TEMP_BURST_LEARN      = 0.5        # weight of each new measurement in the tau estimate
+TEMP_BURST_MAX_S      = 150.0      # never burst longer than this (21 Sept: 25 → 155 °C ≈ 95 s;
+                                   # the response check catches a dead TC much sooner)
 TEMP_COAST_MAX_S      = 60.0
-HEATER_LAG_S          = 5.0        # heater → TC lag (fitted to the 13:36 run)
-HEATER_HOLD_DUTY_40C  = 0.15       # duty that holds ~40 °C (16 Sept 2026 holds)…
-HEATER_HOLD_AMBIENT_C = 26.0       # …scaled with (T − this) for other temperatures
-PID_KD                = 0.0        # duty per °C/s, acts on the MEASUREMENT (no
+TEMP_RATE_FILTER_S    = 1.0        # low-pass on the TC rate of change used for the cut, s
+PID_KD                = 0.10       # duty per °C/s, acts on the MEASUREMENT (no
                                    # setpoint kick). 0 = PI, recommended here: in
                                    # simulation D bought a few seconds of settling
                                    # at the cost of amplified sensor noise. Try
@@ -195,11 +231,21 @@ PRESSURE_KP             = 10.0     # °C per decade — acts on the MEASUREMENT 
 # map ±50 %), KI 0.3 overshot by up to +77 % and 0.45 hunted; 0.2 kept
 # overshoot ≤ +10 % (p90 +7 %), median time to target ~3 min.
 PRESSURE_KI             = 0.20     # °C per (decade·s) — history: 0.05, 0.10, 0.20, 0.30
+# Both gains are for a valve whose flow e-folds every PRESSURE_EFOLD_REF_K
+# (3.2 K, 16 Sept 2026). auto-p multiplies them by (this torque's e-fold ÷
+# PRESSURE_EFOLD_REF_K): the 0.45 N·m valve needs ~4× the temperature change
+# for the same change in flow, so it gets ~4× the gain and the loop behaves
+# the same in decades of pressure.
+PRESSURE_GAIN_EXP       = 0.5      # gains × (e-fold ÷ ref) ^ this. 1.0 (fully proportional)
+                                   # made a 1 K-hysteresis valve hunt ±0.5 decade in simulation;
+                                   # 0.5 kept 28 reachable cases of 32 within +19 % (the other
+                                   # 4 targets were above what 155 °C can give)
 PRESSURE_DEADBAND_DEC   = 0.01     # ±decades (≈ ±2.3 %) in which the integrator rests — was 0.02,
                                    # which left the rise above baseline up to ~10 % off
 PRESSURE_FILTER_S       = 2.0      # EMA time constant on log10(p), s
 PRESSURE_TSP_MIN_C      = 20.0     # lowest temperature setpoint the loop may request
-PRESSURE_TSP_MAX_C      = 140.0    # highest (also capped at TEMP_TRIP_C − 5 °C)
+PRESSURE_TSP_MAX_C      = 155.0    # highest (also capped at TEMP_TRIP_C − 5 °C); was 140,
+                                   # below the 0.45 N·m valve's ~150 °C opening point
 PRESSURE_ERR_CLAMP_DEC  = 1.0      # integrator sees at most ±this error (decades), so the
                                    # integral path moves the setpoint ≤ KI × clamp
                                    # (0.2 × 1 × 60 = 12 °C/min) however far off target
@@ -208,113 +254,114 @@ PRESSURE_TRIP_ALL_MODES = False    # True: apply the over-pressure trip in manua
 PRESSURE_BAD_READS_TO_TRIP = 8     # consecutive invalid gauge reads (2 s at 4 Hz)
 PRESSURE_NO_AUTHORITY_S = 600      # warn if the setpoint sits on a limit this long
 
-# Seek phase — valve still shut. From 16 Sept 2026 runs: the valve stayed shut
-# for 18 min at a 39 °C setpoint, opened near 40.1–40.6 °C, snapped open
-# rather than throttling, and closed again ~1 K below where it opened.
-# Assumes PRESSURE_HEAT_OPENS = True.
-PRESSURE_SEEK_START_C   = 40.5     # lowest seek goal: at the estimated cracking point
-                                   # (40.1-40.6 °C). Was 39 then 40. Opening early is harmless:
-                                   # it only gives the minimum flow, which any target above
-                                   # baseline + PRESSURE_MIN_STEP_MBAR exceeds anyway
-
-# Feedforward — for bigger targets, aim the seek straight at the temperature
-# the flow map predicts, minus a margin, and let the PI finish the approach.
-# Map, from the 16 Sept 2026 16:46 staircase (steady plateaus at 41, 42, 43,
-# 44, 45 and 47 °C, upstream ~2.76 bar): the rise above baseline grows
-# exponentially, doubling every ~2.2 K:
-#     rise ≈ PRESSURE_FF_REF_RISE_MBAR · exp((T − PRESSURE_FF_REF_C) / PRESSURE_FF_EFOLD_K)
-# so the goal is T = REF_C + EFOLD · ln(FRACTION · rise / REF_RISE).
-# (Replaces a straight-line map, 3e-7 mbar/K above 40.3 °C, which aimed too
-# high for mid-size targets.) Flow scales with upstream pressure, so re-fit
-# if that changes much.
-PRESSURE_FF_ENABLE      = True
-PRESSURE_FF_REF_C       = 41.0     # °C
-PRESSURE_FF_REF_RISE_MBAR = 7.1e-7 # steady rise above baseline at REF_C
-PRESSURE_FF_EFOLD_K     = 3.2      # K per e-fold (×2 every 2.2 K)
-PRESSURE_FF_FRACTION    = 0.8      # aim for this share of the rise
-PRESSURE_FF_MAX_C       = 55.0     # never aim the seek higher than this
-
-# Upstream-pressure shift. Upstream pressure pushes the seat open, so every
-# temperature pressure mode uses (seek start and goal, the parking and
-# floor temperatures) moves down as upstream pressure rises:
-#     shift = −PRESSURE_UP_K_PER_BAR · (P_upstream − PRESSURE_UP_REF_BAR)
-# Evidence: the 6 May 2026 test (Thermo-LeakvalveV2, fixed flow) fitted
-# T ≈ 136 °C − 60 K·ln(P/bar), i.e. −21 K/bar near 2.8 bar; on 16 Sept 2026
-# the opening temperature rose from ~40.3 °C (2.87 bar, morning) to
-# ~41.3 °C (2.77 bar, afternoon), i.e. ~−10 K/bar on this setup. 12 K/bar is
-# used until a test at deliberately different upstream pressures pins it
-# down. Uses the raw Keller pressure (absolute), not P20.
-PRESSURE_UP_ENABLE      = True
-PRESSURE_UP_REF_BAR     = 2.76     # upstream pressure the map and temperatures above refer to
-PRESSURE_UP_K_PER_BAR   = 12.0     # K of shift per bar
-PRESSURE_UP_MAX_SHIFT_K = 10.0     # clamp: the correction is only a local fit
-PRESSURE_UP_MAX_AGE_S   = 5.0      # ignore Keller readings older than this
-
-# Seat screw torque changes the seat preload, and so the cracking point —
-# far more than upstream pressure does (see below). PRESSURE_SEEK_START_C is
-# from 16 Sept 2026, at whatever torque was on the screw then; unrecorded,
-# since this input didn't exist yet. Every torque below has a real
-# measurement (open temperature, at the upstream pressure recorded with it)
-# and REPLACES PRESSURE_SEEK_START_C as the seek/goal reference when the
-# entered torque matches within SEAT_SCREW_CRACKING_TOL_NM; the upstream
-# shift then applies relative to that entry's own upstream pressure, not
-# PRESSURE_UP_REF_BAR — the calibration already includes whatever upstream
-# effect existed when it was measured, so shifting from PRESSURE_UP_REF_BAR
-# as well would double-count it. An entered torque that matches nothing
-# here falls back to PRESSURE_SEEK_START_C, logged as unverified for that
-# torque: with only one torque calibrated, nothing is known about any other.
+# ─── Where the valve opens: seat screw torque and upstream pressure ─────────
+# Every temperature auto-p uses (seek goal, creep limit, parking, open floor)
+# is set RELATIVE to the valve's opening point: the valve temperature (TC)
+# at which flow starts. That point depends above all on the seat screw
+# torque, then on upstream pressure.
 #
-# 0.30 N·m: opened at 92.7 °C, upstream 4.49 bar (21 Sept 2026 14:29,
-# te-sensor_20260921_142905.csv — an auto-t run at a fixed 110 °C setpoint,
-# used to find the cracking point directly; auto-p's own seek, still using
-# the 16 Sept reference, was watched separately over the same torque
-# (te-sensor_20260921_144015.csv, 14:40) creeping from a seek goal of only
-# 31.8 °C — a ~61 K gap at PRESSURE_SEEK_RATE_C_MIN, and also above
-# PRESSURE_FF_MAX_C's old absolute ceiling — so it was disarmed well short
-# of opening rather than run for the hour that would have taken).
-SEAT_SCREW_CRACKING_C = {
-    0.30: (92.7, 4.49),    # torque_Nm: (cracking_C, upstream_bar_at_measurement)
+# 21 Sept 2026 (logs te-sensor_20260921_150128, _152054, _173217): flow is
+# continuous in temperature — the valve throttles — with wide hysteresis
+# (it stays open 10-35 K below where it opened) and a soak (at a constant
+# 145 °C, flow kept rising for ~3 min). Each entry below:
+#     torque_Nm: (opening point °C, upstream bar when measured, e-fold K)
+# e-fold: temperature rise that multiplies the flow by e (2.7×), measured on
+# the throttling branch — the loop gains scale with it (see PRESSURE_KP).
+#   0.25 N·m  flow starts at TC 38-40 °C, 2.0-2.2 bar; e-fold ~4 K (35.5 →
+#             40.7 °C at 4 bar). At 5 bar it stayed open down to 27 °C.
+#   0.30 N·m  opened at 92.7 °C, 4.49 bar (te-sensor_20260921_142905); no e-fold.
+#   0.40 N·m  flow starts at TC 85-89 °C, 2.4 bar; e-fold ~7 K (65 → 52 °C,
+#             4.4-4.9 bar). At 5.2 bar it opened by itself at 62 °C.
+#   0.45 N·m  flow starts at TC ~150 °C, 1.02 bar (158 °C on a slow first
+#             heat-up, 140-148 °C on re-heats); e-fold 10 K (114 → 90 °C) to
+#             29 K (150 → 125 °C) at 4-5 bar.
+# NOT monotonic in torque (0.30 above 0.40): torque alone does not fix the
+# opening point (seating, friction). So these are first guesses. Once the
+# valve opens, the point actually seen replaces the table for the rest of
+# the session (while the entered torque stays the same).
+# Torques between entries are interpolated; outside the range the nearest
+# entry is used, flagged as such. With no torque entered, PRESSURE_SEEK_START_C
+# at PRESSURE_UP_REF_BAR is used (16 Sept 2026, torque unrecorded).
+SEAT_SCREW_VALVE = {
+    0.25: (40.0, 2.10, 3.5),
+    0.30: (92.7, 4.49, None),      # e-fold interpolated from its neighbours
+    0.40: (88.0, 2.38, 7.5),
+    0.45: (150.0, 1.02, 12.0),
 }
-SEAT_SCREW_CRACKING_TOL_NM = 0.02  # entered torque must be at least this close to reuse a point
+SEAT_SCREW_TOL_NM       = 0.02     # an entered torque this close counts as that entry
+PRESSURE_SEEK_START_C   = 40.5     # opening point with no torque entered (16 Sept 2026:
+                                   # 40.1-40.6 °C at ~2.76 bar)
+PRESSURE_EFOLD_REF_K    = 3.2      # e-fold of the 16 Sept 2026 valve, which the gains were
+                                   # tuned on; also used with no torque entered
 
-# Burst — from a cool start, heat at full power until the TC reaches
-# PRESSURE_BURST_BRAKE_K below the seek goal, then coast (heater off) until
-# the TC peaks, then seek.
-# 16 Sept 2026 13:36 run: 100 % from 29.5 °C opened the valve after 21 s with
-# the TC at 45 °C; after cutting the heater the TC kept rising ~3 K for ~8 s
-# (heat still in the heater), and chamber pressure followed the TC within
-# seconds, so the valve's actuating part sits thermally close to the TC.
-# Aiming only for 40 °C, the burst saved almost nothing in the fitted model
-# (the PI already heats the small local mass in ~30 s). Enabled with the
-# feedforward: the goal is now often well above 40 °C,
-# where full power saves more time. The burst starts at once (the valve
-# can't open for ≥ ~15 s from a start below PRESSURE_BURST_MAX_START_C, and
-# the baseline needs only PRESSURE_BASE_MIN_S of samples).
-PRESSURE_BURST_ENABLE   = True
-PRESSURE_BURST_BRAKE_K  = 3.5      # cut full power this far below the seek goal
-                                   # (the TC then rises ~3 K more)
-PRESSURE_BURST_MAX_START_C = 35.0  # warmer starts skip the burst
-PRESSURE_BURST_MAX_S    = 60.0     # never burst longer than this (13:36: 21 s for +15.5 K)
-PRESSURE_COAST_MAX_S    = 60.0     # coast ends at the TC peak, or after this long
-                                   # (holding power for the handover: HEATER_HOLD_DUTY_40C)
-PRESSURE_HOLD_SHUT_C    = 38.5     # setpoint while the target is at/below baseline — safely
-                                   # below the cracking point, so the valve stays shut
+# Upstream pressure. It pushes the seat open, lowering the opening point:
+#     shift = −PRESSURE_UP_K_PER_BAR · (P_upstream − P_at_calibration)
+# (6 May 2026: −21 K/bar near 2.8 bar; 16 Sept 2026: ~−10 K/bar; 21 Sept 2026:
+# 0.40 N·m shut at 60-67 °C at 2.2 bar, open at 50 °C at 5 bar.) The shift is
+# limited asymmetrically: a goal too LOW only costs creep time, a goal too
+# high can overshoot the opening, so upward shifts are kept small.
+# It also raises the flow through a given opening: at 0.45 N·m, 1.0 → 5.2 bar
+# multiplied the flow by 11 (≈ pressure^1.5). Once open, auto-p feeds that
+# forward — when upstream pressure changes (a refill, or the upstream leak),
+# the setpoint moves by −exponent × e-fold × ln(P / P_at_opening) at once,
+# instead of waiting for the chamber pressure to drift and the PI to catch it.
+PRESSURE_UP_ENABLE      = True
+PRESSURE_UP_REF_BAR     = 2.76     # upstream pressure of PRESSURE_SEEK_START_C
+PRESSURE_UP_K_PER_BAR   = 12.0     # K of shift per bar
+PRESSURE_UP_MAX_SHIFT_K = 10.0     # largest upward shift (upstream below calibration)
+PRESSURE_UP_MAX_DOWN_K  = 40.0     # largest downward shift (upstream above calibration)
+PRESSURE_UP_MAX_AGE_S   = 5.0      # ignore Keller readings older than this
+PRESSURE_UP_FLOW_EXP    = 1.5      # flow ∝ upstream pressure ^ this, at a fixed opening
+PRESSURE_UP_FF_MAX_K    = 30.0     # the track feedforward moves the setpoint at most this far
+
+# Seek — valve shut: heat to the goal (the opening point, raised by the
+# feedforward below for large targets), then creep up until the valve opens.
 PRESSURE_SEEK_BAND_C    = 0.3      # creep starts once the TC is within this of the setpoint…
-PRESSURE_SEEK_HOLD_S    = 0.0      # …and has stayed there this long (lets the valve body
-                                   # soak; try 30-60 s if openings overshoot)
-PRESSURE_SEEK_RATE_C_MIN = 1.0     # creep rate while the valve is shut, °C per minute.
-                                   # Was 0.3 while the valve was thought to lag the TC by
-                                   # minutes; the 13:36 run shows it follows within seconds.
-                                   # Fitted model: opens after ~2 min (median; 0.3 → 3.5 min),
-                                   # overshoot p90 +8 % (0.3: +5 %)
-PRESSURE_SEEK_MAX_C     = 46.0     # creep stops here (with a warning)
-PRESSURE_OPEN_DEC       = 0.05     # rise above baseline that counts as open (≈ +12 %;
-                                   # the snap is +25–40 %)
+PRESSURE_SEEK_HOLD_S    = 0.0      # …and has stayed there this long
+PRESSURE_SEEK_RATE_C_MIN = 1.0     # creep rate while the valve is shut, °C per minute, for
+                                   # the 16 Sept valve; × the same gain scale as PRESSURE_KP
+                                   # (0.45 N·m: 1.9 °C/min)
+PRESSURE_SEEK_ABOVE_K   = 20.0     # creep stops this far above the opening point (with a
+                                   # warning) — the table can be ~10 K off
+PRESSURE_HOLD_SHUT_BELOW_K = 5.0   # target at/below baseline: park this far below the
+                                   # opening point, so the valve stays shut
+PRESSURE_OPEN_DEC       = 0.05     # rise above baseline that counts as open (≈ +12 %)
 PRESSURE_BASE_WINDOW_S  = 30.0     # baseline = median log10(p) over this window…
 PRESSURE_BASE_GUARD_S   = 5.0      # …ignoring the most recent seconds…
 PRESSURE_BASE_MIN_S     = 5.0      # …and available once this much has been recorded
-PRESSURE_OPEN_FLOOR_C   = 39.5     # once open, the setpoint never goes below this, so the
-                                   # loop trims flow instead of shutting the valve
+PRESSURE_OPEN_FLOOR_BELOW_K = 1.0  # once open, the setpoint stays at least this close to
+                                   # the opening point, so the loop trims flow rather than
+                                   # shutting the valve. 16 Sept: it closed 1 K below where
+                                   # it opened. 21 Sept valves stayed open 10-35 K below, but
+                                   # in simulation a 3 K floor made a 1 K-hysteresis valve
+                                   # close and reopen every ~90 s (±1 decade)
+PRESSURE_OPEN_LAG_S     = 5.0      # the opening point learned from a rising TC is taken this
+                                   # many seconds' rise earlier: the valve follows the TC within
+                                   # ~2-6 s (16 Sept). Kept short on purpose: learning it too
+                                   # LOW also lowers the open floor, and in simulation 10 s put
+                                   # the floor below where a 1 K-hysteresis valve shuts — it
+                                   # then cycled open/shut. Too high only costs a little range.
+
+# Feedforward — for bigger targets, aim the seek above the opening point,
+# using the 16 Sept 2026 map (rise ≈ 7.1e-7 mbar 0.5 K above the opening,
+# at 2.76 bar), scaled by this torque's e-fold and the upstream pressure.
+# Kept small: on 21 Sept the valve's soak made higher aims overshoot.
+PRESSURE_FF_ENABLE      = True
+PRESSURE_FF_REF_ABOVE_K = 0.5      # K above the opening point where…
+PRESSURE_FF_REF_RISE_MBAR = 7.1e-7 # …the rise above baseline was this, at PRESSURE_UP_REF_BAR
+PRESSURE_FF_FRACTION    = 0.8      # aim for this share of the rise
+PRESSURE_FF_MAX_ABOVE_K = 5.0      # never aim the seek more than this above the opening point
+
+# Burst — from well below the goal, heat at full power, cut on the same
+# rate prediction as auto-t (T + tau·dT/dt, tau shared and learned), aiming
+# PRESSURE_BURST_MARGIN_K below the goal; coast to the peak; then seek.
+# Decided by how far below the goal the TC starts, not by an absolute
+# temperature (the old 35 °C rule never burst a 60 °C start toward 150 °C).
+PRESSURE_BURST_ENABLE   = True
+PRESSURE_BURST_MIN_STEP_K = 10.0   # burst only if the TC starts at least this far below the goal
+PRESSURE_BURST_MARGIN_K = 2.0      # land this far below the goal; the creep does the rest
+PRESSURE_BURST_MAX_S    = 120.0    # never burst longer (21 Sept: 25 → 150 °C ≈ 80 s)
+PRESSURE_COAST_MAX_S    = 60.0     # coast ends at the TC peak, or after this long
 
 # LabJack combined sample rate (both vacuum + thermocouple read here)
 LABJACK_SAMPLE_HZ     = 4          # Hz — reads vacuum and TC each cycle

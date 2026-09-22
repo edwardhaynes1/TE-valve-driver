@@ -158,76 +158,98 @@ def test_the_state_holds_no_measured_readout():
     assert not [k for k in h if 'meas' in k or k in ('out_high', 'v_now', 'i_now')]
 
 
-# ── seat screw torque calibration ───────────────────────────────────────────
+# ── where the valve opens: seat screw torque and upstream pressure ──────────
 
 def arm_pressure(h, target=1e-6, seat_nm=None, **kw):
     armed(h, mode=controller.AUTO_P, p_target_mbar=target)
     return step(h, temp=25.0, vac=1.5e-7, seat_nm=seat_nm, **kw)
 
 
-def test_uncalibrated_torque_behaves_exactly_like_no_torque(h):
-    # 0.75 N·m has no calibration entry: must fall back to the historical
-    # reference bit-for-bit, same as when nothing is entered at all.
-    h2 = controller.new_state()
-    duty1, msgs1 = arm_pressure(h, seat_nm=None, p_up=2.76, p_up_t=T0)
-    duty2, msgs2 = arm_pressure(h2, seat_nm=0.75, p_up=2.76, p_up_t=T0)
-    assert duty1 == duty2
-    assert h['setpoint_C'] == h2['setpoint_C'] == config.PRESSURE_SEEK_START_C
-    assert not any("calibrated" in m for m in msgs1)
-    assert any("0.75 N·m has no calibration" in m and "UNVERIFIED" in m for m in msgs2)
-
-
-def test_calibrated_torque_sets_the_seek_start(h):
-    cracking_C, ref_bar = config.SEAT_SCREW_CRACKING_C[0.30]
-    duty, msgs = arm_pressure(h, seat_nm=0.30, p_up=ref_bar, p_up_t=T0)
-    # at exactly the calibration's own upstream pressure, no further shift
-    assert h['setpoint_C'] == pytest.approx(cracking_C)
-    assert any("0.30 N·m calibrated" in m and f"{cracking_C:.1f}" in m for m in msgs)
-    assert duty == config.HEATER_MAX_DUTY   # cold start: burst, not creep from 40.5
+@pytest.mark.parametrize("torque", sorted(config.SEAT_SCREW_VALVE))
+def test_a_calibrated_torque_sets_the_opening_point(h, torque):
+    open_c, bar, _ = config.SEAT_SCREW_VALVE[torque]
+    duty, msgs = arm_pressure(h, seat_nm=torque, p_up=bar, p_up_t=T0)
+    # at the calibration's own upstream pressure: no further shift
+    assert h['p_ref'] == pytest.approx(open_c) and h['p_ref_how'] == 'calibrated'
+    assert h['setpoint_C'] == pytest.approx(open_c)
+    assert any(f"{torque:.2f} N·m calibrated" in m for m in msgs)
+    assert duty == config.HEATER_MAX_DUTY          # cold start, far below: burst
 
 
 def test_within_tolerance_still_matches(h):
-    # Clearly inside SEAT_SCREW_CRACKING_TOL_NM (0.02), not sitting on the
-    # boundary itself, which is fuzzy at floating-point precision.
-    cracking_C, ref_bar = config.SEAT_SCREW_CRACKING_C[0.30]
-    entered = 0.30 + config.SEAT_SCREW_CRACKING_TOL_NM / 2
-    _, msgs = arm_pressure(h, seat_nm=entered, p_up=ref_bar, p_up_t=T0)
-    assert h['setpoint_C'] == pytest.approx(cracking_C)
-    assert any("calibrated" in m for m in msgs)
+    open_c, bar, _ = config.SEAT_SCREW_VALVE[0.40]
+    arm_pressure(h, seat_nm=0.40 + config.SEAT_SCREW_TOL_NM / 2, p_up=bar, p_up_t=T0)
+    assert h['p_ref'] == pytest.approx(open_c) and h['p_ref_how'] == 'calibrated'
 
 
-def test_clearly_outside_tolerance_does_not_match(h):
-    entered = 0.30 + config.SEAT_SCREW_CRACKING_TOL_NM * 5
-    _, msgs = arm_pressure(h, seat_nm=entered, p_up=2.76, p_up_t=T0)
-    assert h['setpoint_C'] == config.PRESSURE_SEEK_START_C
-    assert any("no calibration" in m for m in msgs)
+def test_between_entries_is_interpolated_at_a_common_upstream_pressure():
+    (c0, b0, _), (c1, b1, _) = config.SEAT_SCREW_VALVE[0.40], config.SEAT_SCREW_VALVE[0.45]
+    c, bar, efold, how, detail = controller.opening_point(0.425)
+    c1_at_b0 = c1 - config.PRESSURE_UP_K_PER_BAR * (b0 - b1)
+    assert how == 'interpolated' and bar == b0 and "UNVERIFIED" in detail
+    assert c == pytest.approx((c0 + c1_at_b0) / 2)
+    assert config.SEAT_SCREW_VALVE[0.40][2] < efold < config.SEAT_SCREW_VALVE[0.45][2]
 
 
-def test_upstream_shift_applies_relative_to_the_calibrated_reference(h):
-    # Testing 1 bar BELOW the calibration's own upstream: less push open,
-    # so the reference goes UP, not down, by K_PER_BAR × 1 bar.
-    cracking_C, ref_bar = config.SEAT_SCREW_CRACKING_C[0.30]
-    _, msgs = arm_pressure(h, seat_nm=0.30, p_up=ref_bar - 1.0, p_up_t=T0)
-    expected = cracking_C + config.PRESSURE_UP_K_PER_BAR * 1.0
-    assert h['setpoint_C'] == pytest.approx(min(expected, h['setpoint_C']) if
-                                            config.PRESSURE_UP_K_PER_BAR * 1.0
-                                            <= config.PRESSURE_UP_MAX_SHIFT_K
-                                            else cracking_C + config.PRESSURE_UP_MAX_SHIFT_K)
-    assert any(f"{ref_bar - 1.0:.3f} bar" in m for m in msgs)
+def test_a_missing_efold_is_interpolated_from_its_neighbours():
+    _, _, efold, how, _ = controller.opening_point(0.30)
+    lo, hi = config.SEAT_SCREW_VALVE[0.25][2], config.SEAT_SCREW_VALVE[0.40][2]
+    assert how == 'calibrated'
+    assert efold == pytest.approx(lo + (hi - lo) * (0.30 - 0.25) / (0.40 - 0.25))
 
 
-def test_the_feedforward_ceiling_moves_with_a_calibrated_reference(h):
-    # Without this, PRESSURE_FF_MAX_C (an absolute 55 °C) would silently cap
-    # the goal far below a calibrated cracking point above it.
-    cracking_C, ref_bar = config.SEAT_SCREW_CRACKING_C[0.30]
-    assert cracking_C > config.PRESSURE_FF_MAX_C   # the case that broke, concretely
-    armed(h, mode=controller.AUTO_P, p_target_mbar=5e-5)   # a big target: feedforward engages
-    for _ in range(4):
-        step(h, temp=25.0, vac=1.5e-7, seat_nm=0.30, p_up=ref_bar, p_up_t=T0)
-    assert h['setpoint_C'] >= cracking_C - 1.0   # not clamped down to ~55 °C
+@pytest.mark.parametrize("torque, nearest", [(0.75, 0.45), (0.10, 0.25)])
+def test_outside_the_table_uses_the_nearest_entry_flagged(h, torque, nearest):
+    _, msgs = arm_pressure(h, seat_nm=torque, p_up=2.76, p_up_t=T0)
+    assert h['p_ref_how'] == 'nearest'
+    assert any("outside the calibrated" in m and "UNVERIFIED" in m for m in msgs)
+    c, bar, _ = config.SEAT_SCREW_VALVE[nearest]
+    assert h['p_ref'] == pytest.approx(c + controller._upstream_shift(2.76, bar))
 
 
-def test_no_torque_entered_logs_the_old_message_unchanged(h):
-    _, msgs = arm_pressure(h, seat_nm=None, p_up=2.76, p_up_t=T0)
-    assert any(m == "Pressure loop: upstream 2.760 bar → temperatures shifted -0.0 K"
-              for m in msgs)
+def test_no_torque_uses_the_16_sept_reference(h):
+    _, msgs = arm_pressure(h, seat_nm=None, p_up=config.PRESSURE_UP_REF_BAR, p_up_t=T0)
+    assert h['p_ref'] == config.PRESSURE_SEEK_START_C and h['p_ref_how'] == 'no torque'
+    assert any("no seat screw torque entered" in m for m in msgs)
+
+
+def test_more_upstream_pressure_lowers_the_opening_point(h):
+    open_c, bar, _ = config.SEAT_SCREW_VALVE[0.40]
+    arm_pressure(h, seat_nm=0.40, p_up=bar + 1.0, p_up_t=T0)
+    assert h['p_ref'] == pytest.approx(open_c - config.PRESSURE_UP_K_PER_BAR)
+
+
+def test_the_upstream_shift_is_limited_more_upwards_than_downwards():
+    # far above the calibration pressure: the opening point goes down, a lot
+    assert controller._upstream_shift(11.0, 1.0) == -config.PRESSURE_UP_MAX_DOWN_K
+    # far below it: up, but only a little
+    assert controller._upstream_shift(1.0, 11.0) == config.PRESSURE_UP_MAX_SHIFT_K
+    assert config.PRESSURE_UP_MAX_SHIFT_K < config.PRESSURE_UP_MAX_DOWN_K
+
+
+def test_a_stale_upstream_reading_gives_no_shift(h):
+    open_c, _, _ = config.SEAT_SCREW_VALVE[0.40]
+    arm_pressure(h, seat_nm=0.40, p_up=5.0, p_up_t=T0 - config.PRESSURE_UP_MAX_AGE_S - 1)
+    assert h['p_ref'] == pytest.approx(open_c) and h['p_up_bar'] is None
+
+
+def test_the_burst_is_decided_by_distance_to_the_goal_not_absolute_temperature(h):
+    # 60 °C is a warm start, but 90 K below the 0.45 N·m opening point
+    open_c, bar, _ = config.SEAT_SCREW_VALVE[0.45]
+    armed(h, mode=controller.AUTO_P, p_target_mbar=5e-6)
+    duty, _ = step(h, temp=60.0, vac=2.7e-7, seat_nm=0.45, p_up=bar, p_up_t=T0)
+    assert h['p_burst'] == 'burst' and duty == config.HEATER_MAX_DUTY
+    h2 = controller.new_state()
+    armed(h2, mode=controller.AUTO_P, p_target_mbar=5e-6)
+    step(h2, temp=open_c - config.PRESSURE_BURST_MIN_STEP_K + 1, vac=2.7e-7,
+         seat_nm=0.45, p_up=bar, p_up_t=T0)
+    assert h2['p_burst'] is None
+
+
+def test_hold_power_matches_the_measured_holds():
+    # 21 Sept 2026 steady holds (W): the fitted curve is within ±15 % of each
+    for t_c, watts in [(40.2, 0.507), (55.1, 0.916), (65.4, 1.399), (125.0, 3.012),
+                       (140.1, 3.793), (145.5, 4.039)]:
+        assert controller.hold_duty(t_c) * config.heater_power_w() == \
+            pytest.approx(watts, rel=0.15)
+    assert controller.hold_duty(config.HEATER_HOLD_AMBIENT_C - 5) == 0.0

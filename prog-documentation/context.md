@@ -16,7 +16,7 @@ differently from this page, fix one of them. Add terms as they appear.
 | Term | Meaning |
 |---|---|
 | **TE-Valve** | Thermally Enabled Valve: the Max Planck prototype under test. Heating it opens it. Final name (ARIEL or TERP) still to be decided. |
-| **Seat screw torque** | Torque applied to the TE-Valve's seat screw with the torque wrench, in N·m. Entered in the driver (`SEAT SCREW`) before anything else — every other control is locked, and the input shown orange, until it is — logged in every CSV row (`seat_screw_torque_Nm`), and noted in the event log when it changes. Blank at the start of every session until entered: blank means *not recorded*, never zero. It is the torque, not the clamping force on the seat, which also depends on thread friction. Changes the cracking point far more than upstream pressure does: `SEAT_SCREW_CRACKING_C` in config.py calibrates auto-p's seek reference by torque (one entry so far, 0.30 N·m → 92.7 °C at 4.49 bar); an uncalibrated torque falls back to the 16 Sept reference with a logged warning. |
+| **Seat screw torque** | Torque applied to the TE-Valve's seat screw with the torque wrench, in N·m. Entered in the driver (`SEAT SCREW`) before anything else — every other control is locked, and the input shown orange, until it is — logged in every CSV row (`seat_screw_torque_Nm`), and noted in the event log when it changes. Blank at the start of every session until entered: blank means *not recorded*, never zero. It is the torque, not the clamping force on the seat, which also depends on thread friction. Sets the *opening point* far more than upstream pressure does: see `SEAT_SCREW_VALVE`. |
 | **ARIEL PCB** | The heater control board (FIO0 drives the MOSFET gate Q171; SW171 enables the 24 V rail). Not the valve, whatever the valve ends up being called. |
 | **Heater** | The 88 Ω element on the valve, 24 V rail: 6.55 W at full duty. |
 | **Upstream pressure** | Gas pressure before the valve, from the Keller PAA-23SX-H2. Absolute, in bar. |
@@ -29,11 +29,13 @@ differently from this page, fix one of them. Add terms as they appear.
 
 | Term | Meaning |
 |---|---|
-| **Cracking point** | Valve temperature at which the valve opens: about 40.1–40.6 °C in the 16 Sept runs (torque unrecorded — the input didn't exist yet), 92.67 °C at 0.30 N·m / 4.49 bar upstream (21 Sept). Depends strongly on seat screw torque; see `SEAT_SCREW_CRACKING_C`. |
-| **Snap open** | The valve goes from shut to open in one step rather than throttling gradually (16 Sept runs). Whether it throttles at all above the cracking point is still open. |
-| **Closing hysteresis** | The valve closes about 1 K below where it opened. |
+| **Opening point** | Valve temperature (TC) at which flow starts. Depends mostly on seat screw torque (21 Sept 2026: 0.25 N·m ~40 °C, 0.40 N·m ~88 °C, 0.45 N·m ~150 °C; 0.30 N·m 92.7 °C — not monotonic, so torque alone doesn't fix it), then on upstream pressure (lower when it is higher), and on the valve's recent history (lower on re-heats). auto-p takes it from `SEAT_SCREW_VALVE`, then uses the point actually seen for the rest of the session (*learned*). Replaces "cracking point". |
+| **Throttling** | Flow grows continuously with temperature above the opening point (21 Sept 2026). The 16 Sept "snap open" came from coarse setpoint steps. |
+| **e-fold** | Temperature rise that multiplies the flow by e (2.7×): ~4 K at 0.25 N·m, ~7 K at 0.40, 10-29 K at 0.45. auto-p's gains and creep scale with it. |
+| **Soak** | Flow keeps rising for minutes at a constant TC once the valve is hot (0.45 N·m, 145 °C: ×6 over 3 min). |
+| **Closing hysteresis** | The valve closes below where it opened: ~1 K on 16 Sept, 10-35 K on 21 Sept. |
 | **Baseline** | Chamber pressure with the valve shut. Measured during seek, frozen once the valve opens. |
-| **Hold power** | Holding about 40 °C takes about 15 % duty, ≈ 1 W, with the lab at about 26 °C (16 Sept holds). That is the whole flight power budget; a colder environment will need more. |
+| **Hold power** | Power that holds a valve temperature, lab ~23 °C (21 Sept 2026, 9 holds): 0.47 W at 40 °C, 2.0 W at 90 °C, 4.1 W at 150 °C (`HEATER_HOLD_*`). Only up to ~58 °C fits the 1 W flight budget (in the lab). |
 
 ## Known rig behaviour
 
@@ -48,7 +50,8 @@ differently from this page, fix one of them. Add terms as they appear.
 |---|---|
 | **Armed / disarmed** | Armed = the software may switch the heater on. Disarming always wins, and takes effect at the next control step (within 0.25 s). |
 | **Trip** | A latched heater-off caused by an interlock. Cleared only by disarm, then arm. |
-| **Interlock** | A check before any heating: TC healthy, below 160 °C, armed less than 60 min, chamber pressure readable and below 5e-4 mbar (auto-p only). |
+| **Interlock** | A check before any heating: TC healthy, below 160 °C, armed less than 60 min, TC *plausible*, chamber pressure readable and below 5e-4 mbar (auto-p only). |
+| **Plausible (TC)** | The reading changes no faster than 20 °C/s and rises at least 1 K in 15 s at full power. Added after the 21 Sept 2026 17:20 fault, when the TC read nonsense with no fault bit. |
 | **Duty** | Fraction of each PWM period the heater is on, 0–1. What the controller commands. |
 | **PWM period** | 2 s. The heater is switched fully on or off within it (time-proportioning, done in software on the 50 ms tick). The cycle runs continuously, so the first pulse after arming can be shorter than the rest. |
 | **Gate / edge** | The FIO0 output to the MOSFET gate. An edge is one on→off or off→on switch; every edge goes in the `_pwm.csv` log. |
@@ -56,16 +59,17 @@ differently from this page, fix one of them. Add terms as they appear.
 | **Flight power budget** | 1 W for the valve heater in flight. Drawn dashed on the power chart. |
 | **Mode** | One of three, named identically on screen, in the code (`controller.MODES`) and in the CSV `heater_mode` column. Logs before 17 Sept 2026 say `auto` for auto-t and `pressure` for auto-p. |
 | **manual** | Fixed duty. |
-| **auto-t** | PI loop holding a valve temperature setpoint. |
+| **auto-t** | Holds a valve temperature setpoint: hold-power feedforward plus a PID trim. |
 | **auto-p** | Cascade: an outer loop on chamber pressure moves the auto-t setpoint. Avoid "pressure mode". |
-| **Burst** | Full power from a cool start, cut early (the *brake*), to reach a temperature fast. |
-| **Coast** | Heater off after a burst until the valve temperature peaks; then the PI takes over. |
-| **Seek** | auto-p phase with the valve shut: heat to the *goal*, then *creep* up at 1 °C/min until the valve opens. |
-| **Goal** | Seek target temperature: the cracking point, raised by the *feedforward map* for larger pressure targets and moved by the *upstream shift*. |
-| **Upstream shift** | Temperature offset applied for upstream pressure (12 K per bar relative to 2.76 bar). |
-| **Hold shut** | If the pressure target is at or below the baseline, the setpoint parks at 38.5 °C. |
+| **Burst** | Full power to reach a temperature fast, cut when the TC is predicted to coast onto the target: T + tau × rate of rise. *tau* (s) is learned from every coast. |
+| **Coast** | Heater off after a burst until the valve temperature peaks; then hold feedforward + PID take over. |
+| **Seek** | auto-p phase with the valve shut: heat to the *goal*, then *creep* up (1 °C/min × gain scale) until the valve opens, at most 20 K above the opening point. |
+| **Goal** | Seek target temperature: the opening point (with the *upstream shift*), raised by at most 5 K by the feedforward for larger pressure targets. |
+| **Upstream shift** | Opening-point offset for upstream pressure: −12 K per bar relative to the pressure the torque's point was measured at; at most +10 K, −40 K. |
+| **Upstream feedforward** | Once open, the setpoint moves by −1.5 × e-fold × ln(P_up / P_up at opening) when upstream pressure changes (refill, leak). |
+| **Hold shut** | If the pressure target is at or below the baseline, the setpoint parks 5 K below the opening point. |
 | **Track** | auto-p phase with the valve open: PI on log10(chamber pressure). |
-| **Open floor** | In track, the setpoint never drops below 39.5 °C, so the loop trims flow rather than shutting the valve. |
+| **Open floor** | In track, the setpoint stays within 1 K of the opening point, so the loop trims flow rather than shutting the valve. |
 
 ## Logs
 
@@ -88,6 +92,7 @@ differently from this page, fix one of them. Add terms as they appear.
 
 ## Open questions
 
-- Does the valve throttle above the cracking point, or is it purely on/off? This decides what the pressure controller should be.
-- Does the cracking point move with upstream pressure, and by how much? (The 12 K/bar shift is a local fit.)
+- How far does upstream pressure move the opening point? (12 K/bar is a local fit; 21 Sept runs changed torque and pressure together.)
+- Why is the torque → opening point relation not monotonic (0.30 N·m above 0.40)? Seating, friction, or the 17:20 TC remount?
+- Could auto-p use the closing hysteresis to hold flows below what the valve gives at its opening point?
 - Final valve name: ARIEL or TERP.

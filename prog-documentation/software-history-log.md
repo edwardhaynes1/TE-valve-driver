@@ -4,6 +4,44 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 25. Temperature and pressure controllers redesigned from the 21 Sept 2026 runs — 22 Sept 2026
+Data: te-sensor_20260921_150128 (0.25 N·m), _152054 (0.40), _173217 (0.45);
+the thermocouple-fault logs _172024, _172612, _172933, _173050.
+
+**auto-t.** The PI started every hold from a "hold power" of 15 % duty at
+40 °C scaled linearly from 26 °C — about twice the measured hold power at
+every temperature, and full power above ~120 °C. So every burst ended with a
+5-8 K overshoot (90 → 94 °C; 155 → 159.5 °C, 0.5 K below the trip). Now the
+duty is the measured hold power for the setpoint (`HEATER_HOLD_*`, 9 steady
+holds, ±14 %) plus a PID trim (`PID_KD` 0 → 0.10). The burst is cut when
+T + tau × rate reaches the setpoint (tau learned per coast) instead of a
+fixed brake, which overshot small low-temperature steps by 3-4 K; the rate
+already reflects the starting temperature. On three-node thermal models
+fitted to each run (0.09-0.34 K rms), overshoot after bursts from 90 to
+155 °C went from +3.4…+8.5 K to +0.2…+0.5 K. Near 40 °C, on the model of
+the remounted TC (_173217), a session's first burst still overshoots ~4.5 K
+until tau is learned (+1.6 K on the next).
+
+**auto-p.** Everything is relative to the valve's *opening point* instead
+of fixed temperatures near 40 °C: `SEAT_SCREW_VALVE` gives it (and the
+flow e-fold) per torque — interpolated between entries, nearest entry
+outside — shifted for upstream pressure (asymmetric limits), and the point
+actually seen replaces the table for the session. Gains and creep scale
+with √(e-fold / 3.2 K). The burst is decided by the distance below the
+goal, not an absolute 35 °C. Once open, upstream-pressure changes are fed
+forward on the setpoint. `PRESSURE_TSP_MAX_C` 140 → 155 °C (the 0.45 N·m
+valve opens at ~150 °C). Simulated on valve models with the logs' shape
+(throttling, soak, hysteresis 1-10 K, opening point ±8 K off the table):
+all 48 cases at 0.25 and 0.40 N·m reached target (median 3.7-4.7 min,
+overshoot ≤ +20 %); at 0.45 N·m every target the valve can give below
+155 °C was reached, with no hunting.
+
+**Thermocouple plausibility.** 17:20-17:31 the TC read nonsense with no
+fault bit — falling 72 → -30 °C at full power for ~40 s, jumping 26 → 77 °C
+— and the controller kept heating. New interlocks: a reading changing faster
+than `TC_MAX_RATE_K_S`, or rising less than `TC_RESPONSE_MIN_K` in
+`TC_RESPONSE_S` at full power (tests replay both logs).
+
 ## 24. Seat screw torque must be entered before anything else — 21 Sept 2026
 At start-up the seat screw torque input is the only working control: ARM,
 the mode buttons, the duty / setpoint / target boxes and "update" are locked

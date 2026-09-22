@@ -128,7 +128,7 @@ def test_manual_says_nothing(h):
                                              ('coast', "coasting")])
 def test_auto_t_burst_and_coast(h, stage, expected):
     h.update(armed=True, mode=controller.AUTO_T, t_burst=stage, setpoint_C=45.0,
-             t_burst_peak=41.0, t_brake=6.0)
+             t_burst_peak=41.0, t_tau=2.5)
     text, tag = readout.loop_status(h)
     assert expected in text and tag == "bright"
 

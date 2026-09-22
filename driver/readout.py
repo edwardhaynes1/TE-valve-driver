@@ -18,8 +18,8 @@ import time
 
 from .config import (
     HEATER_MAX_RUN_S, HEATER_R_OHM, P20_REF_K,
-    PRESSURE_BURST_BRAKE_K, PRESSURE_MIN_STEP_MBAR, PRESSURE_OPEN_FLOOR_C,
-    PRESSURE_SEEK_RATE_C_MIN, PRESSURE_SEEK_START_C, PRESSURE_TSP_MAX_C,
+    PRESSURE_BURST_MARGIN_K, PRESSURE_MIN_STEP_MBAR, PRESSURE_OPEN_FLOOR_BELOW_K,
+    PRESSURE_SEEK_START_C, PRESSURE_TSP_MAX_C,
     PRESSURE_TSP_MIN_C, SEAT_SCREW_TORQUE_MAX_NM, TEMP_TRIP_C, heater_current_a, heater_power_w,
     heater_voltage_v,
 )
@@ -182,8 +182,8 @@ def loop_status(h):
     the seek / track phases in auto-p. Empty in manual."""
     mode = h['mode']
     if mode == AUTO_T and h['armed'] and h['t_burst'] == 'burst':
-        return (f"auto-t · BURST full power, cut ~{h['t_brake']:.1f} K below "
-                f"{h['setpoint_C']:.1f} °C", "bright")
+        return (f"auto-t · BURST full power toward {h['setpoint_C']:.1f} °C, cut when "
+                f"T + {h['t_tau']:.1f} s × rate reaches it", "bright")
     if mode == AUTO_T and h['armed'] and h['t_burst'] == 'coast':
         return (f"auto-t · coasting, heater off (peak {h['t_burst_peak']:.1f} °C) — "
                 f"PI resumes at the peak", "bright")
@@ -191,8 +191,8 @@ def loop_status(h):
         return ("", "dim")
     if not h['armed'] or h['p_filt'] is None or h['p_init']:
         return (f"auto-p idle · target {h['p_target_mbar']:.2e} mbar · "
-                f"on arm: T_sp → {PRESSURE_SEEK_START_C:g} °C, then "
-                f"+{PRESSURE_SEEK_RATE_C_MIN:g} °C/min until the valve opens", "dim")
+                f"on arm: T_sp → the opening point for the seat screw torque, "
+                f"then creep up until the valve opens", "dim")
     if h['p_phase'] == 'seek':
         return _seek_status(h)
     return _track_status(h)
@@ -208,25 +208,36 @@ def _seek_status(h):
             low = (f" — BELOW lowest holdable ≈ {lowest:.1e}, "
                    f"will hold minimum flow")
     if h['p_burst'] == 'burst':
-        step = f"BURST full power to {h['setpoint_C'] - PRESSURE_BURST_BRAKE_K:.1f} °C"
+        step = f"BURST full power to {h['setpoint_C'] - PRESSURE_BURST_MARGIN_K:.1f} °C"
     elif h['p_burst'] == 'coast':
         step = f"coasting (peak {h['p_burst_peak']:.1f} °C)"
     elif h['p_base'] is not None and h['p_target_mbar'] <= 10 ** h['p_base']:
         step = "holding shut (target ≤ baseline)"
     elif h['p_ramping']:
-        step = f"creeping +{PRESSURE_SEEK_RATE_C_MIN:g} °C/min"
+        step = "creeping up"
     else:
         step = "heating"
     return (f"auto-p seeking · valve shut · {step} · goal {h['p_goal']:.1f} "
-            f"(upstream shift {h['p_shift']:+.1f} K) · "
+            f"(opening point {_opening(h):.1f} °C{_how(h)}, upstream shift "
+            f"{h['p_shift']:+.1f} K) · "
             f"T_sp {h['setpoint_C']:.2f} °C · "
             f"baseline {base} · target {h['p_target_mbar']:.2e} mbar{low}",
             "warn" if (h['p_seek_capped'] or low) else "bright")
 
 
+def _opening(h):
+    """The opening point the loop is using (before its first step: the
+    no-torque reference)."""
+    return h['p_ref'] if h['p_ref'] is not None else PRESSURE_SEEK_START_C + h['p_shift']
+
+
+def _how(h):
+    return f", {h['p_ref_how']}" if h['p_ref_how'] else ""
+
+
 def _track_status(h):
     tsp_hi = min(PRESSURE_TSP_MAX_C, TEMP_TRIP_C - 5.0)
-    floor  = max(PRESSURE_TSP_MIN_C, PRESSURE_OPEN_FLOOR_C + h['p_shift'])
+    floor  = max(PRESSURE_TSP_MIN_C, _opening(h) - PRESSURE_OPEN_FLOOR_BELOW_K)
     lowest = 10 ** h['p_base'] + PRESSURE_MIN_STEP_MBAR
     if h['p_target_mbar'] < lowest:
         return (f"auto-p · target {h['p_target_mbar']:.2e} is BELOW the lowest "
@@ -236,7 +247,8 @@ def _track_status(h):
     return (f"auto-p · target {h['p_target_mbar']:.2e} · "
             f"baseline {10 ** h['p_base']:.2e} · "
             f"filt {10 ** h['p_filt']:.2e} · err {h['p_err']:+.2f} dec · "
-            f"T_sp {floor:.1f}-{tsp_hi:g} °C · upstream shift {h['p_shift']:+.1f} K",
+            f"T_sp {floor:.1f}-{tsp_hi:g} °C · upstream shift {h['p_shift']:+.1f} K"
+            + (f", feedforward {h['p_up_ff']:+.1f} K" if h['p_up_ff'] else ""),
             "warn" if h['p_pinned_since'] else "bright")
 
 

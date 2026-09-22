@@ -29,7 +29,7 @@ P_FULL = 24.0 ** 2 / 88.0     # W at 100 % duty
 
 # Heater state keys recorded at every step
 TRACE_KEYS = ("setpoint_C", "p_phase", "p_burst", "t_burst", "trip_reason",
-              "armed", "p_override", "p_ramping", "p_goal", "t_brake")
+              "armed", "p_override", "p_ramping", "p_goal", "t_tau")
 
 
 class Plant:
