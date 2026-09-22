@@ -9,6 +9,8 @@ Agreed behaviour (21 Sept 2026):
     rest unlocks as normal
   * an invalid entry leaves it locked and orange
 """
+import time
+
 import pytest
 
 from driver import control, palette, readout, shared
@@ -38,19 +40,35 @@ def test_the_prompt_colour_is_orange():
 
 # ── the real window ─────────────────────────────────────────────────────────
 
-@pytest.fixture
-def gui():
+@pytest.fixture(scope="module")
+def tk_root():
+    """One Tk interpreter for all the window tests. Starting a fresh one per
+    test intermittently failed to load init.tcl on the lab PC (Windows,
+    Python 3.13). A few tries, then skip with the reason rather than error."""
     tk = pytest.importorskip("tkinter")
-    try:
-        probe = tk.Tk()
-        probe.destroy()
-    except tk.TclError:
-        pytest.skip("no display for Tk")
+    err = None
+    for _ in range(3):
+        try:
+            root = tk.Tk()
+            break
+        except tk.TclError as e:
+            err = e
+            time.sleep(0.5)
+    else:
+        pytest.skip(f"Tk could not start: {str(err).splitlines()[0]}")
+    root.withdraw()
+    yield root
+    root.destroy()
+
+
+@pytest.fixture
+def gui(tk_root):
+    import tkinter as tk
     from driver.gui import TEGui
-    g = TEGui()
+    g = TEGui(root=tk.Toplevel(tk_root))
     g.root.update()
     yield g
-    g.root.destroy()
+    g.destroy()
 
 
 def others(g):

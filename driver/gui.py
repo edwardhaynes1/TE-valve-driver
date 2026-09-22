@@ -40,8 +40,12 @@ class TEGui:
     """Single 'Live Log' window: device status, live readouts (including heater
     voltage and current), heater controls, strip charts, and an event log."""
 
-    def __init__(self):
-        self.root = tk.Tk()
+    def __init__(self, root=None):
+        # root: the window to build in. None = a new Tk interpreter (the
+        # program). Tests pass a Toplevel of one shared interpreter instead,
+        # since starting a fresh Tcl for every test intermittently fails to
+        # load init.tcl on Windows.
+        self.root = root if root is not None else tk.Tk()
         self.root.title("TE Valve — Live Log")
         self.root.configure(bg=BG)
         screen_h = self.root.winfo_screenheight()
@@ -53,7 +57,7 @@ class TEGui:
         self.f = self._pick_font(M, 11)
 
         self._build_log_window()
-        self.root.after(150, self._poll)
+        self._poll_job = self.root.after(150, self._poll)
 
     def _pick_font(self, families, size, weight="normal"):
         available = set(tkfont.families())
@@ -430,7 +434,7 @@ class TEGui:
             self.logtext.configure(state="disabled")
 
         if not shared.stop.is_set():
-            self.root.after(150, self._poll)
+            self._poll_job = self.root.after(150, self._poll)
 
     def shutdown(self):
         heater_command(armed=False)
@@ -441,7 +445,13 @@ class TEGui:
         time.sleep(0.5)
         print(f"Log saved: {logfile.LOG_FILE}")
         print(f"Heater switching log: {logfile.PWM_LOG_FILE}")
+        self.destroy()
+
+    def destroy(self):
+        """Close the window, cancelling the pending redraw first so it can't
+        fire on a window that no longer exists."""
         try:
+            self.root.after_cancel(self._poll_job)
             self.root.destroy()
         except Exception:
             pass
