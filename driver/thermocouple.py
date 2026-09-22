@@ -1,12 +1,21 @@
 """MAX31856 thermocouple converter on the LabJack's bit-banged SPI (FIO4-7).
 
     try_init(lj, announce_failure) -> bool   configure; log the outcome
-    read_fault(lj) -> int                    0 = OK, bits in FAULT_BITS
-    read_temperature(lj) -> °C
+    read(lj) -> Reading                      one transfer: temperature, fault
+                                             bits (FAULT_BITS), and whether the
+                                             chip still holds our settings
+    lost_hint(cr0, cr1) -> str               why the settings are gone
     FAULT_BITS                               fault register bit meanings
+
+A bit-banged SPI read never fails on its own: an unplugged MAX31856 reads
+all ones, and a re-powered one reads its factory settings — which don't
+convert, so the temperature reads 0.000 °C with no fault. So every read
+also reads back CR0/CR1, and the LabJack thread sets the chip up again
+whenever they are not ours.
 """
 
 import time
+from collections import namedtuple
 
 from .config import (
     TC_FIO_CS, TC_FIO_SCK, TC_FIO_SDI, TC_FIO_SDO, TC_RETRY_S,
@@ -87,8 +96,15 @@ CR0_VALUE = 0x80 | 0x10 | 0x01      # = 0x91
 CR1_VALUE = 0x03                     # AVGSEL = 1 sample, TC type = K
 
 
-def _tc_readback_hint(cr0, cr1):
-    """Turn a failed CR0/CR1 readback into a likely cause."""
+CR0_POWER_ON = 0x00                 # factory settings: conversions off
+CR1_POWER_ON = 0x03
+
+
+def lost_hint(cr0, cr1):
+    """Turn a CR0/CR1 readback that isn't ours into a likely cause."""
+    if cr0 == CR0_POWER_ON and cr1 == CR1_POWER_ON:
+        return ("reads its power-on settings: the MAX31856 lost power "
+                "(reconnected, or a supply glitch)")
     if cr0 == 0x00 and cr1 == 0x00:
         return "reads all-zero: MAX31856 unpowered, or SDO (FIO4) not connected / shorted to GND"
     if cr0 == 0xFF and cr1 == 0xFF:
@@ -108,10 +124,15 @@ def _tc_init(lj):
     the interlock be satisfied by a sensor that is no longer attached."""
     _tc_write_reg(lj, REG_CR0, CR0_VALUE)
     _tc_write_reg(lj, REG_CR1, CR1_VALUE)
-    time.sleep(0.3)                    # allow first conversion + OC check
     cr0 = _tc_read_reg(lj, REG_CR0)
     cr1 = _tc_read_reg(lj, REG_CR1)
-    return (cr0 == CR0_VALUE and cr1 == CR1_VALUE), cr0, cr1
+    ok = cr0 == CR0_VALUE and cr1 == CR1_VALUE
+    if ok:
+        # First conversion + open-circuit check. Only when the chip answered:
+        # retries run on the device thread, and one that finds nothing must
+        # not hold it up.
+        time.sleep(0.3)
+    return ok, cr0, cr1
 
 
 def try_init(lj, announce_failure):
@@ -129,15 +150,19 @@ def try_init(lj, announce_failure):
     if announce_failure:
         log_event(f"MAX31856 not responding: CR0=0x{cr0:02X} CR1=0x{cr1:02X} "
                   f"(expected 0x{CR0_VALUE:02X}/0x{CR1_VALUE:02X}) — "
-                  f"{_tc_readback_hint(cr0, cr1)}. Retrying every {TC_RETRY_S:g} s")
+                  f"{lost_hint(cr0, cr1)}. Retrying every {TC_RETRY_S:g} s")
     return False
 
 
-def read_fault(lj):
-    """The fault status register: 0 = OK, else FAULT_BITS."""
-    return _tc_read_reg(lj, REG_FAULTSR)
+Reading = namedtuple("Reading", "temp_c fault configured cr0 cr1")
 
 
-def read_temperature(lj):
-    """The linearised thermocouple temperature, °C."""
-    return _tc_decode_temp(_tc_read_regs(lj, REG_LTCBH, 3))
+def read(lj):
+    """One transfer of all 16 registers (the address auto-increments):
+    Reading(temp_c, fault, configured, cr0, cr1). configured is False if
+    CR0 or CR1 aren't ours — then temp_c and fault mean nothing, and
+    lost_hint(cr0, cr1) says why."""
+    regs = _tc_read_regs(lj, REG_CR0, 16)
+    cr0, cr1 = regs[REG_CR0], regs[REG_CR1]
+    return Reading(_tc_decode_temp(regs[REG_LTCBH:REG_LTCBH + 3]), regs[REG_FAULTSR],
+                   cr0 == CR0_VALUE and cr1 == CR1_VALUE, cr0, cr1)

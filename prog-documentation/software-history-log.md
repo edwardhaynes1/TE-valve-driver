@@ -4,6 +4,20 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 26. Thermocouple found again after it is unplugged — 22 Sept 2026
+Unplugging and re-plugging the thermocouple while the driver ran left it
+without a valve temperature until restarted. The MAX31856 was set up only at
+connect, or after an SPI call raised — and a bit-banged SPI read never
+raises: an unplugged chip reads all ones (fault 0xFF), and a re-powered one
+reads its factory settings, which don't convert, so the temperature reads
+0.000 °C with no fault bit (te-sensor_20260921_172933, after 17:30). Now
+every read is one 16-register transfer that also reads back CR0/CR1; if
+they aren't ours the reading is dropped, the loss logged once, and the chip
+set up again as soon as it answers. A retry that finds nothing returns at
+once instead of waiting 0.3 s, so `TC_RETRY_S` went from 5 s to 1 s. Fault
+bits (e.g. the thermocouple wire unplugged: open circuit) are logged when
+they appear and clear.
+
 ## 25. Temperature and pressure controllers redesigned from the 21 Sept 2026 runs — 22 Sept 2026
 Data: te-sensor_20260921_150128 (0.25 N·m), _152054 (0.40), _173217 (0.45);
 the thermocouple-fault logs _172024, _172612, _172933, _173050.

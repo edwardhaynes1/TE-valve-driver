@@ -22,7 +22,7 @@ differently from this page, fix one of them. Add terms as they appear.
 | **Upstream pressure** | Gas pressure before the valve, from the Keller PAA-23SX-H2. Absolute, in bar. |
 | **Keller chip temperature** | The Keller's temperature reading ("KELLER T" on screen). It is the sensor chip's temperature, *not* the gas temperature (grip test, 17 Sept 2026). |
 | **Chamber pressure** | Vacuum chamber pressure from the Pfeiffer IKR 270 cold-cathode gauge, in mbar. |
-| **TC** | The valve's type-K thermocouple, read by the MAX31856. It sits by the heater, so it leads the valve body. |
+| **TC** | The valve's type-K thermocouple, read by the MAX31856. It sits by the heater, so it leads the valve body. Can be unplugged and plugged back in while the driver runs: readings stop, then resume within about a second. |
 | **Valve temperature** | The TC reading, in °C. The one name for it: not "TE temperature" or "TC temperature". (The CSV column keeps its original name, `te_temperature_degC`.) |
 
 ## Valve behaviour

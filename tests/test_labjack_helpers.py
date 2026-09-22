@@ -74,9 +74,10 @@ def test_thermocouple_temperature_decoding(celsius):
 
 @pytest.mark.parametrize("cr0, cr1, cause", [
     (0x00, 0x00, "all-zero"), (0xFF, 0xFF, "all-ones"), (0x12, 0x34, "garbage"),
+    (0x00, 0x03, "power-on settings"),
 ])
 def test_thermocouple_readback_hints(cr0, cr1, cause):
-    assert cause in thermocouple._tc_readback_hint(cr0, cr1)
+    assert cause in thermocouple.lost_hint(cr0, cr1)
 
 
 def test_period_mean_keeps_only_the_last_period(monkeypatch):

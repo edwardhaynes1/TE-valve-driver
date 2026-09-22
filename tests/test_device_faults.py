@@ -101,6 +101,87 @@ def test_absent_thermocouple_is_reported_once_and_retried(running, fake):
     wait_for(lambda: shared.health()['tc'])
 
 
+# ── thermocouple unplugged and plugged back in, while running ──────────────
+#
+# A bit-banged SPI read never raises: an unplugged MAX31856 reads all ones
+# and a re-powered one reads its factory settings (no conversions: 0.000 °C,
+# no fault bit — what te-sensor_20260921_172933 logged after 17:30). Both
+# must be noticed from the configuration registers, which every read now
+# checks, and the chip set up again as soon as it answers.
+
+def temps_seen(seconds):
+    """Every valve temperature the display saw over this time."""
+    seen, t0 = [], time.time()
+    while time.time() - t0 < seconds:
+        seen.append(shared.latest()['te_temperature_degC'])
+        time.sleep(0.02)
+    return seen
+
+
+def test_max31856_unplugged_then_plugged_back_in(running, fake):
+    running(TC_RETRY_S=0.3)
+    control.heater_command(mode='manual', duty_cmd=1.0, armed=True)
+    wait_for(lambda: fake.gate_now() == 1)
+    fake.unplug()
+    wait_for(lambda: not shared.health()['tc'])
+    assert shared.latest()['te_temperature_degC'] is None
+    lost = events_with("MAX31856 lost its configuration")
+    assert lost and "all-ones" in lost[0]
+    wait_for(lambda: fake.gate_now() == 0, timeout=STEP + 0.5)
+    assert "thermocouple" in control.snapshot()['trip_reason']
+    time.sleep(1.0)                                          # several retries…
+    assert len(events_with("MAX31856 lost its configuration")) == 1   # …logged once
+    fake.plug_in()
+    wait_for(lambda: shared.health()['tc']
+             and shared.latest()['te_temperature_degC'] is not None)
+    assert shared.latest()['te_temperature_degC'] == pytest.approx(fake.temp_c, abs=0.01)
+    assert events_with("Valve temperature back")
+    assert fake.gate_now() == 0                              # the trip stays latched
+
+
+def test_a_power_cycled_max31856_is_set_up_again_not_read_as_0_c(running, fake):
+    running(TC_RETRY_S=0.3)
+    fake.power_cycle()                                       # still connected
+    seen = temps_seen(1.0)
+    assert 0.0 not in seen                                   # never shown as a reading
+    assert events_with("power-on settings")
+    wait_for(lambda: shared.latest()['te_temperature_degC'] == pytest.approx(fake.temp_c, abs=0.01))
+    assert fake.reg[0x00] == 0x91                            # configured again
+
+
+def test_thermocouple_wire_unplugged_then_plugged_back_in(running, fake):
+    running()
+    fake.fault = 0x01                                        # open circuit
+    wait_for(lambda: events_with("Thermocouple fault: open circuit"))
+    fake.fault = 0
+    wait_for(lambda: events_with("Thermocouple fault cleared"))
+    assert shared.health()['tc'] and shared.latest()['tc_fault'] == 0
+    assert len(events_with("Thermocouple fault: open circuit")) == 1
+
+
+def test_a_failed_retry_does_not_stall_the_device_thread(fake):
+    # Retries run on the device thread every TC_RETRY_S while the chip is
+    # away; one that finds nothing must return at once, not wait 0.3 s for
+    # a first conversion that will never come.
+    from driver import thermocouple
+    fake.unplug()
+    t0 = time.time()
+    assert thermocouple.try_init(fake, announce_failure=False) is False
+    assert time.time() - t0 < 0.05
+
+
+def test_one_transfer_reads_temperature_fault_and_settings(fake):
+    from driver import thermocouple
+    assert thermocouple.try_init(fake, announce_failure=False)
+    fake.temp_c, fake.fault = -12.5, 0x01
+    r = thermocouple.read(fake)
+    assert r.temp_c == pytest.approx(-12.5, abs=0.01)
+    assert (r.fault, r.configured) == (0x01, True)
+    fake.power_cycle()
+    r = thermocouple.read(fake)
+    assert not r.configured and "power-on settings" in thermocouple.lost_hint(r.cr0, r.cr1)
+
+
 # ── measured heater voltage and current ─────────────────────────────────────
 
 # The measured means must follow what the heater actually did over the last

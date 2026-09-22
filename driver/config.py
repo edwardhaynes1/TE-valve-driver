@@ -98,7 +98,9 @@ SEAT_SCREW_TORQUE_MAX_NM = 5.0     # highest seat screw torque the driver accept
 TEMP_TRIP_C           = 160.0      # latch off above this valve temperature
 HEATER_MAX_RUN_S      = 3600       # auto-disarm after this long armed (s)
 TC_BAD_READS_TO_TRIP  = 3          # consecutive bad TC reads before tripping
-TC_RETRY_S            = 5.0        # re-initialise a non-responding MAX31856 this often
+TC_RETRY_S            = 1.0        # re-initialise a missing / reset MAX31856 this often. Was 5 s,
+                                   # when every retry blocked the device thread 0.3 s; a retry
+                                   # that finds no chip now returns at once
 LJ_WATCHDOG_S         = 10         # U3 firmware watchdog → FIO0 low if we die
 # Thermocouple plausibility. On 21 Sept 2026 (17:20-17:31, logs _172024,
 # _172612, _172933, _173050) the TC gave nonsense with no MAX31856 fault bit:

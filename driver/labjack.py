@@ -212,6 +212,8 @@ class _Session:
         self.tc_ok = False
         self.tc_announced = False     # failure already logged
         self.tc_next_try = now
+        self.tc_lost_at = None        # when readings stopped (None = not lost)
+        self.tc_fault_logged = 0      # fault bits last reported in the event log
         self.bad_tc_reads = 0
         # vacuum gauge
         self.vac_status = "startup"   # last gauge status, so changes are logged once
@@ -339,9 +341,9 @@ class _Session:
 
     # ── thermocouple (SPI) ─────────────────────────────────────────────────
     def _service_thermocouple(self, t0):
-        # Not talking: retry init periodically. (try_init blocks ~0.3 s;
-        # harmless, as the heater is already forced off whenever the
-        # thermocouple is down.)
+        # Not talking: retry init every TC_RETRY_S. A retry that finds no
+        # chip returns at once; one that finds it waits ~0.3 s for the first
+        # conversion (harmless: the heater is off whenever the TC is down).
         if not self.tc_ok and t0 >= self.tc_next_try:
             self.tc_next_try = t0 + TC_RETRY_S
             self._set_tc(thermocouple.try_init(
@@ -349,22 +351,51 @@ class _Session:
             self.tc_announced = not self.tc_ok
             if self.tc_ok:
                 self.bad_tc_reads = 0
+                self.tc_fault_logged = 0
+                if self.tc_lost_at is not None:
+                    log_event(f"Valve temperature back after {t0 - self.tc_lost_at:.0f} s "
+                              f"— if the heater tripped, it stays off until re-armed")
+                    self.tc_lost_at = None
 
         # Read — only if init succeeded.
-        if self.tc_ok:
-            try:
-                fault = thermocouple.read_fault(self.lj)
-                temp  = thermocouple.read_temperature(self.lj)
-                shared.store_valve_temp(temp, fault)
-                self.bad_tc_reads = 0 if fault == 0 else self.bad_tc_reads + 1
-            except Exception as e:
-                self._set_tc(False)
-                self.bad_tc_reads += 1
-                shared.clear_valve_temp()
-                log_event(f"MAX31856 read error: {e} — "
-                          f"re-initialising every {TC_RETRY_S:g} s")
-                self.tc_announced = True
-                self.tc_next_try  = t0 + TC_RETRY_S
+        if not self.tc_ok:
+            return
+        try:
+            r = thermocouple.read(self.lj)
+        except Exception as e:
+            self._lose_tc(t0, f"MAX31856 read error: {e} — "
+                              f"re-initialising every {TC_RETRY_S:g} s")
+            self.bad_tc_reads += 1
+            return
+        if not r.configured:
+            # Unplugged (all ones) or re-powered (factory settings, which read
+            # 0.000 °C with no fault): nothing it says is a temperature.
+            self._lose_tc(t0, f"MAX31856 lost its configuration (CR0=0x{r.cr0:02X} "
+                              f"CR1=0x{r.cr1:02X}) — {thermocouple.lost_hint(r.cr0, r.cr1)}. "
+                              f"Valve temperature unavailable; setting it up again as soon "
+                              f"as it answers")
+            self.tc_next_try = t0               # try at once, then every TC_RETRY_S
+            return
+        shared.store_valve_temp(r.temp_c, r.fault)
+        self.bad_tc_reads = 0 if r.fault == 0 else self.bad_tc_reads + 1
+        if r.fault != self.tc_fault_logged:     # e.g. the TC wire unplugged / back
+            if r.fault:
+                names = [d for bit, d in thermocouple.FAULT_BITS.items() if r.fault & bit]
+                log_event(f"Thermocouple fault: {', '.join(names)}")
+            else:
+                log_event("Thermocouple fault cleared")
+            self.tc_fault_logged = r.fault
+
+    def _lose_tc(self, t0, message):
+        """The MAX31856 stopped giving readings: say so once, clear the
+        reading, and retry init."""
+        self._set_tc(False)
+        shared.clear_valve_temp()
+        log_event(message)
+        self.tc_announced = True
+        self.tc_next_try = t0 + TC_RETRY_S
+        if self.tc_lost_at is None:
+            self.tc_lost_at = t0
 
     # ── control law ────────────────────────────────────────────────────────
     def _run_controller(self, t0):

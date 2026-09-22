@@ -102,6 +102,12 @@ SPI lines stay free.
   reads, gauge over range or LabJack input saturated, or chamber pressure
   above `PRESSURE_TRIP_MBAR` (5e-4 mbar). Its temperature setpoint is limited
   to `PRESSURE_TSP_MIN_C` … `PRESSURE_TSP_MAX_C`.
+- **Thermocouple unplugged and plugged back in** while running: the driver
+  notices within one read (every read also checks the MAX31856's settings,
+  since an unplugged chip reads all ones and a re-powered one reads 0 °C
+  with no fault), shows the valve temperature as unavailable, and sets the
+  chip up again within `TC_RETRY_S` (1 s) of it answering. A heater that
+  tripped meanwhile stays off until re-armed.
 - A **trip latches**: press DISARM, then ARM, to clear it.
 - Disarming takes effect at the next control step, within 0.25 s.
 
