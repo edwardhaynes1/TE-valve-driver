@@ -4,6 +4,48 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 27. Batches: repeated opening-point runs — 24 Sept 2026
+Goal: characterise the opening point against seat screw torque and upstream
+pressure, averaged over several runs. Torque is set by hand; upstream
+pressure is measured, not controlled (the rig leaks). Flow after opening and
+closing were deliberately left out: map the opening point first, then
+characterise around it. The run is a sequence of phases, so later phases
+(settle, step-down) can be added without a rewrite.
+
+A run: approach (auto-t) → creep at 3 °C/min → detection → heater disarmed →
+cooldown. Choices, with the reason for each:
+* **Two scouts, not one.** A fast scout reads high (the TC lags the seat by
+  roughly rate × tau: ~8.5 K at 3 °C/min). Starting the test runs from it
+  risked starting above the opening point. Scout 2 creeps from 10 K below
+  scout 1; test runs start 5 K below scout 2. Scout 2 also gives the test
+  runs an identical predecessor (creep, heater off at detection), which is
+  why there is no soak before a run.
+* **Same creep rate every run**, so the TC lag is a repeatable offset, not
+  scatter.
+* **T_open backdated to the onset**, because detection confirms a few
+  seconds after the rise begins. The onset is the last sample (3-point
+  median) within 0.015 decades of the baseline; this is a best guess, and
+  T_detect is logged beside it. No extra lag correction is applied.
+* **Heater energy from the approach start** is logged at onset and
+  detection, since the opening depends on the temperature distribution
+  (Invar piece against stainless sleeve), not the TC alone. The heater is
+  off before every approach, so energy since the run's start would be the
+  same number.
+* **Heater disarmed at detection**: shortest time open, smallest pressure
+  excursion, cooldown starts at once. Each run re-arms, so the 60-minute
+  armed limit applies per run, not per batch. All interlocks stay active.
+* **The batch adds its own chamber checks** while heating (auto-t alone has
+  none): no valid reading for 2 s, or above 5e-4 mbar, aborts the batch.
+* **Cooldown floor 28 °C**: T_open − 20 K can be below what the lab lets the
+  valve cool to (0.25 N·m opens near 40 °C).
+* Operator disarm or a trip during a batch aborts it; a batch cannot resume.
+* Averages are over test runs that opened; scouts and failed runs are in the
+  Runs sheet but not in the averages.
+
+The opening map is an Excel workbook because that is where the results are
+used. If Excel has it open (Windows locks it), rows go to side files next to
+it and are merged the next time it can be saved.
+
 ## 26. Thermocouple found again after it is unplugged — 22 Sept 2026
 Unplugging and re-plugging the thermocouple while the driver ran left it
 without a valve temperature until restarted. The MAX31856 was set up only at
