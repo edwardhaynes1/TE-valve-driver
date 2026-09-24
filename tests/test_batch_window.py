@@ -35,7 +35,8 @@ def gui(tk_root, tmp_path, monkeypatch):
     monkeypatch.setattr(batchrun, "PLOT", False)
     real_start = batchrun.start
     monkeypatch.setattr(batchrun, "start",
-                        lambda n, main_log="", start_thread=True: real_start(n, main_log, False))
+                        lambda n, main_log="", topup=None, start_thread=True:
+                        real_start(n, main_log, topup, False))
     g = TEGui(root=tk.Toplevel(tk_root))
     g._confirm = lambda *a: True
     g.root.update()
@@ -47,7 +48,14 @@ def state(w):
     return str(w.cget("state"))
 
 
+def readings():
+    shared.store_valve_temp(25.0, 0)
+    shared.store_vacuum(1e-6, None, 1.7)
+    shared.store_keller(3.0, None, control.clock())      # top-up is on by default
+
+
 def enter_torque(g, nm="0.3"):
+    readings()
     g.seat_entry.delete(0, "end")
     g.seat_entry.insert(0, nm)
     g._set_seat_screw()

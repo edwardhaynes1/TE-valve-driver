@@ -13,7 +13,8 @@ from . import logfile
 from . import readout
 from . import shared
 from .config import (
-    BATCH_TEST_RUNS_DEFAULT, BATCH_TEST_RUNS_MAX, FLIGHT_POWER_BUDGET_W, HEATER_I_AIN, HEATER_MAX_DUTY, HEATER_PWM_PERIOD_S,
+    BATCH_TEST_RUNS_DEFAULT, BATCH_TEST_RUNS_MAX, BATCH_TOPUP_DROP_DEFAULT_BAR,
+    FLIGHT_POWER_BUDGET_W, HEATER_I_AIN, HEATER_MAX_DUTY, HEATER_PWM_PERIOD_S,
     HEATER_R_OHM, HEATER_V_AIN, PID_SETPOINT_DEFAULT, PRESSURE_TARGET_DEFAULT,
     PRESSURE_TARGET_MIN, PRESSURE_TRIP_MBAR, TEMP_TRIP_C, heater_current_a,
     heater_power_w, heater_voltage_v,
@@ -188,6 +189,13 @@ class TEGui:
         self.batch_btn.pack(side="left", padx=(0, 6))
         self.abort_btn = tk.Button(row4, text="abort batch", command=self._abort_batch, **btn)
         self.abort_btn.pack(side="left")
+        row5 = tk.Frame(parent, bg=BG)
+        row5.pack(fill="x", pady=(0, 4))
+        self.topup_entry = self._entry(row5, "pause for top-up if upstream falls (bar, blank = never)",
+                                       f"{BATCH_TOPUP_DROP_DEFAULT_BAR:g}", width=5)
+        self.topup_entry.unbind("<Return>")
+        self.continue_btn = tk.Button(row5, text="continue", command=self._continue_batch, **btn)
+        self.continue_btn.pack(side="left")
         self.batch_status = tk.Label(parent, text="", font=self.f, fg=DIM, bg=BG, anchor="w")
         self.batch_status.pack(fill="x")
         self._batch_running = False
@@ -244,23 +252,25 @@ class TEGui:
         busy = batchrun.running()
         self._batch_running = busy
         heater = [*self.mode_buttons, self.update_btn, self.duty_entry, self.sp_entry,
-                  self.p_entry, self.seat_entry, self.seat_btn, self.runs_entry]
+                  self.p_entry, self.seat_entry, self.seat_btn, self.runs_entry,
+                  self.topup_entry]
         if busy:
             for w in heater:
                 w.configure(state="disabled")
             for w in (*self.mode_buttons, self.update_btn, self.seat_btn):
                 w.configure(disabledforeground=DIM)
-            for e in (self.duty_entry, self.sp_entry, self.p_entry, self.runs_entry):
+            for e in (self.duty_entry, self.sp_entry, self.p_entry, self.runs_entry,
+                      self.topup_entry):
                 e.configure(highlightbackground=BORDER)
                 e.label.configure(fg=DIM)
         elif not getattr(self, "_locked", True):
             for w in (*self.mode_buttons, self.update_btn, self.seat_btn):
                 w.configure(state="normal")
-            for e in (self.seat_entry, self.runs_entry):
+            for e in (self.seat_entry, self.runs_entry, self.topup_entry):
                 e.configure(state="normal")
             self._update_inputs()
         else:
-            for e in (self.seat_entry, self.runs_entry):
+            for e in (self.seat_entry, self.runs_entry, self.topup_entry):
                 e.configure(state="normal")
             self.seat_btn.configure(state="normal")
         can_start = (not busy and shared.seat_screw_torque() is not None
@@ -268,6 +278,11 @@ class TEGui:
         self.batch_btn.configure(state="normal" if can_start else "disabled",
                                  disabledforeground=DIM)
         self.runs_entry.label.configure(fg=DIM if busy else TEXT)
+        self.topup_entry.label.configure(fg=DIM if busy else TEXT)
+        waiting = batchrun.paused()
+        self.continue_btn.configure(state="normal" if waiting else "disabled",
+                                    fg=PROMPT if waiting else TEXT, disabledforeground=DIM,
+                                    highlightbackground=PROMPT if waiting else BORDER)
         self.abort_btn.configure(state="normal" if busy else "disabled",
                                  fg=WARN if busy else TEXT, disabledforeground=DIM)
 
@@ -283,12 +298,21 @@ class TEGui:
         if not 1 <= n <= BATCH_TEST_RUNS_MAX:
             log_event(f"Batch: test runs must be 1 to {BATCH_TEST_RUNS_MAX}")
             return
+        text = self.topup_entry.get().strip().replace(",", ".")
+        try:
+            topup = float(text) if text else None
+            if topup is not None and not 0.0 < topup < 10.0:
+                raise ValueError
+        except ValueError:
+            log_event(f"Batch: top-up '{text}' should be a pressure drop in bar "
+                      f"(e.g. 0.3), or blank for never")
+            return
         if torque is None:
             log_event("Batch not started — enter the seat screw torque first")
             return
-        if snapshot()['armed'] or batchrun.running():
-            log_event("Batch not started — disarm the heater first (the batch arms it "
-                      "itself), and wait for any running batch to end")
+        problem = batchrun.start_problem(n, topup)
+        if problem:
+            log_event(f"Batch not started — {problem}")
             return
         up, _ = shared.upstream()
         up_txt = f"{up:.3f} bar (measured)" if up is not None else "not read (Keller offline)"
@@ -297,14 +321,20 @@ class TEGui:
                 f"Seat screw torque: {torque:.2f} N·m\n"
                 f"Is that the torque on the valve now?\n\n"
                 f"Upstream pressure: {up_txt}\n"
-                f"Test runs: {n} (plus scout 1 and scout 2)\n\n"
+                f"Test runs: {n} (plus scout 1 and scout 2)\n"
+                + (f"Pause for a top-up if upstream falls {topup:g} bar\n\n" if topup
+                   else "No top-up pauses\n\n") +
                 f"The batch arms the heater itself for each run. "
                 f"SW171 must be on. DISARM or 'abort batch' stops it."):
             log_event("Batch not started (cancelled)")
             return
-        ok, msg = batchrun.start(n, logfile.LOG_FILE)
+        ok, msg = batchrun.start(n, logfile.LOG_FILE, topup)
         if not ok:
             log_event(msg)
+        self._apply_gate()
+
+    def _continue_batch(self):
+        batchrun.resume()
         self._apply_gate()
 
     def _abort_batch(self):

@@ -48,12 +48,17 @@ would need that gets a warning and the minimum setpoint.
 To measure the valve's *opening point* (the valve temperature where flow
 starts) with a mean and spread, set the seat screw torque and the upstream
 pressure by hand, enter the torque, choose the number of **test runs**
-(default 5) and press **start batch**. It asks you to confirm the torque and
-shows the measured upstream pressure; then it runs by itself:
+(default 5) and the **top-up** limit (default 0.3 bar; blank = never), and
+press **start batch**. It asks you to confirm the torque and shows the
+measured upstream pressure; then it runs by itself. Before every run it
+**settles**, heater off, until the chamber pressure is neither rising nor
+falling fast (a top-up's jump or outgassing would look like an opening).
+If upstream has fallen by the top-up limit, it pauses before the next run:
+top up and press **continue**.
 
 | Run | What it does |
 |---|---|
-| **scout 1** | 30 s of chamber baseline, then heats towards 150 °C until the valve opens. Fast, so it reads high. |
+| **scout 1** | Settles (at least 30 s), then heats towards 155 °C until the valve opens. Fast, so it reads high. |
 | **scout 2** | Creeps at 3 °C/min from 10 K below scout 1's reading. If it opens before it could creep, it repeats 10 K lower (`scout2b`, …). |
 | **test runs 1 … N** | Creep at 3 °C/min from 5 K below scout 2's reading. Only these are averaged. |
 
@@ -64,8 +69,12 @@ the approach started and the upstream pressure. The heater is **disarmed at
 detection**, and the valve cools to 20 K below T_open (not below 28 °C) with
 the chamber back at its baseline before the next run re-arms it.
 
-A batch stops by itself if a scout doesn't open by 150 °C, if two test runs
-in a row don't, or if a cooldown takes over 30 min. **abort batch**,
+The rig leaks, so every run opens at a different upstream pressure: each
+batch also fits T_open against upstream pressure (K/bar), and reports the
+scatter left over. A batch stops by itself if a scout doesn't open by
+155 °C, if two test runs in a row don't, or if a cooldown or a settle takes
+over 30 min. Start is refused without a valve temperature or chamber
+reading (or, with top-ups on, an upstream reading). **abort batch**,
 DISARM, any trip, the chamber gauge failing while heating, or closing the
 driver ends it at once. While it runs, the heater controls and the torque
 are locked.

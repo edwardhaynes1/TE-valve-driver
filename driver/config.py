@@ -374,10 +374,30 @@ BATCH_TEST_RUNS_MAX     = 50
 BATCH_CREEP_C_MIN       = 3.0      # creep rate, °C per minute (TC lags ~8.5 K at this rate)
 BATCH_SCOUT2_BELOW_K    = 10.0     # scout 2 starts this far below scout 1's T_open
 BATCH_TEST_BELOW_K      = 5.0      # test runs start this far below scout 2's T_open
-BATCH_CEILING_C         = 150.0    # no opening by here → the run failed (below TEMP_TRIP_C)
+BATCH_CEILING_C         = 155.0    # no opening by here → the run failed. 5 K below TEMP_TRIP_C,
+                                   # like PRESSURE_TSP_MAX_C: 0.45 N·m opened at ~146 °C at 2.7 bar
+                                   # (24 Sept 2026) and 158 °C at 1 bar (21 Sept) — was 150
 BATCH_CEILING_HOLD_S    = 60.0     # …after holding at the ceiling this long
 BATCH_START_BAND_K      = 0.5      # creep starts once the TC is within this of the start
-BATCH_BASELINE_S        = 30.0     # scout 1 measures the chamber baseline this long, heater off
+BATCH_BASELINE_S        = 30.0     # scout 1 settles at least this long, heater off
+# Settle — before every run, heater off: wait until the chamber pressure is
+# neither rising (a top-up, or outgassing, would look like an opening) nor
+# falling fast (the baseline would lag it and make detection late). 24 Sept 2026: after filling upstream the chamber jumped
+# 1.4 → 2.35e-6 mbar with the valve cold, then fell back over ~4 min.
+BATCH_SETTLE_WINDOW_S   = 60.0     # trend = straight-line fit of log10(p) over this long
+BATCH_SETTLE_MAX_RISE_DEC_MIN = 0.01   # settled when rising slower than this (≈ +2.3 %/min)
+BATCH_SETTLE_MAX_FALL_DEC_MIN = 0.03   # …and falling slower than this (≈ −7 %/min): the
+                                   # baseline (a median of the last 5-30 s) then lags the
+                                   # chamber by ≤ 0.009 decades, well under PRESSURE_OPEN_DEC.
+                                   # 24 Sept 2026: the tail fell 1.5 %/min; after an opening
+                                   # the chamber was back within ~90 s
+BATCH_SETTLE_MAX_S      = 1800.0   # still rising after this long: the batch stops
+# Top-up — optional (set when starting): if upstream has fallen this far below
+# its value at the start of the batch, pause before the next run and ask for
+# a top-up. The rig leaked 0.05-0.07 bar/min on 24 Sept 2026.
+BATCH_TOPUP_DROP_DEFAULT_BAR = 0.3
+BATCH_UP_MAX_AGE_S      = 5.0      # upstream readings older than this are ignored
+BATCH_UP_FIT_MIN_SPREAD_BAR = 0.05 # fit T_open against upstream only over at least this range
 BATCH_ONSET_DEC         = 0.015    # onset = last sample within this of the baseline (best guess)
 BATCH_COOL_BELOW_K      = 20.0     # cooldown: valve this far below the run's T_open…
 BATCH_COOL_MIN_C        = HEATER_HOLD_AMBIENT_C + 5.0   # …but never asked to go below this

@@ -3,22 +3,26 @@ threads, clock, files or hardware (like controller.py). See context.md,
 "Batches", and history-log entry 27.
 
     new_batch(n_tests, torque_nm, now)  a fresh batch
-    step(b, now, temp, vac, vac_status, heater) -> (commands, msgs, events)
-                                        one step, ~4 Hz. heater: the heater
+    step(b, now, temp, vac, vac_status, heater, p_up, p_up_t)
+        -> (commands, msgs, events)     one step, ~4 Hz. heater: the heater
                                         state's armed, trip_reason, t_burst.
                                         commands: dicts for heater_command,
                                         in order. events: ('run_start', run),
                                         ('run_end', run), ('batch_end', b)
     abort(b, reason) -> (commands, msgs, events)
+    resume(b, now) -> msgs              after a top-up: carry on
     labels(b) -> (run name, phase)      for the log rows
     run_summary(b, run, rows) -> dict   schema.RUN_SUMMARY for one run;
                                         rows: [(t, main-log row dict)]
     batch_summary(b, summaries) -> dict schema.BATCH_SUMMARY
     status_text(b) -> str               one line for the window
 
-A run: approach (auto-t to the start temperature) → creep (setpoint up at
-BATCH_CREEP_C_MIN) → detection (heater disarmed) → cooldown. Scout 1 has a
-baseline wait first and heats straight towards the ceiling instead.
+A run: settle (heater off, until the chamber isn't rising) → approach
+(auto-t to the start temperature) → creep (setpoint up at BATCH_CREEP_C_MIN)
+→ detection (heater disarmed) → cooldown. Scout 1 settles at least
+BATCH_BASELINE_S and heats straight towards the ceiling instead. With a
+top-up limit set, a run whose upstream pressure has fallen that far waits in
+top-up (heater off) until resume().
 """
 
 import math
@@ -29,7 +33,9 @@ from datetime import datetime
 from .config import (
     BATCH_BASELINE_S, BATCH_CEILING_C, BATCH_CEILING_HOLD_S, BATCH_COOL_BELOW_K,
     BATCH_COOL_MAX_S, BATCH_COOL_MIN_C, BATCH_CREEP_C_MIN, BATCH_MAX_FAILS,
-    BATCH_ONSET_DEC, BATCH_RECOVER_DEC, BATCH_SCOUT2_BELOW_K, BATCH_SCOUT2_TRIES,
+    BATCH_ONSET_DEC, BATCH_RECOVER_DEC, BATCH_SETTLE_MAX_FALL_DEC_MIN,
+    BATCH_SETTLE_MAX_RISE_DEC_MIN, BATCH_SETTLE_MAX_S,
+    BATCH_SETTLE_WINDOW_S, BATCH_UP_FIT_MIN_SPREAD_BAR, BATCH_UP_MAX_AGE_S, BATCH_SCOUT2_BELOW_K, BATCH_SCOUT2_TRIES,
     BATCH_START_BAND_K,
     BATCH_TEST_BELOW_K, LABJACK_SAMPLE_HZ, PRESSURE_BAD_READS_TO_TRIP,
     PRESSURE_BASE_GUARD_S, PRESSURE_BASE_MIN_S, PRESSURE_BASE_WINDOW_S,
@@ -38,7 +44,7 @@ from .config import (
 )
 from .controller import AUTO_T
 
-BASELINE, APPROACH, CREEP, COOLDOWN = 'baseline', 'approach', 'creep', 'cooldown'
+SETTLE, APPROACH, CREEP, COOLDOWN, TOPUP = 'settle', 'approach', 'creep', 'cooldown', 'top-up'
 RUNNING, COMPLETE, STOPPED, ABORTED = 'running', 'complete', 'stopped', 'aborted'
 OPENED, NO_OPENING, RUN_ABORTED = 'opened', 'no opening', 'aborted'
 _CEILING_BAND_K = 1.0            # "at the ceiling": TC within this of it
@@ -51,14 +57,17 @@ def run_name(index, attempt=0):
     return f"testrun{index - 1:02d}"
 
 
-def new_batch(n_tests, torque_nm, now):
+def new_batch(n_tests, torque_nm, now, topup_drop_bar=None):
     if torque_nm is None:
         raise ValueError("a batch needs the seat screw torque")
     b = dict(
         n_tests=int(n_tests), torque=torque_nm, started=now, ended=None,
-        state=RUNNING, note="", phase=BASELINE, phase_t0=now, begun=False,
+        topup_drop=topup_drop_bar, up=None, up_start=None, top_ups=0, trend=None,
+        state=RUNNING, note="", phase=SETTLE, phase_t0=now, begun=False,
         run=None, runs=[], fails_in_row=0,
-        hist=deque(maxlen=int((PRESSURE_BASE_WINDOW_S + 5) * LABJACK_SAMPLE_HZ * 2)),
+        settle_from=None,
+        hist=deque(maxlen=int((max(PRESSURE_BASE_WINDOW_S, BATCH_SETTLE_WINDOW_S) + 10)
+                              * LABJACK_SAMPLE_HZ * 2)),
         y_filt=None, last_t=None, base=None, bad_vac=0,
         sp=None, creep_t0=None, ceiling_since=None,
     )
@@ -76,6 +85,7 @@ def _new_run(b, index, now, start_c, attempt=0):
         t_onset=None, T_onset=None, y_onset=None,
         t_detect=None, T_detect=None, y_detect=None,
         closed_t=None, closed_T=None, t_fail=None, cool_end_t=None, efold=None,
+        why="",
     )
 
 
@@ -97,11 +107,15 @@ def _t_open(b, index):
 
 # ── one step ────────────────────────────────────────────────────────────────
 
-def step(b, now, temp, vac, vac_status, heater):
+def step(b, now, temp, vac, vac_status, heater, p_up=None, p_up_t=None):
     cmds, msgs, events = [], [], []
     if b['state'] != RUNNING:
         return cmds, msgs, events
     run = b['run']
+    fresh = p_up is not None and (p_up_t is None or now - p_up_t <= BATCH_UP_MAX_AGE_S)
+    b['up'] = p_up if fresh else None
+    if b['up_start'] is None and b['up'] is not None:
+        b['up_start'] = b['up']
     y = math.log10(vac) if (vac is not None and vac > 0) else None
     dt = 0.0 if b['last_t'] is None else max(0.0, now - b['last_t'])
     b['last_t'] = now
@@ -109,13 +123,14 @@ def step(b, now, temp, vac, vac_status, heater):
         b['y_filt'] = y if b['y_filt'] is None else (
             b['y_filt'] + dt / (PRESSURE_FILTER_S + dt) * (y - b['y_filt']))
         b['hist'].append((now, y))
-    run['samples'].append((now, temp, y))
+    run['samples'].append((now, temp, y, None))
     if not b['begun']:
         b['begun'] = True
         events.append(('run_start', run))
-        msgs.append(f"Batch: {run['name']} — measuring the chamber baseline for "
-                    f"{BATCH_BASELINE_S:g} s, heater off")
+        msgs.append(f"Batch: {run['name']} — heater off, waiting at least "
+                    f"{BATCH_BASELINE_S:g} s for the chamber to settle")
     _update_baseline(b, now)
+    run['samples'][-1] = (now, temp, y, b['base'])      # the baseline as it stood then
     phase = b['phase']
 
     if phase in (APPROACH, CREEP):
@@ -142,15 +157,8 @@ def step(b, now, temp, vac, vac_status, heater):
             _approach(b, now, temp, heater, msgs)
         else:
             _creep(b, now, cmds)
-    elif phase == BASELINE:
-        if (now - b['phase_t0'] >= BATCH_BASELINE_S and b['base'] is not None
-                and temp is not None):
-            b['sp'] = BATCH_CEILING_C
-            run['start_c'] = None
-            cmds += [dict(mode=AUTO_T, setpoint_C=BATCH_CEILING_C), dict(armed=True)]
-            _enter(b, APPROACH, now)
-            msgs.append(f"Batch: scout1 — baseline {10 ** b['base']:.2e} mbar; heating "
-                        f"towards {BATCH_CEILING_C:g} °C until the valve opens")
+    elif phase == SETTLE:
+        _settle(b, now, temp, cmds, msgs, events)
     elif phase == COOLDOWN:
         _cooldown(b, now, temp, cmds, msgs, events)
     return cmds, msgs, events
@@ -160,19 +168,83 @@ def _enter(b, phase, now):
     b['phase'], b['phase_t0'] = phase, now
 
 
+def _line(pts):
+    """Least-squares (mean t, mean y, slope per s) through (t, y) points."""
+    mt = statistics.mean(t for t, _ in pts)
+    my = statistics.mean(y for _, y in pts)
+    sxx = sum((t - mt) ** 2 for t, _ in pts)
+    slope = sum((t - mt) * (y - my) for t, y in pts) / sxx if sxx > 0 else 0.0
+    return mt, my, slope
+
+
+def chamber_trend(hist, now, window=BATCH_SETTLE_WINDOW_S, since=None):
+    """Slope of a straight-line fit of log10(p) over the last `window` s
+    (and not before `since`), in decades per minute. None until the window
+    is at least 80 % covered."""
+    lo = now - window if since is None else max(now - window, since)
+    pts = [(t, y) for t, y in hist if lo <= t <= now]
+    if len(pts) < 10 or pts[-1][0] - pts[0][0] < 0.8 * window:
+        return None
+    return 60.0 * _line(pts)[2]
+
+
+def _settle(b, now, temp, cmds, msgs, events):
+    """Heater off until the chamber isn't rising; then arm and heat."""
+    run = b['run']
+    b['trend'] = trend = chamber_trend(b['hist'], now, since=b['settle_from'])
+    min_s = BATCH_BASELINE_S if run['index'] == 0 else 0.0
+    if (now - b['phase_t0'] >= min_s and trend is not None
+            and -BATCH_SETTLE_MAX_FALL_DEC_MIN <= trend <= BATCH_SETTLE_MAX_RISE_DEC_MIN
+            and b['base'] is not None
+            and temp is not None):
+        b['base'] = min(b['base'], b['y_filt']) if b['y_filt'] is not None else b['base']
+        waited = now - b['phase_t0']
+        if run['index'] == 0:
+            b['sp'] = BATCH_CEILING_C
+            cmds += [dict(mode=AUTO_T, setpoint_C=BATCH_CEILING_C), dict(armed=True)]
+            msgs.append(f"Batch: scout1 — chamber settled ({trend:+.3f} dec/min, baseline "
+                        f"{10 ** b['base']:.2e} mbar); heating towards "
+                        f"{BATCH_CEILING_C:g} °C until the valve opens")
+        else:
+            cmds += [dict(mode=AUTO_T, setpoint_C=round(run['start_c'], 3)), dict(armed=True)]
+            msgs.append(f"Batch: {run['name']} — chamber settled after {waited:.0f} s "
+                        f"({trend:+.3f} dec/min); heater armed, heating to "
+                        f"{run['start_c']:.1f} °C ({run['why']}), then creep")
+        b['settle_from'] = None
+        _enter(b, APPROACH, now)
+    elif now - b['phase_t0'] > BATCH_SETTLE_MAX_S:
+        run['note'] = (f"chamber not settled after {BATCH_SETTLE_MAX_S / 60:g} min "
+                       f"({trend:+.3f} dec/min)" if trend is not None else
+                       f"no chamber trend after {BATCH_SETTLE_MAX_S / 60:g} min")
+        run['status'] = RUN_ABORTED
+        _end_run(b, now, events)
+        _finish(b, now, STOPPED, f"{run['name']}: {run['note']}", msgs, events)
+
+
 def _update_baseline(b, now):
-    """Median log10(p) over the window, skipping the newest seconds (the
-    auto-p rule). Within a run it may fall but never rise, so a gradual
-    opening can't drag it up. Frozen once the valve opens."""
-    if b['phase'] == COOLDOWN or b['run']['T_detect'] is not None:
+    """The chamber baseline as it stands now, log10(p), from the window
+    PRESSURE_BASE_WINDOW_S … PRESSURE_BASE_GUARD_S ago.
+
+    Its median: measured fresh while settling (after a top-up only from
+    after the fill), so the run starts from the level the chamber is at;
+    while heating it may fall but never rise, so a gradual opening can't
+    drag it up. Frozen once the valve opens. The median lags a falling
+    chamber by ~17 s, which is why settling also waits until the chamber
+    isn't falling fast (BATCH_SETTLE_MAX_FALL_DEC_MIN). A trend line
+    extrapolated to now was tried instead: its noise, with the never-rise
+    rule, walked the baseline down and gave false openings in simulation."""
+    if b['phase'] in (COOLDOWN, TOPUP) or b['run']['T_detect'] is not None:
         return
-    ys = sorted(y for t, y in b['hist']
-                if now - PRESSURE_BASE_WINDOW_S <= t <= now - PRESSURE_BASE_GUARD_S)
-    if len(ys) < PRESSURE_BASE_MIN_S * LABJACK_SAMPLE_HZ:
+    lo = now - PRESSURE_BASE_WINDOW_S
+    if b['phase'] == SETTLE and b['settle_from'] is not None:
+        lo = max(lo, b['settle_from'])
+    pts = [(t, y) for t, y in b['hist'] if lo <= t <= now - PRESSURE_BASE_GUARD_S]
+    if len(pts) < PRESSURE_BASE_MIN_S * LABJACK_SAMPLE_HZ:
         return
+    ys = sorted(y for _, y in pts)
     n = len(ys)
     med = ys[n // 2] if n % 2 else 0.5 * (ys[n // 2 - 1] + ys[n // 2])
-    b['base'] = med if b['base'] is None else min(med, b['base'])
+    b['base'] = med if (b['phase'] == SETTLE or b['base'] is None) else min(med, b['base'])
 
 
 def _approach(b, now, temp, heater, msgs):
@@ -204,6 +276,11 @@ def _at_ceiling(b, now, temp):
     return False
 
 
+def _base_at(sample, base):
+    """The baseline that applied to a sample (its own if recorded)."""
+    return sample[3] if len(sample) > 3 and sample[3] is not None else base
+
+
 def _median3(samples, i):
     ys = [samples[j][2] for j in (i - 1, i, i + 1)
           if 0 <= j < len(samples) and samples[j][2] is not None]
@@ -212,11 +289,12 @@ def _median3(samples, i):
 
 def find_onset(samples, base, i_detect):
     """Index of the onset: the last sample at or before detection whose
-    3-point median log10 p is within BATCH_ONSET_DEC of the baseline. The
-    best guess of when flow started. Falls back to the first sample."""
+    3-point median log10 p is within BATCH_ONSET_DEC of the baseline (as it
+    stood at that sample). The best guess of when flow started. Falls back
+    to the first sample."""
     for j in range(i_detect, -1, -1):
         y = _median3(samples, j)
-        if y is not None and y <= base + BATCH_ONSET_DEC:
+        if y is not None and y <= _base_at(samples[j], base) + BATCH_ONSET_DEC:
             return j
     return 0
 
@@ -226,9 +304,11 @@ def flow_efold(samples, base, i_onset, i_detect, min_rise=0.02):
     onset and detection: least-squares slope of ln(p − base) against the
     valve temperature, over samples whose rise is at least min_rise × base.
     None with fewer than 4 such samples or a non-rising fit."""
-    b0 = 10 ** base
-    pts = [(T, math.log(10 ** y - b0)) for _, T, y in samples[i_onset:i_detect + 1]
-           if T is not None and y is not None and 10 ** y - b0 >= min_rise * b0]
+    pts = []
+    for s in samples[i_onset:i_detect + 1]:
+        T, y, b0 = s[1], s[2], 10 ** _base_at(s, base)
+        if T is not None and y is not None and 10 ** y - b0 >= min_rise * b0:
+            pts.append((T, math.log(10 ** y - b0)))
     if len(pts) < 4:
         return None
     mt = statistics.mean(T for T, _ in pts)
@@ -244,7 +324,7 @@ def _detected(b, now, temp, cmds, msgs):
     run = b['run']
     i = len(run['samples']) - 1
     j = find_onset(run['samples'], b['base'], i)
-    t_on, T_on, _ = run['samples'][j]
+    t_on, T_on = run['samples'][j][:2]
     if T_on is None:                             # no TC at that sample: nearest earlier
         T_on = next((s[1] for s in reversed(run['samples'][:j]) if s[1] is not None), temp)
     run.update(status=OPENED, opened_during=b['phase'], i_detect=i, base=b['base'],
@@ -335,17 +415,37 @@ def _next_run(b, now, temp, cmds, msgs, events, repeat=False):
                         if r['index'] == (0 if index == 1 else 1))
         why = f"{below:g} K below {ref_name}'s {ref:.2f} °C"
     start = min(BATCH_CEILING_C - _CEILING_BAND_K, start)
-    base = prev['base']                # this run's baseline starts from the last one's
     run = _new_run(b, index, now, start, attempt)
+    run['why'] = why
     b['run'] = run
-    b.update(base=base, bad_vac=0, sp=start, creep_t0=None, ceiling_since=None)
-    run['samples'].append((now, temp, b['hist'][-1][1] if b['hist'] else None))
-    cmds += [dict(mode=AUTO_T, setpoint_C=round(start, 3)), dict(armed=True)]
-    _enter(b, APPROACH, now)
+    b.update(base=None, bad_vac=0, sp=start, creep_t0=None, ceiling_since=None)
+    run['samples'].append((now, temp, b['hist'][-1][1] if b['hist'] else None, None))
     events.append(('run_start', run))
-    msgs.append(f"Batch: {run['name']} — heater re-armed, heating to {start:.1f} °C "
-                f"({why}), then creep")
+    up, drop = b['up'], b['topup_drop']
+    if (drop is not None and up is not None and b['up_start'] is not None
+            and up < b['up_start'] - drop):
+        _enter(b, TOPUP, now)
+        msgs.append(f"Batch: PAUSED for a top-up — upstream {up:.3f} bar, "
+                    f"{b['up_start'] - up:.2f} bar below the batch's start "
+                    f"({b['up_start']:.3f} bar). Top up, then press 'continue'")
+    else:
+        _enter(b, SETTLE, now)
+        msgs.append(f"Batch: {run['name']} — waiting for the chamber to settle")
     return cmds, msgs, events
+
+
+def resume(b, now):
+    """After a top-up: settle (the chamber jumps when upstream is filled),
+    then carry on with the run."""
+    if b['state'] != RUNNING or b['phase'] != TOPUP:
+        return []
+    b['top_ups'] += 1
+    b['base'] = None
+    b['settle_from'] = now          # judge the chamber only from after the fill
+    _enter(b, SETTLE, now)
+    up = f"{b['up']:.3f} bar" if b['up'] is not None else "not read"
+    return [f"Batch: top-up done (upstream {up}) — {b['run']['name']} waits for the "
+            f"chamber to settle"]
 
 
 def _end_run(b, now, events):
@@ -485,6 +585,25 @@ def _stats(values):
             min(v), max(v))
 
 
+def upstream_fit(pairs):
+    """Straight line T_open = a + slope × upstream through (bar, °C) pairs.
+    (slope K/bar, its standard error, residual std K), or None with fewer
+    than 3 pairs or less than BATCH_UP_FIT_MIN_SPREAD_BAR of spread. The
+    standard error needs 4 pairs; with 3 it is None."""
+    pts = [(u, t) for u, t in pairs if u is not None and t is not None]
+    if len(pts) < 3 or max(u for u, _ in pts) - min(u for u, _ in pts) < BATCH_UP_FIT_MIN_SPREAD_BAR:
+        return None
+    mu = statistics.mean(u for u, _ in pts)
+    mt = statistics.mean(t for _, t in pts)
+    sxx = sum((u - mu) ** 2 for u, _ in pts)
+    slope = sum((u - mu) * (t - mt) for u, t in pts) / sxx
+    res = [t - (mt + slope * (u - mu)) for u, t in pts]
+    dof = len(pts) - 2
+    resid = math.sqrt(sum(r * r for r in res) / dof)
+    se = resid / math.sqrt(sxx) if dof >= 2 else None
+    return slope, se, resid
+
+
 def batch_summary(b, summaries, batch_name="", folder=""):
     """One row of schema.BATCH_SUMMARY: averages over the test runs that
     opened (in_average = 1)."""
@@ -494,6 +613,7 @@ def batch_summary(b, summaries, batch_name="", folder=""):
     e_mean, e_sd, _, _ = _stats(col('energy_at_open_J'))
     u_mean, _, u_min, u_max = _stats(col('upstream_at_open_bar'))
     base = _stats(col('chamber_baseline_mbar'))[0]
+    fit = upstream_fit([(_num(s['upstream_at_open_bar']), _num(s['t_open_degC'])) for s in avg])
     scout = {s['run']: s['t_open_degC'] for s in summaries}
     return {
         'batch': batch_name,
@@ -520,6 +640,10 @@ def batch_summary(b, summaries, batch_name="", folder=""):
         'upstream_at_open_min_bar': _rnd(u_min, 4),
         'upstream_at_open_max_bar': _rnd(u_max, 4),
         'chamber_baseline_mean_mbar': f"{base:.3e}" if base is not None else '',
+        't_open_vs_upstream_K_per_bar': _rnd(fit[0], 2) if fit else '',
+        't_open_vs_upstream_se_K_per_bar': _rnd(fit[1], 2) if fit else '',
+        't_open_resid_std_K': _rnd(fit[2], 2) if fit else '',
+        'top_ups': b['top_ups'],
         'free_cooling_closed_mean_degC': _rnd(_stats(col('free_cooling_closed_degC'))[0], 2),
         'folder': folder,
     }
@@ -538,7 +662,14 @@ def status_text(b):
     where = f"{run['name']} ({run['index'] - 1}/{b['n_tests']})" if run['counts'] \
         else run['name']
     extra = ""
-    if b['phase'] == CREEP and b['sp'] is not None:
+    if b['phase'] == TOPUP:
+        up = f"{b['up']:.3f}" if b['up'] is not None else "?"
+        return (f"{head} · PAUSED for a top-up · upstream {up} bar, started at "
+                f"{b['up_start']:.3f} bar · top up, then press 'continue'")
+    if b['phase'] == SETTLE and b['trend'] is not None:
+        extra = (f" · waiting for the chamber: {b['trend']:+.3f} dec/min (needs "
+                 f"{-BATCH_SETTLE_MAX_FALL_DEC_MIN:+g} to {BATCH_SETTLE_MAX_RISE_DEC_MIN:+g})")
+    elif b['phase'] == CREEP and b['sp'] is not None:
         extra = f" · setpoint {b['sp']:.1f} °C"
     elif b['phase'] == COOLDOWN:
         extra = f" · to {_cool_target(b):.1f} °C"

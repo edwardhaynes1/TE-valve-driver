@@ -4,6 +4,52 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 28. Batches made for the real rig — 24 Sept 2026
+Two logs from 24 Sept 2026 (0.45 N·m) showed what a batch has to live with:
+te-sensor_20260924_155503 (an opening at ~146 °C, 2.7 bar) and
+te-sensor_20260924_161238 (cooling, heater off).
+* After the opening the chamber was back within 6 % of its pre-opening
+  level ~90 s after disarming (at 73 °C: the valve closed ~70 K below where
+  it opened). So entry 27's cooldown rule holds.
+* The chamber keeps pumping down slowly (1.5 %/min), noise ~0.003 decades.
+* Filling upstream (0.96 → 3.16 bar) with the valve cold at 29 °C made the
+  chamber jump 1.4 → 2.35e-6 mbar, falling back over ~4 min.
+* Upstream leaked 0.05-0.07 bar/min (0.015 on 14 Sept): over an hour's
+  batch, more than 1 bar, i.e. ~12 K or more of opening point.
+* 0.45 N·m opened at ~146 °C: 4 K below the 150 °C ceiling, and detection
+  needs a few K above the opening.
+
+So:
+1. **Settle before every run** (heater off): the chamber must be neither
+   rising (a fill's jump or outgassing looks like an opening) nor falling
+   fast (the median baseline lags it). Replaces scout 1's fixed baseline wait.
+   After a top-up only readings from after the fill count — without that,
+   the flat minute before the fill made it look settled at once and the jump
+   was detected as an opening at 36 °C (in simulation, true opening 60 °C).
+   The baseline is measured fresh while settling, and no longer carried from
+   the previous run.
+2. **Upstream is a measured variable.** Each batch fits T_open against the
+   upstream pressure at each opening; the scatter left about that fit is
+   what the leak doesn't explain. In simulation with −12 K/bar and the
+   0.07 bar/min leak: slope recovered within 1.5 K/bar, scatter 0.05 K
+   against 1.5 K about the plain mean.
+3. **Optional top-up pause** (default 0.3 bar below the batch's start),
+   heater off, until the operator presses continue.
+4. **Ceiling 155 °C** (as `PRESSURE_TSP_MAX_C`, 5 K below the trip).
+5. **Start checks**: no valve temperature, no chamber reading, or (with the
+   top-up pause) no upstream reading refuses the start. A rising chamber
+   doesn't: the batch waits for it.
+
+Tried and dropped: a baseline extrapolated along the fitted trend, to
+follow a falling chamber. With the never-rise rule its noise walked it
+down, and it produced false openings (52.8 °C for a 60 °C valve). The
+limit on how fast the chamber may fall before heating does the same job
+robustly.
+
+Found on the way: a high background hides the first flow, so T_open reads
+high early in a steep pump-down (60.5-61.7 °C for 60.4 °C in simulation,
+converging as it falls). It never reads early.
+
 ## 27. Batches: repeated opening-point runs — 24 Sept 2026
 Goal: characterise the opening point against seat screw torque and upstream
 pressure, averaged over several runs. Torque is set by hand; upstream

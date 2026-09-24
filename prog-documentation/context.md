@@ -76,20 +76,24 @@ differently from this page, fix one of them. Add terms as they appear.
 | Term | Meaning |
 |---|---|
 | **Batch** | N *test runs* in one go, at one seat screw torque, to measure the *opening point* with a mean and spread. Preceded by *scout 1* and *scout 2*. Started with **start batch**, which needs the torque entered. Upstream pressure is not set by the batch: it is measured and logged (the rig leaks). |
-| **Scout 1** | First run of a batch: a *baseline* wait, then heat straight towards the *ceiling* (auto-t burst) until the valve opens. Its T_open reads high (fast heating). Not averaged. |
+| **Scout 1** | First run of a batch: *settle* (at least 30 s), then heat straight towards the *ceiling* (auto-t burst) until the valve opens. Its T_open reads high (fast heating). Not averaged. |
 | **Scout 2** | Second run: starts 10 K below scout 1's T_open, then *creeps*. Sets the start of every test run. Not averaged. If it opens during its approach (before creeping), it is repeated 10 K lower as `scout2b`, `scout2c` (three tries in all). |
 | **Test run** | A run that counts: starts 5 K below scout 2's T_open (fixed for the batch), then creeps. Numbered 1 to N; scouts are not counted. A test run that doesn't open still uses its slot and is left out of the averages. |
+| **Settle** | Batch phase before every run, heater off: wait until the chamber pressure, fitted over the last 60 s, is neither rising faster than 0.01 dec/min (≈ 2 %/min) nor falling faster than 0.03 dec/min (≈ 7 %/min). A rise (a top-up, outgassing) would look like an opening; a fast fall makes the baseline lag and detection late. After a top-up, only readings from after the fill count. Not settled in 30 min: the batch stops. |
+| **Top-up** | Batch phase (optional, set at start; default 0.3 bar): before a run, if upstream has fallen that far below its value at the batch start, the batch waits, heater off, for the operator to top up and press **continue**. Then it settles. |
 | **Approach** | Batch phase: heating (auto-t) to the run's start temperature. |
 | **Creep** | Batch phase: the auto-t setpoint rises at 3 °C/min from the start temperature until *detection*. (auto-p's seek also creeps, at its own rate.) |
 | **Detection** | The chamber pressure, filtered, rises 0.05 decades above the *baseline* (the same rule as auto-p). The heater is disarmed at once. |
 | **T_open** | A batch's measurement of the opening point: the valve temperature at the *onset*, i.e. the last moment before detection when the chamber pressure was still at the baseline (best guess, backdated). **T_detect** is the valve temperature at detection. |
-| **Ceiling** | 150 °C. A run whose valve hasn't opened by then (held there 60 s) is *no opening*. |
+| **Ceiling** | 155 °C, 5 K below the trip (was 150: 0.45 N·m opens near it, and detection needs a few K above the opening). A run whose valve hasn't been detected open by then (held there 60 s) is *no opening*. |
 | **Cooldown** | Batch phase after detection, heater disarmed: until the valve temperature is 20 K below the run's T_open (but not below 28 °C) and the chamber is back at its baseline (within 0.025 decades, ≈ 6 %). Then the next run starts. |
 | **Free-cooling closing** | During cooldown, where the chamber pressure falls back below the opening threshold. Indicative only: the valve is cooling freely, not in steps. |
 | **Flow e-fold (batch)** | Fitted from onset to detection: K per e-fold of the chamber pressure's rise above baseline. Blank with too few points. |
 | **Heater energy** | Energy delivered from the start of the approach, J: sum of gate ON time × full power. Logged at onset and at detection. |
+| **Detection sensitivity** | Detection and onset are relative to the chamber pressure: a high background (early in a pump-down) hides the first flow, so T_open reads a little high then. The baseline is logged per run. |
 | **Abort** | Ends the batch at once: heater disarmed, the current run kept but marked *aborted*. By the **abort batch** button, an operator disarm, a trip, or closing the driver. No resume. |
-| **Stop** | The batch ends itself: scout 1 or 2 did not open, scout 2 opened before creeping three times, two test runs in a row did not open, or a cooldown took over 30 min. |
+| **Stop** | The batch ends itself: scout 1 or 2 did not open, scout 2 opened before creeping three times, two test runs in a row did not open, or a cooldown or a settle took over 30 min. |
+| **T_open vs upstream** | The rig leaks, so each run opens at a different upstream pressure. Each batch fits T_open against upstream (slope K/bar, its standard error, and the scatter left over), from ≥ 3 test runs spanning ≥ 0.05 bar. |
 | **Opening map** | `logs/TE-valve-opening-map.xlsx`. Sheet *Runs*: a row per run as it finishes. Sheet *Batches*: a row of averages per batch. |
 
 ## Logs
@@ -97,7 +101,7 @@ differently from this page, fix one of them. Add terms as they appear.
 | Term | Meaning |
 |---|---|
 | **Main log** | `logs/te-sensor_<time>.csv`, one row every 0.5 s. Columns in `driver/schema.py`. |
-| **Batch folder** | `logs/batches/<date>_<time>_<torque>Nm_<upstream>bar/`: `scout1.csv`, `scout2.csv`, `testrun01.csv`… (main-log columns, one file per run), `summary.csv` (a row per run), `batch.json` (settings and results) and `batch.png`. |
+| **Batch folder** | `logs/batches/<date>_<time>_<torque>Nm_<upstream>bar/`: `scout1.csv`, `scout2.csv`, `testrun01.csv`… (main-log columns, one file per run, from settle to the end of cooldown), `summary.csv` (a row per run), `batch.json` (settings and results) and `batch.png`. |
 | **Switching log** | `logs/te-sensor_<time>_pwm.csv`, one row per gate edge. |
 | **P20** | Upstream pressure referred to 20 °C using the Keller chip temperature. Not charted or used by the plotter any more (see entry 5 in [software-history-log.md](software-history-log.md)); shown in the text readout with a warning. |
 | **Golden record** | `tests/golden/control_trace.json.gz`: the control law's recorded behaviour. Tests require an exact match. |

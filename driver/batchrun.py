@@ -1,9 +1,11 @@
 """Runs a batch: its thread, its files, and its heater commands. The logic
 is in batch.py; this module adds the clock, the threads and the I/O.
 
-    start(n_tests, main_log="") -> (ok, message)   GUI: start batch
+    start(n_tests, main_log="", topup_drop_bar=None) -> (ok, message)
+                                                   GUI: start batch
     abort(reason)                                  GUI: abort batch, or closing
-    running() / status() / labels()                for the window and the log rows
+    resume()                                       GUI: continue after a top-up
+    running() / paused() / status() / labels()     for the window and the log rows
     record_row(row)                                logger: a main-log row was written
     tick()                                         one step (the thread; tests)
 
@@ -45,6 +47,12 @@ def running():
         return _b is not None and _b['state'] == batch.RUNNING
 
 
+def paused():
+    """Waiting for the operator to top up upstream?"""
+    with _lock:
+        return running() and _b['phase'] == batch.TOPUP
+
+
 def status():
     """One line for the window, or None if no batch has run this session."""
     with _lock:
@@ -69,19 +77,45 @@ def _settings():
     return {n: getattr(config, n) for n in sorted(names)}
 
 
-def start(n_tests, main_log="", start_thread=True):
-    """Start a batch of n_tests test runs. Refused without a seat screw
-    torque, while one is running, or while the heater is armed."""
-    global _b, _folder, _name, _thread, _summaries
+def start_problem(n_tests=1, topup_drop_bar=None):
+    """Why a batch can't start now, or None. A rising chamber is not a
+    reason: the batch waits for it to settle."""
     torque = shared.seat_screw_torque()
     if torque is None:
-        return False, "Batch not started — enter the seat screw torque first"
+        return "enter the seat screw torque first"
     if running():
-        return False, "Batch not started — one is already running"
+        return "one is already running"
     if control.snapshot()['armed']:
-        return False, "Batch not started — disarm the heater first; the batch arms it itself"
+        return "disarm the heater first; the batch arms it itself"
     if not 1 <= n_tests <= config.BATCH_TEST_RUNS_MAX:
-        return False, f"Batch not started — test runs must be 1 to {config.BATCH_TEST_RUNS_MAX}"
+        return f"test runs must be 1 to {config.BATCH_TEST_RUNS_MAX}"
+    r = shared.latest()
+    if r['te_temperature_degC'] is None:
+        return "no valve temperature — check the thermocouple"
+    if r['vacuum_chamber_mbar'] is None:
+        return (f"no valid chamber pressure ({r['vacuum_status'] or 'no reading'}) — "
+                f"the batch detects the opening from it")
+    if topup_drop_bar is not None and _fresh_upstream() is None:
+        return "no upstream reading — the top-up pause needs the Keller"
+    return None
+
+
+def _fresh_upstream():
+    up, t = shared.upstream()
+    if up is None or t is None or control.clock() - t > config.BATCH_UP_MAX_AGE_S:
+        return None
+    return up
+
+
+def start(n_tests, main_log="", topup_drop_bar=None, start_thread=True):
+    """Start a batch of n_tests test runs (see start_problem for refusals).
+    topup_drop_bar: pause for a top-up when upstream falls this far below
+    its value at the start; None = never."""
+    global _b, _folder, _name, _thread, _summaries
+    problem = start_problem(n_tests, topup_drop_bar)
+    if problem:
+        return False, f"Batch not started — {problem}"
+    torque = shared.seat_screw_torque()
     up, _ = shared.upstream()
     now = control.clock()
     up_txt = f"{up:.2f}bar" if up is not None else "upstream-unknown"
@@ -92,17 +126,20 @@ def start(n_tests, main_log="", start_thread=True):
         with open(os.path.join(path, "batch.json"), "w", encoding="utf-8") as f:
             json.dump(dict(batch=name, started=datetime.now().isoformat(timespec='seconds'),
                            seat_screw_torque_Nm=torque, upstream_at_start_bar=up,
-                           test_runs=n_tests, main_log=main_log, settings=_settings()),
+                           test_runs=n_tests, topup_drop_bar=topup_drop_bar,
+                           main_log=main_log, settings=_settings()),
                       f, indent=2)
     except OSError as e:
         return False, f"Batch not started — can't create {path}: {e}"
     with _lock:
-        _b = batch.new_batch(n_tests, torque, now)
+        _b = batch.new_batch(n_tests, torque, now, topup_drop_bar)
         _folder, _name, _summaries = path, name, []
         _files.clear()
         _rows.clear()
+    topup = (f", pause for a top-up {topup_drop_bar:g} bar below the start"
+             if topup_drop_bar is not None else "")
     log_event(f"Batch started: {n_tests} test runs at {torque:.2f} N·m, upstream "
-              f"{'%.3f bar' % up if up is not None else 'not read'} (measured) — {path}")
+              f"{'%.3f bar' % up if up is not None else 'not read'} (measured){topup} — {path}")
     if start_thread:
         _thread = threading.Thread(target=_loop, daemon=True, name="batch")
         _thread.start()
@@ -127,11 +164,13 @@ def tick():
     """One batch step on the current readings."""
     r = shared.latest()
     h = control.snapshot()
+    up, up_t = shared.upstream()
     with _lock:
         if _b is None or _b['state'] != batch.RUNNING:
             return
         cmds, msgs, events = batch.step(_b, control.clock(), r['te_temperature_degC'],
-                                        r['vacuum_chamber_mbar'], r['vacuum_status'], h)
+                                        r['vacuum_chamber_mbar'], r['vacuum_status'], h,
+                                        p_up=up, p_up_t=up_t)
     _apply(cmds, msgs, events)
 
 
@@ -141,6 +180,16 @@ def abort(reason):
             return
         cmds, msgs, events = batch.abort(_b, control.clock(), reason)
     _apply(cmds, msgs, events)
+
+
+def resume():
+    """The operator has topped up: carry on."""
+    with _lock:
+        if _b is None:
+            return
+        msgs = batch.resume(_b, control.clock())
+    for m in msgs:
+        log_event(m)
 
 
 def _apply(cmds, msgs, events):

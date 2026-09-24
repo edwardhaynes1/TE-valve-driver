@@ -68,7 +68,7 @@ def test_heater_disarmed_at_detection_and_rearmed_per_run():
         seen.append((b['run']['name'], b['phase'], rig.h['armed'], rig.h['armed_at']))
     rig = Rig(open_c=60.0)
     rig.run_batch(n_tests=2, hook=hook)
-    assert not any(armed for _, phase, armed, _ in seen if phase in ('baseline', 'cooldown'))
+    assert not any(armed for _, phase, armed, _ in seen if phase in ('settle', 'cooldown'))
     arm_times = {name: at for name, phase, armed, at in seen if armed}
     assert len(arm_times) == 4 and len(set(arm_times.values())) == 4   # a fresh 60 min each
 
@@ -101,7 +101,8 @@ def test_labels_for_the_log():
     rig = Rig(open_c=60.0)
     phases = set()
     rig.run_batch(n_tests=1, hook=lambda r, b: phases.add(batch.labels(b)))
-    assert ('scout1', 'baseline') in phases and ('testrun01', 'creep') in phases
+    assert ('scout1', 'settle') in phases and ('scout2', 'settle') in phases
+    assert ('scout1', 'baseline') not in phases and ('testrun01', 'creep') in phases
     assert ('scout2', 'cooldown') in phases
     assert {r['batch_run'] for _, r in rig.rows} >= {'scout1', 'scout2', 'testrun01'}
 
@@ -300,7 +301,13 @@ def batch_dirs(tmp_path, monkeypatch):
     return tmp_path
 
 
+def sensors():
+    shared.store_valve_temp(25.0, 0)
+    shared.store_vacuum(1e-6, None, 1.7)
+
+
 def test_start_is_refused_without_a_torque_or_while_armed(batch_dirs):
+    sensors()
     ok, msg = batchrun.start(3, start_thread=False)
     assert not ok and "torque" in msg
     shared.set_seat_screw_torque(0.3)
@@ -313,6 +320,7 @@ def test_files_workbook_and_plot(batch_dirs, clock):
     openpyxl = pytest.importorskip("openpyxl")
     shared.set_seat_screw_torque(0.3)
     shared.store_keller(3.1, None, clock.t)
+    sensors()
     ok, name = batchrun.start(2, main_log="te-sensor_x.csv", start_thread=False)
     assert ok and name.endswith("_0.30Nm_3.10bar")
     drive(clock, Rig(open_c=60.0))
@@ -321,7 +329,7 @@ def test_files_workbook_and_plot(batch_dirs, clock):
         "scout1.csv", "scout2.csv", "testrun01.csv", "testrun02.csv", "summary.csv", "batch.json"}
     rows = list(csv.DictReader(open(folder / "testrun01.csv", encoding="utf-8")))
     assert rows and tuple(rows[0]) == schema.MAIN
-    assert {r['batch_phase'] for r in rows} == {'approach', 'creep', 'cooldown'}
+    assert {r['batch_phase'] for r in rows} == {'settle', 'approach', 'creep', 'cooldown'}
     summary = list(csv.DictReader(open(folder / "summary.csv", encoding="utf-8")))
     assert [r['run'] for r in summary] == ['scout1', 'scout2', 'testrun01', 'testrun02']
     assert all(float(r['energy_at_open_J']) > 0 for r in summary[2:])
@@ -350,6 +358,7 @@ def test_files_workbook_and_plot(batch_dirs, clock):
 
 def test_abort_keeps_what_was_done(batch_dirs, clock):
     shared.set_seat_screw_torque(0.3)
+    sensors()
     ok, _ = batchrun.start(3, start_thread=False)
     rig = Rig(open_c=60.0)
     for _ in range(2000):                   # into scout 1's heating
@@ -379,7 +388,8 @@ def test_the_logger_labels_rows_and_copies_them(batch_dirs, monkeypatch):
     monkeypatch.setattr(logfile, "PWM_LOG_FILE", str(batch_dirs / "t_pwm.csv"))
     monkeypatch.setattr(logfile, "LOG_INTERVAL_S", 0.1)
     shared.set_seat_screw_torque(0.3)
-    batchrun.start(2, start_thread=False)
+    sensors()
+    assert batchrun.start(2, start_thread=False)[0]
     batchrun.tick()                          # scout1 begins: its file opens
     th = threading.Thread(target=logfile.logger_thread, daemon=True)
     th.start()
@@ -387,6 +397,114 @@ def test_the_logger_labels_rows_and_copies_them(batch_dirs, monkeypatch):
     shared.stop.set()
     th.join(timeout=3)
     main = list(csv.DictReader(open(batch_dirs / "t.csv", encoding="utf-8")))
-    assert main[1]['batch_run'] == 'scout1' and main[1]['batch_phase'] == 'baseline'
+    assert main[1]['batch_run'] == 'scout1' and main[1]['batch_phase'] == 'settle'
     run = list(csv.DictReader(open(Path(batchrun.folder()) / "scout1.csv", encoding="utf-8")))
     assert len(run) >= 3 and run[0]['batch_run'] == 'scout1'
+
+
+# ── the real rig: settling, top-ups, the leak, the ceiling ─────────────────
+
+def test_waits_for_a_rising_chamber_before_heating():
+    # The chamber rises for the first 3 min (say, after filling upstream).
+    def hook(rig, b):
+        rig.base = 5e-7 * (1 + min(rig.now - rig.t_start, 180) / 180)
+    rig = Rig(open_c=60.0)
+    rig.t_start = rig.now
+    armed = []
+    b, _ = rig.run_batch(n_tests=1, hook=lambda r, b: (hook(r, b), armed.append((r.now, r.h['armed'])))[0])
+    first = next(t for t, a in armed if a) - rig.t_start
+    assert first >= 180                                # not while it was rising
+    assert b['state'] == batch.COMPLETE and b['runs'][0]['opened_during'] is not None
+
+
+def test_a_falling_chamber_does_not_hold_it_up():
+    # A pump-down tail 50 % above base, τ 10 min (~7 %/min: far steeper than the
+    # 1.5 %/min on 24 Sept). It completes; T_open is never read early; it reads
+    # a little high while the background hides the first flow, converging as
+    # the tail falls (the baseline is logged per run, so this shows in the data).
+    rig = Rig(open_c=60.0, pump_tail=0.5)
+    b, _ = rig.run_batch(n_tests=3)
+    assert b['state'] == batch.COMPLETE
+    t = [r['T_onset'] for r in b['runs'] if r['counts']]
+    assert all(60.0 <= v <= 62.0 for v in t) and t[-1] <= t[0]
+
+
+def test_a_chamber_that_never_settles_stops_it():
+    def hook(rig, b):
+        rig.base *= 1.0005                               # rising ~7 %/min, forever
+    rig = Rig(open_c=60.0)
+    b, _ = rig.run_batch(n_tests=1, hook=hook)
+    assert b['state'] == batch.STOPPED and "not settled" in b['note']
+    assert not rig.h['armed']
+
+
+def test_top_up_pause_and_the_chamber_jump_after_filling():
+    # Leaks 0.07 bar/min; the operator tops up when asked; filling makes the
+    # chamber jump 70 % (as on 24 Sept) — the batch waits it out.
+    rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60, fill_jump=0.7)
+    phases = []
+    b, msgs = rig.run_batch(n_tests=4, topup_drop=0.3,
+                            hook=lambda r, b: phases.append((b['phase'], r.h['armed'])))
+    assert b['state'] == batch.COMPLETE and b['top_ups'] >= 1 and rig.fills == b['top_ups']
+    assert not any(armed for phase, armed in phases if phase in (batch.TOPUP, batch.SETTLE))
+    # no false openings from the jump: every test run opened while creeping, near 60 °C
+    tests = [r for r in b['runs'] if r['counts']]
+    assert all(r['opened_during'] == batch.CREEP and 60.0 <= r['T_onset'] <= 61.5 for r in tests)
+    assert any("PAUSED for a top-up" in m for m in msgs)
+
+
+def test_no_top_up_pause_unless_asked():
+    rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60)
+    b, _ = rig.run_batch(n_tests=3)
+    assert b['state'] == batch.COMPLETE and b['top_ups'] == 0
+
+
+def test_the_leak_becomes_a_fit_against_upstream():
+    # The opening point moves −12 K/bar; the leak spreads the runs over upstream.
+    rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60, k_up=-12.0)
+    b, _ = rig.run_batch(n_tests=6)
+    s = summaries(rig, b)
+    row = batch.batch_summary(b, s)
+    assert row['t_open_vs_upstream_K_per_bar'] == pytest.approx(-12.0, abs=1.5)
+    assert row['t_open_resid_std_K'] < 0.5 < row['t_open_std_K']   # the leak explains the scatter
+
+
+def test_upstream_fit_needs_three_runs_and_some_spread():
+    assert batch.upstream_fit([(3.0, 60.0), (2.9, 61.0)]) is None
+    assert batch.upstream_fit([(3.0, 60.0), (3.01, 61.0), (3.02, 60.5)]) is None
+    slope, se, resid = batch.upstream_fit([(3.0, 60.0), (2.8, 62.4), (2.6, 64.8), (2.4, 67.2)])
+    assert slope == pytest.approx(-12.0) and resid == pytest.approx(0.0, abs=1e-9)
+
+
+def test_ceiling_is_5_K_below_the_trip():
+    assert config.BATCH_CEILING_C == config.TEMP_TRIP_C - 5.0
+
+
+def test_opening_at_150_is_reached():
+    # 0.45 N·m at low upstream (21 Sept): ~150 °C. Detection needs ~12 % of
+    # flow, a few K above the opening point, so the old 150 °C ceiling failed.
+    rig = Rig(open_c=150.0)
+    b, _ = rig.run_batch(n_tests=1)
+    assert b['state'] == batch.COMPLETE
+    assert max(r['T_onset'] for r in b['runs']) < config.TEMP_TRIP_C
+
+
+@pytest.mark.parametrize("missing", ["tc", "gauge"])
+def test_start_is_refused_without_the_sensors(batch_dirs, missing):
+    shared.set_seat_screw_torque(0.3)
+    if missing != "tc":
+        shared.store_valve_temp(25.0, 0)
+    if missing != "gauge":
+        shared.store_vacuum(1e-6, None, 1.7)
+    ok, msg = batchrun.start(3, start_thread=False)
+    assert not ok and ("thermocouple" in msg if missing == "tc" else "chamber" in msg)
+
+
+def test_top_up_needs_the_keller(batch_dirs):
+    shared.set_seat_screw_torque(0.3)
+    shared.store_valve_temp(25.0, 0)
+    shared.store_vacuum(1e-6, None, 1.7)
+    ok, msg = batchrun.start(3, topup_drop_bar=0.3, start_thread=False)
+    assert not ok and "Keller" in msg
+    ok, _ = batchrun.start(3, start_thread=False)          # without top-up: fine
+    assert ok

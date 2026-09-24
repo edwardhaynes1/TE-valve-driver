@@ -37,7 +37,9 @@ top of every run; anything it cannot match is skipped rather than fatal.
 Batches: give a batch folder (or pick its summary.csv) for the batch view:
 every run's chamber pressure against valve temperature and against time
 since its onset, test runs coloured and scouts grey, the average of the
-test runs in black, and the mean T_open with a ±1σ band. The driver draws
+test runs in black, and the mean T_open with a ±1σ band; and T_open against
+the measured upstream pressure, with a straight-line fit (the rig leaks, so
+each run opens at a different upstream pressure). The driver draws
 this into the folder as batch.png when a batch ends.
 
 Usage:
@@ -868,8 +870,21 @@ def batch_average_vs_time(summary, traces, step=0.5):
     return grid, 10 ** mean
 
 
+def upstream_fit(up, t_open):
+    """(slope K/bar, intercept) of T_open against upstream, or None (fewer
+    than 3 runs, or under 0.05 bar of spread). driver/batch.py fits the same
+    for the Batches sheet."""
+    ok = up.notna() & t_open.notna()
+    u, t = up[ok].to_numpy(float), t_open[ok].to_numpy(float)
+    if len(u) < 3 or u.max() - u.min() < 0.05:
+        return None
+    slope, intercept = np.polyfit(u, t, 1)
+    return slope, intercept
+
+
 def make_batch_figure(summary, traces, title):
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(19, 6),
+                                        gridspec_kw={"width_ratios": [1.2, 1.2, 0.8]})
     avg = summary[summary["in_average"] == 1]
     t_open = pd.to_numeric(avg["t_open_degC"], errors="coerce").dropna()
     colours = plt.rcParams["axes.prop_cycle"].by_key()["color"]
@@ -883,7 +898,7 @@ def make_batch_figure(summary, traces, title):
         k += 0 if scout else 1
         lw, alpha = (1.0, 0.7) if scout else (1.3, 0.9)
         label = f"{r['run']}" + ("" if r["status"] == "opened" else f" ({r['status']})")
-        heat = d[d["phase"].isin(["baseline", "approach", "creep"])]
+        heat = d[d["phase"].isin(["baseline", "settle", "approach", "creep"])]
         cool = d[d["phase"] == "cooldown"]
         ax1.plot(heat["T"], heat["p"], color=colour, lw=lw, alpha=alpha, label=label)
         ax1.plot(cool["T"], cool["p"], color=colour, lw=0.8, alpha=0.4, ls=":")
@@ -905,6 +920,23 @@ def make_batch_figure(summary, traces, title):
         if sd:
             ax1.axvspan(m - sd, m + sd, color="black", alpha=0.08)
     ax2.axvline(0, color="black", ls="--", lw=1.2)
+
+    # T_open against the measured upstream pressure
+    up = pd.to_numeric(summary["upstream_at_open_bar"], errors="coerce")
+    to = pd.to_numeric(summary["t_open_degC"], errors="coerce")
+    test = summary["in_average"] == 1
+    ax3.scatter(up[~test], to[~test], color="0.6", s=25, label="scouts / not averaged")
+    ax3.scatter(up[test], to[test], color="black", s=30, zorder=3, label="test runs")
+    fit = upstream_fit(up[test], to[test])
+    if fit:
+        xs = np.linspace(up[test].min(), up[test].max(), 2)
+        ax3.plot(xs, fit[1] + fit[0] * xs, color="black", lw=1.2,
+                 label=f"fit: {fit[0]:+.1f} K/bar")
+    ax3.set_xlabel("upstream pressure at the onset (bar abs)")
+    ax3.set_ylabel("T_open (°C)")
+    ax3.set_title("opening point vs upstream")
+    ax3.grid(True, alpha=0.3)
+    ax3.legend(fontsize=8)
     for ax in (ax1, ax2):
         ax.set_yscale("log")
         ax.set_ylabel("chamber pressure (mbar)")
