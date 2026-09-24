@@ -4,6 +4,47 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 30. Batches remember the opening point, stop when precise, and start cold — 24 Sept 2026
+Asked for: remember T_open so the driver has it as its baseline (and finds
+it again if it moves), and make batches as short as possible while the
+result stays meaningful. Agreed one question at a time; the reasons:
+
+* **Remembered opening point** (`logs/opening-points.json`, data, not a
+  `config.py` edit). Used by batches and by auto-p, ahead of the
+  `SEAT_SCREW_VALVE` guesses; this session's learned point still comes
+  first for auto-p. The driver can't tell whether the screw was re-torqued,
+  even to the same value, so **start batch** asks. No expiry by age: an
+  untouched valve keeps its opening point, and the find-again rule catches
+  drift. Only a value measured at the batch's own creep rate is used,
+  because the TC lag is part of every T_open.
+* **Stop when precise enough**: ±1 K at 95 % on the mean, from ≥ 3 test
+  runs (N is now a maximum). ±1 K is about the shift from 0.1 bar of
+  upstream pressure, and far below the torque effects being mapped.
+  Correcting each run to the mean upstream pressure only removes
+  leak-induced scatter; it can't bias the mean, so an assumed slope is
+  harmless.
+* **Adaptive margin** (3 × scatter + 0.5 K, 2-5 K) instead of a fixed 5 K:
+  each kelvin costs 20 s of creep per run.
+* **Deep cooldown and a hold** (35 °C, or T_open − 20 K if lower, not below
+  28 °C; auto-t holds it 4 min). A shallow cooldown was proposed to save
+  time and rejected: the valve has memory (friction and seat hysteresis,
+  and it opened at 158 °C on a first heat-up but 140-148 °C on re-heats at
+  0.45 N·m), so a 5 K cycle would give a precise number for a state the
+  valve won't be in when used. Starting cold matches the use case. The hold
+  is needed because the TC reaches 35 °C long before the body does (lag
+  150-250 s). Depth and hold time are settings (`BATCH_COOL_*`,
+  `BATCH_HOLD_S`), stored with every result, so a deep-vs-shallow check is
+  a one-line change.
+* **Detection on an absolute rise too** (1e-7 mbar or +12 %, whichever
+  first, floor 0.02 decades): "open" then means a throughput, not a
+  percentage of whatever the background is. auto-p is unchanged.
+* **Creep rate stays 3 °C/min**: faster saves little now the margin is
+  small, and it doubles the lag.
+* **Not now:** a quasi-static step-and-dwell mode (true T_open, T_close and
+  hysteresis without the lag), and re-deriving the free-cooling "closing"
+  temperature, which the lag inflates: after a disarm at ~146 °C the TC
+  falls ~1 °C/s and reads far below the body. It stays labelled indicative.
+
 ## 29. No settling wait when the chamber is already settled — 24 Sept 2026
 Settling waited ~50 s at the start of every batch, because the batch began
 with no chamber readings and the trend needs most of a minute; and ~50 s
