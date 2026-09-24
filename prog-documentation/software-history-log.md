@@ -4,6 +4,17 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 29. No settling wait when the chamber is already settled — 24 Sept 2026
+Settling waited ~50 s at the start of every batch, because the batch began
+with no chamber readings and the trend needs most of a minute; and ~50 s
+after every **continue**, because "after the fill" meant "after continue".
+Both waits were pointless on a settled chamber. The driver now keeps its
+last 5 min of chamber readings with their times (`shared.vacuum_history`),
+and a batch starts from them. During the top-up pause the batch watches
+the upstream pressure: once it has risen 0.05 bar above its lowest, the
+last moment it was still rising is the fill, and the chamber is judged
+from then (from continue if no fill was seen, e.g. the Keller is off).
+
 ## 28. Batches made for the real rig — 24 Sept 2026
 Two logs from 24 Sept 2026 (0.45 N·m) showed what a batch has to live with:
 te-sensor_20260924_155503 (an opening at ~146 °C, 2.7 bar) and

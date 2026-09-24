@@ -12,7 +12,7 @@ are private, so the locking rules live in this file only.
                                   clear_labjack, push_power, set_health,
                                   store_heater_output, clear_heater_output
     anyone reads:                 latest, upstream, charts, recent_events,
-                                  health, heater_output
+                                  health, heater_output, vacuum_history
     the logger takes:             take_log_readings, take_events,
                                   put_back_events, take_edges, put_back_edges
     the operator enters:          set_seat_screw_torque (read: seat_screw_torque)
@@ -77,6 +77,7 @@ _readings = _fresh_readings()
 _output = _fresh_output()
 _seat_screw_nm = None             # seat screw torque as entered; None = not recorded
 _charts = _fresh_charts()
+_vac_hist = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)   # (time, mbar), valid readings
 _events = deque(maxlen=200)       # (timestamp, text) for the GUI
 _events_pending = []              # texts not yet written to the CSV
 _edges_pending = []               # gate-edge rows not yet written to the _pwm CSV
@@ -108,12 +109,16 @@ def clear_keller():
         _readings['keller_pressure_bar'] = None
 
 
-def store_vacuum(mbar, status, gauge_v):
+def store_vacuum(mbar, status, gauge_v, when=None):
+    """One gauge read. `when` (the reading's time) also keeps it in the timed
+    history a batch starts from (vacuum_history)."""
     with _lock:
         _readings['vacuum_chamber_mbar'] = mbar
         _readings['vacuum_status'] = status
         _readings['vacuum_gauge_V'] = gauge_v
         _charts['vacuum'].append(mbar)
+        if when is not None and mbar is not None and mbar > 0:
+            _vac_hist.append((when, mbar))
 
 
 def store_valve_temp(temp, fault):
@@ -209,6 +214,12 @@ def upstream():
     """(latest upstream pressure in bar, time it was read) — either may be None."""
     with _lock:
         return _readings['keller_pressure_bar'], _readings['keller_pressure_t']
+
+
+def vacuum_history():
+    """[(time, mbar)] of the valid chamber readings, the last CHART_SECONDS."""
+    with _lock:
+        return list(_vac_hist)
 
 
 def charts():
@@ -334,6 +345,7 @@ def reset():
         _readings = _fresh_readings()
         _output.update(_fresh_output())
         _charts = _fresh_charts()
+        _vac_hist.clear()
         _events.clear()
         _events_pending.clear()
         _edges_pending.clear()

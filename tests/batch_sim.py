@@ -93,12 +93,24 @@ class Rig:
     def command(self, cmd):
         controller.command(self.h, self.now, **cmd)
 
+    def idle(self, seconds, dt=0.25):
+        """Heater off for a while (as before a batch); returns the chamber
+        readings as the driver keeps them: [(time, mbar)]."""
+        hist = []
+        for _ in range(int(seconds / dt)):
+            self.duty = 0.0
+            self.advance(dt)
+            hist.append((self.now, self.vac()[0]))
+        return hist
+
     def run_batch(self, n_tests=3, torque=0.3, max_s=6 * 3600, dt=0.25, hook=None,
-                  topup_drop=None, topup_after_s=20.0):
+                  topup_drop=None, topup_after_s=20.0, continue_after_s=None, history=()):
         """Run a whole batch; returns (b, all messages). With topup_drop, the
         'operator' tops up topup_after_s after a pause, and presses continue
-        at once — so the chamber is still jumping when the run resumes."""
-        b = batch.new_batch(n_tests, torque, self.now, topup_drop)
+        at once — so the chamber is still jumping when the run resumes — or
+        continue_after_s after the pause began. history: readings from before."""
+        b = batch.new_batch(n_tests, torque, self.now, topup_drop, history)
+        cont = topup_after_s if continue_after_s is None else continue_after_s
         paused_at = None
         msgs_all, self.events = [], []
         while b['state'] == batch.RUNNING and self.now - b['started'] < max_s:
@@ -107,8 +119,9 @@ class Rig:
                                             p_up=self.upstream, p_up_t=self.now)
             if b['phase'] == batch.TOPUP:
                 paused_at = paused_at or self.now
-                if self.now - paused_at >= topup_after_s:
+                if self.now - paused_at >= topup_after_s and self.upstream < self.up_full:
                     self.fill()
+                if self.now - paused_at >= cont and self.upstream >= self.up_full - 0.01:
                     msgs += batch.resume(b, self.now)
                     paused_at = None
             for c in cmds:

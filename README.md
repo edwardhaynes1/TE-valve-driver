@@ -53,12 +53,15 @@ press **start batch**. It asks you to confirm the torque and shows the
 measured upstream pressure; then it runs by itself. Before every run it
 **settles**, heater off, until the chamber pressure is neither rising nor
 falling fast (a top-up's jump or outgassing would look like an opening).
+If it already is, there is no wait: the batch starts from the driver's
+recent readings, and after a top-up judges the chamber from when the
+upstream pressure stopped rising.
 If upstream has fallen by the top-up limit, it pauses before the next run:
 top up and press **continue**.
 
 | Run | What it does |
 |---|---|
-| **scout 1** | Settles (at least 30 s), then heats towards 155 °C until the valve opens. Fast, so it reads high. |
+| **scout 1** | Settles, then heats towards 155 °C until the valve opens. Fast, so it reads high. |
 | **scout 2** | Creeps at 3 °C/min from 10 K below scout 1's reading. If it opens before it could creep, it repeats 10 K lower (`scout2b`, …). |
 | **test runs 1 … N** | Creep at 3 °C/min from 5 K below scout 2's reading. Only these are averaged. |
 

@@ -29,7 +29,7 @@ except ImportError:
     print("Warning: LabJackPython not installed — vacuum gauge and thermocouple disabled.")
     print("Install: pip install LabJackPython")
 
-from . import shared, thermocouple
+from . import control, shared, thermocouple
 from .config import (
     HEATER_FIO, HEATER_I_AIN, HEATER_I_OFFSET, HEATER_I_SCALE,
     HEATER_PWM_PERIOD_S, HEATER_SENSE_TICKS, HEATER_TICK_HZ, HEATER_V_AIN,
@@ -332,7 +332,7 @@ class _Session:
                 elif self.vac_status != "startup":
                     log_event("Vacuum gauge back in range")
                 self.vac_status = status
-            shared.store_vacuum(mbar, status, raw * VACUUM_DIVIDER_RATIO)
+            shared.store_vacuum(mbar, status, raw * VACUUM_DIVIDER_RATIO, control.clock())
             self.bad_vac_reads = 0 if mbar is not None else self.bad_vac_reads + 1
             shared.set_health(labjack=True)
         except Exception as e:

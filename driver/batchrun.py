@@ -132,7 +132,8 @@ def start(n_tests, main_log="", topup_drop_bar=None, start_thread=True):
     except OSError as e:
         return False, f"Batch not started — can't create {path}: {e}"
     with _lock:
-        _b = batch.new_batch(n_tests, torque, now, topup_drop_bar)
+        _b = batch.new_batch(n_tests, torque, now, topup_drop_bar,
+                             history=shared.vacuum_history())
         _folder, _name, _summaries = path, name, []
         _files.clear()
         _rows.clear()

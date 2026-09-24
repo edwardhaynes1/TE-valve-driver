@@ -19,10 +19,13 @@ threads, clock, files or hardware (like controller.py). See context.md,
 
 A run: settle (heater off, until the chamber isn't rising) → approach
 (auto-t to the start temperature) → creep (setpoint up at BATCH_CREEP_C_MIN)
-→ detection (heater disarmed) → cooldown. Scout 1 settles at least
-BATCH_BASELINE_S and heats straight towards the ceiling instead. With a
-top-up limit set, a run whose upstream pressure has fallen that far waits in
-top-up (heater off) until resume().
+→ detection (heater disarmed) → cooldown. Scout 1 heats straight towards
+the ceiling instead. Settling takes no time if the chamber is already
+settled: the batch starts with the driver's recent chamber readings, and
+between runs it has its own. With a top-up limit set, a run whose upstream
+pressure has fallen that far waits in top-up (heater off) until resume();
+the chamber is then judged from when the upstream pressure stopped rising
+(the fill), or from resume() if no fill was seen.
 """
 
 import math
@@ -31,13 +34,13 @@ from collections import deque
 from datetime import datetime
 
 from .config import (
-    BATCH_BASELINE_S, BATCH_CEILING_C, BATCH_CEILING_HOLD_S, BATCH_COOL_BELOW_K,
+    BATCH_CEILING_C, BATCH_CEILING_HOLD_S, BATCH_COOL_BELOW_K,
     BATCH_COOL_MAX_S, BATCH_COOL_MIN_C, BATCH_CREEP_C_MIN, BATCH_MAX_FAILS,
     BATCH_ONSET_DEC, BATCH_RECOVER_DEC, BATCH_SETTLE_MAX_FALL_DEC_MIN,
     BATCH_SETTLE_MAX_RISE_DEC_MIN, BATCH_SETTLE_MAX_S,
     BATCH_SETTLE_WINDOW_S, BATCH_UP_FIT_MIN_SPREAD_BAR, BATCH_UP_MAX_AGE_S, BATCH_SCOUT2_BELOW_K, BATCH_SCOUT2_TRIES,
     BATCH_START_BAND_K,
-    BATCH_TEST_BELOW_K, LABJACK_SAMPLE_HZ, PRESSURE_BAD_READS_TO_TRIP,
+    BATCH_TEST_BELOW_K, BATCH_FILL_RISE_BAR, LABJACK_SAMPLE_HZ, PRESSURE_BAD_READS_TO_TRIP,
     PRESSURE_BASE_GUARD_S, PRESSURE_BASE_MIN_S, PRESSURE_BASE_WINDOW_S,
     PRESSURE_FILTER_S, PRESSURE_OPEN_DEC, PRESSURE_TRIP_MBAR, VAC_HIGH_STATES,
     heater_power_w,
@@ -57,7 +60,9 @@ def run_name(index, attempt=0):
     return f"testrun{index - 1:02d}"
 
 
-def new_batch(n_tests, torque_nm, now, topup_drop_bar=None):
+def new_batch(n_tests, torque_nm, now, topup_drop_bar=None, history=()):
+    """history: [(time, mbar)] of recent chamber readings (e.g. the driver's
+    last few minutes), so an already settled chamber needs no waiting."""
     if torque_nm is None:
         raise ValueError("a batch needs the seat screw torque")
     b = dict(
@@ -65,12 +70,17 @@ def new_batch(n_tests, torque_nm, now, topup_drop_bar=None):
         topup_drop=topup_drop_bar, up=None, up_start=None, top_ups=0, trend=None,
         state=RUNNING, note="", phase=SETTLE, phase_t0=now, begun=False,
         run=None, runs=[], fails_in_row=0,
-        settle_from=None,
+        settle_from=None, fill_t=None, up_min=None, up_prev=None,
         hist=deque(maxlen=int((max(PRESSURE_BASE_WINDOW_S, BATCH_SETTLE_WINDOW_S) + 10)
                               * LABJACK_SAMPLE_HZ * 2)),
         y_filt=None, last_t=None, base=None, bad_vac=0,
         sp=None, creep_t0=None, ceiling_since=None,
     )
+    for t, mbar in history:
+        if mbar and mbar > 0 and t <= now:
+            b['hist'].append((t, math.log10(mbar)))
+    if b['hist']:
+        b['y_filt'] = b['hist'][-1][1]
     b['run'] = _new_run(b, 0, now, start_c=None)
     return b
 
@@ -116,6 +126,8 @@ def step(b, now, temp, vac, vac_status, heater, p_up=None, p_up_t=None):
     b['up'] = p_up if fresh else None
     if b['up_start'] is None and b['up'] is not None:
         b['up_start'] = b['up']
+    if b['phase'] == TOPUP and b['up'] is not None:
+        _watch_fill(b, now)
     y = math.log10(vac) if (vac is not None and vac > 0) else None
     dt = 0.0 if b['last_t'] is None else max(0.0, now - b['last_t'])
     b['last_t'] = now
@@ -127,8 +139,7 @@ def step(b, now, temp, vac, vac_status, heater, p_up=None, p_up_t=None):
     if not b['begun']:
         b['begun'] = True
         events.append(('run_start', run))
-        msgs.append(f"Batch: {run['name']} — heater off, waiting at least "
-                    f"{BATCH_BASELINE_S:g} s for the chamber to settle")
+        msgs.append(f"Batch: {run['name']} — heater off until the chamber is settled")
     _update_baseline(b, now)
     run['samples'][-1] = (now, temp, y, b['base'])      # the baseline as it stood then
     phase = b['phase']
@@ -192,8 +203,7 @@ def _settle(b, now, temp, cmds, msgs, events):
     """Heater off until the chamber isn't rising; then arm and heat."""
     run = b['run']
     b['trend'] = trend = chamber_trend(b['hist'], now, since=b['settle_from'])
-    min_s = BATCH_BASELINE_S if run['index'] == 0 else 0.0
-    if (now - b['phase_t0'] >= min_s and trend is not None
+    if (trend is not None
             and -BATCH_SETTLE_MAX_FALL_DEC_MIN <= trend <= BATCH_SETTLE_MAX_RISE_DEC_MIN
             and b['base'] is not None
             and temp is not None):
@@ -424,6 +434,7 @@ def _next_run(b, now, temp, cmds, msgs, events, repeat=False):
     up, drop = b['up'], b['topup_drop']
     if (drop is not None and up is not None and b['up_start'] is not None
             and up < b['up_start'] - drop):
+        b.update(fill_t=None, up_min=None, up_prev=None)
         _enter(b, TOPUP, now)
         msgs.append(f"Batch: PAUSED for a top-up — upstream {up:.3f} bar, "
                     f"{b['up_start'] - up:.2f} bar below the batch's start "
@@ -434,6 +445,17 @@ def _next_run(b, now, temp, cmds, msgs, events, repeat=False):
     return cmds, msgs, events
 
 
+def _watch_fill(b, now):
+    """During the top-up pause: note when the upstream pressure last rose,
+    once it has risen BATCH_FILL_RISE_BAR above its lowest (the fill)."""
+    up = b['up']
+    b['up_min'] = up if b['up_min'] is None else min(b['up_min'], up)
+    if (b['up_prev'] is not None and up > b['up_prev'] + 0.002
+            and up >= b['up_min'] + BATCH_FILL_RISE_BAR):
+        b['fill_t'] = now
+    b['up_prev'] = up
+
+
 def resume(b, now):
     """After a top-up: settle (the chamber jumps when upstream is filled),
     then carry on with the run."""
@@ -441,7 +463,9 @@ def resume(b, now):
         return []
     b['top_ups'] += 1
     b['base'] = None
-    b['settle_from'] = now          # judge the chamber only from after the fill
+    # judge the chamber only from after the fill: when upstream stopped
+    # rising, if the Keller saw it; else from now
+    b['settle_from'] = b['fill_t'] if b['fill_t'] is not None else now
     _enter(b, SETTLE, now)
     up = f"{b['up']:.3f} bar" if b['up'] is not None else "not read"
     return [f"Batch: top-up done (upstream {up}) — {b['run']['name']} waits for the "

@@ -508,3 +508,70 @@ def test_top_up_needs_the_keller(batch_dirs):
     assert not ok and "Keller" in msg
     ok, _ = batchrun.start(3, start_thread=False)          # without top-up: fine
     assert ok
+
+
+# ── no waiting when there is nothing to wait for ───────────────────────────
+
+def first_arm(rig, **kw):
+    arms = []
+    b, msgs = rig.run_batch(hook=lambda r, b: arms.append((r.now, r.h['armed'])), **kw)
+    return b, next(t for t, a in arms if a), msgs
+
+
+def test_a_settled_chamber_starts_at_once():
+    rig = Rig(open_c=60.0)
+    history = rig.idle(120)                     # the driver's readings before start
+    t0 = rig.now
+    b, armed_at, _ = first_arm(rig, n_tests=1, history=history)
+    assert armed_at - t0 < 1.0 and b['state'] == batch.COMPLETE
+
+
+def test_without_history_it_collects_a_minute_first():
+    rig = Rig(open_c=60.0)
+    t0 = rig.now
+    _, armed_at, _ = first_arm(rig, n_tests=1)
+    assert 0.8 * config.BATCH_SETTLE_WINDOW_S <= armed_at - t0 < config.BATCH_SETTLE_WINDOW_S + 5
+
+
+def test_a_rising_history_still_waits():
+    rig = Rig(open_c=60.0, fill_jump=0.7)
+    rig.fill()                                  # just filled: the chamber jumps
+    history = rig.idle(5)
+    t0 = rig.now
+    _, armed_at, _ = first_arm(rig, n_tests=1, history=history)
+    assert armed_at - t0 > 30
+
+
+def test_continue_long_after_the_fill_needs_no_wait():
+    # topped up 20 s into the pause, continue pressed 5 min later: settled by then
+    rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60, fill_jump=0.7)
+    events = []
+
+    def hook(r, b):
+        events.append((r.now, b['phase'], r.h['armed']))
+    b, msgs = rig.run_batch(n_tests=3, topup_drop=0.3, continue_after_s=300, hook=hook)
+    assert b['top_ups'] >= 1 and b['state'] == batch.COMPLETE
+    resumed = next(i for i, (t, ph, a) in enumerate(events)
+                   if ph == batch.SETTLE and events[i - 1][1] == batch.TOPUP)
+    armed = next(t for t, ph, a in events[resumed:] if a)
+    assert armed - events[resumed][0] < 1.0
+
+
+def test_continue_right_after_the_fill_waits_for_the_jump():
+    rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60, fill_jump=0.7)
+    events = []
+    b, _ = rig.run_batch(n_tests=3, topup_drop=0.3,
+                         hook=lambda r, b: events.append((r.now, b['phase'], r.h['armed'])))
+    resumed = next(i for i, (t, ph, a) in enumerate(events)
+                   if ph == batch.SETTLE and events[i - 1][1] == batch.TOPUP)
+    armed = next(t for t, ph, a in events[resumed:] if a)
+    assert armed - events[resumed][0] >= 0.8 * config.BATCH_SETTLE_WINDOW_S
+
+
+def test_the_driver_keeps_timed_chamber_readings():
+    shared.store_vacuum(1e-6, None, 1.7, 100.0)
+    shared.store_vacuum(None, config.VAC_ERROR, 0.0, 100.25)     # invalid: not kept
+    shared.store_vacuum(1.1e-6, None, 1.7)                       # no time: not kept
+    assert shared.vacuum_history() == [(100.0, 1e-6)]
+    shared.reset()
+    assert shared.vacuum_history() == []
