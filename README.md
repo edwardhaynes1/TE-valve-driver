@@ -43,6 +43,40 @@ with the 1 W flight budget dashed) and a scrolling event log.
 The heater can only add heat: auto-p can't cool the valve, so a target that
 would need that gets a warning and the minimum setpoint.
 
+### Batches: repeated opening-point runs
+
+To measure the valve's *opening point* (the valve temperature where flow
+starts) with a mean and spread, set the seat screw torque and the upstream
+pressure by hand, enter the torque, choose the number of **test runs**
+(default 5) and press **start batch**. It asks you to confirm the torque and
+shows the measured upstream pressure; then it runs by itself:
+
+| Run | What it does |
+|---|---|
+| **scout 1** | 30 s of chamber baseline, then heats towards 150 °C until the valve opens. Fast, so it reads high. |
+| **scout 2** | Creeps at 3 °C/min from 10 K below scout 1's reading. If it opens before it could creep, it repeats 10 K lower (`scout2b`, …). |
+| **test runs 1 … N** | Creep at 3 °C/min from 5 K below scout 2's reading. Only these are averaged. |
+
+The opening is detected as in auto-p (chamber pressure 0.05 decades above
+its baseline), and **T_open** is backdated to where the rise began; the
+valve temperature at detection is logged too, with the heater energy since
+the approach started and the upstream pressure. The heater is **disarmed at
+detection**, and the valve cools to 20 K below T_open (not below 28 °C) with
+the chamber back at its baseline before the next run re-arms it.
+
+A batch stops by itself if a scout doesn't open by 150 °C, if two test runs
+in a row don't, or if a cooldown takes over 30 min. **abort batch**,
+DISARM, any trip, the chamber gauge failing while heating, or closing the
+driver ends it at once. While it runs, the heater controls and the torque
+are locked.
+
+Results: a folder per batch in `logs/batches/` (each run's trace, a
+`summary.csv`, `batch.json` with the settings and results, and `batch.png`),
+and a row per run and per batch in `logs/TE-valve-opening-map.xlsx`. If the
+workbook is open in Excel, rows wait in a side file and are moved in next
+time. Settings: `BATCH_*` in `driver/config.py`. Terms:
+[context.md](prog-documentation/context.md), "Batches".
+
 ### Heater voltage, current and power
 
 By default these are *calculated* from the gate state, the 24 V rail and the
@@ -108,6 +142,10 @@ SPI lines stay free.
   with no fault), shows the valve temperature as unavailable, and sets the
   chip up again within `TC_RETRY_S` (1 s) of it answering. A heater that
   tripped meanwhile stays off until re-armed.
+- **A batch** arms the heater itself, once per run (so the 60 min limit
+  applies per run), and disarms it the moment the valve opens. While heating
+  it also stops on no valid gauge reading for 2 s or chamber pressure above
+  5e-4 mbar; DISARM or a trip aborts it.
 - A **trip latches**: press DISARM, then ARM, to clear it.
 - Disarming takes effect at the next control step, within 0.25 s.
 
@@ -138,6 +176,7 @@ screw torque not yet entered), never zero.
 py TE-VALVE-DRIVER.py              # the driver (or double-click it)
 py TE_PLOTTER.py                   # plot a log (file picker)
 py TE_PLOTTER.py logs/te-sensor_<time>.csv --no-show
+py TE_PLOTTER.py logs/batches/<batch folder>        # a batch (or pick its summary.csv)
 ```
 
 Requirements: `py -m pip install -r requirements.txt`
@@ -161,6 +200,10 @@ driver/
   labjack.py          LabJack thread: heater gate, vacuum gauge, sense inputs;
                       each tick is a few named steps (sense, read, control, drive)
   thermocouple.py     MAX31856 thermocouple chip (SPI)
+  batch.py            batch sequence: phases, detection, onset, summaries. Like
+                      controller.py: no threads, clock, files or hardware
+  batchrun.py         runs a batch: its thread, heater commands and files
+  workbook.py         the opening map (Excel), with a side file if it's locked
   logfile.py          the two CSV logs
   schema.py           CSV column names (shared with the plotter)
   shared.py           readings, charts, event log, health flags — through functions only
@@ -174,7 +217,8 @@ tests/                pytest suite, scenarios and golden record
 
 Dependencies only point one way: `config` ← `controller`, `shared` ←
 `control`, `thermocouple` ← `keller`, `labjack`, `logfile`, `readout` ←
-`gui` ← `app` (with `palette` ← `charts` alongside). `controller` imports
+`gui` ← `app` (with `palette` ← `charts` alongside; `batch` ← `batchrun`
+← `logfile`, `gui`, with `workbook` alongside). `controller` and `batch` import
 nothing but `config` and pure standard modules; `test_architecture.py`
 enforces this, and that no module reaches into another's private names.
 

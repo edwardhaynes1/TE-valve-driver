@@ -77,18 +77,19 @@ differently from this page, fix one of them. Add terms as they appear.
 |---|---|
 | **Batch** | N *test runs* in one go, at one seat screw torque, to measure the *opening point* with a mean and spread. Preceded by *scout 1* and *scout 2*. Started with **start batch**, which needs the torque entered. Upstream pressure is not set by the batch: it is measured and logged (the rig leaks). |
 | **Scout 1** | First run of a batch: a *baseline* wait, then heat straight towards the *ceiling* (auto-t burst) until the valve opens. Its T_open reads high (fast heating). Not averaged. |
-| **Scout 2** | Second run: starts 10 K below scout 1's T_open, then *creeps*. Sets the start of every test run. Not averaged. |
+| **Scout 2** | Second run: starts 10 K below scout 1's T_open, then *creeps*. Sets the start of every test run. Not averaged. If it opens during its approach (before creeping), it is repeated 10 K lower as `scout2b`, `scout2c` (three tries in all). |
 | **Test run** | A run that counts: starts 5 K below scout 2's T_open (fixed for the batch), then creeps. Numbered 1 to N; scouts are not counted. A test run that doesn't open still uses its slot and is left out of the averages. |
 | **Approach** | Batch phase: heating (auto-t) to the run's start temperature. |
 | **Creep** | Batch phase: the auto-t setpoint rises at 3 °C/min from the start temperature until *detection*. (auto-p's seek also creeps, at its own rate.) |
 | **Detection** | The chamber pressure, filtered, rises 0.05 decades above the *baseline* (the same rule as auto-p). The heater is disarmed at once. |
 | **T_open** | A batch's measurement of the opening point: the valve temperature at the *onset*, i.e. the last moment before detection when the chamber pressure was still at the baseline (best guess, backdated). **T_detect** is the valve temperature at detection. |
 | **Ceiling** | 150 °C. A run whose valve hasn't opened by then (held there 60 s) is *no opening*. |
-| **Cooldown** | Batch phase after detection, heater disarmed: until the valve temperature is 20 K below the run's T_open (but not below 28 °C) and the chamber is back within 20 % of its baseline. Then the next run starts. |
+| **Cooldown** | Batch phase after detection, heater disarmed: until the valve temperature is 20 K below the run's T_open (but not below 28 °C) and the chamber is back at its baseline (within 0.025 decades, ≈ 6 %). Then the next run starts. |
 | **Free-cooling closing** | During cooldown, where the chamber pressure falls back below the opening threshold. Indicative only: the valve is cooling freely, not in steps. |
+| **Flow e-fold (batch)** | Fitted from onset to detection: K per e-fold of the chamber pressure's rise above baseline. Blank with too few points. |
 | **Heater energy** | Energy delivered from the start of the approach, J: sum of gate ON time × full power. Logged at onset and at detection. |
 | **Abort** | Ends the batch at once: heater disarmed, the current run kept but marked *aborted*. By the **abort batch** button, an operator disarm, a trip, or closing the driver. No resume. |
-| **Stop** | The batch ends itself: scout 1 or 2 did not open, two test runs in a row did not open, or a cooldown took over 30 min. |
+| **Stop** | The batch ends itself: scout 1 or 2 did not open, scout 2 opened before creeping three times, two test runs in a row did not open, or a cooldown took over 30 min. |
 | **Opening map** | `logs/TE-valve-opening-map.xlsx`. Sheet *Runs*: a row per run as it finishes. Sheet *Batches*: a row of averages per batch. |
 
 ## Logs

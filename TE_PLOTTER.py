@@ -34,10 +34,17 @@ writes with. Logs from older driver versions, whose names differ, fall back
 to loose matching (COLUMN_ALIASES). Whatever it matched is printed at the
 top of every run; anything it cannot match is skipped rather than fatal.
 
+Batches: give a batch folder (or pick its summary.csv) for the batch view:
+every run's chamber pressure against valve temperature and against time
+since its onset, test runs coloured and scouts grey, the average of the
+test runs in black, and the mean T_open with a ±1σ band. The driver draws
+this into the folder as batch.png when a batch ends.
+
 Usage:
     python TE_PLOTTER.py                     # opens a file picker
     python TE_PLOTTER.py LOGFILE.csv         # skips the picker
     python TE_PLOTTER.py LOGFILE.csv -o OUT.png [--no-show]
+    python TE_PLOTTER.py BATCH_FOLDER [-o OUT.png] [--no-show]
 """
 import sys
 sys.dont_write_bytecode = True   # keep __pycache__ folders out of the project
@@ -784,6 +791,168 @@ def report(path, df, cols, steps, segs, outgas, ambient, valve=(None, []),
                     print("    valve temperature: " + ", ".join(temps))
 
 
+# ---------------------------------------------------------------------------
+# Batch view
+# ---------------------------------------------------------------------------
+BATCH_BIN_K = 0.5            # temperature bins for the averaged curve
+BATCH_ALIGN_S = (-60, 180)   # time window around each run's onset
+
+
+def load_batch(folder):
+    """(summary DataFrame, {run: trace DataFrame with t, T, p, phase})."""
+    from pathlib import Path
+    folder = Path(folder)
+    summary = pd.read_csv(folder / "summary.csv")
+    traces = {}
+    for _, r in summary.iterrows():
+        f = folder / str(r["file"])
+        if not f.exists():
+            continue
+        d = pd.read_csv(f)
+        if d.empty:
+            continue
+        t = pd.to_datetime(d["timestamp"])
+        traces[r["run"]] = pd.DataFrame({
+            "time": t,
+            "T": pd.to_numeric(d["te_temperature_degC"], errors="coerce"),
+            "p": pd.to_numeric(d["vacuum_chamber_mbar"], errors="coerce"),
+            "phase": d["batch_phase"].fillna("").astype(str),
+        })
+    return summary, traces
+
+
+def batch_average_vs_temperature(summary, traces):
+    """Geometric-mean chamber pressure per BATCH_BIN_K bin of valve
+    temperature, heating branch of the averaged test runs, where at least
+    two runs have data. Returns (bin centres, pressures)."""
+    per_run = []
+    for _, r in summary[summary["in_average"] == 1].iterrows():
+        d = traces.get(r["run"])
+        if d is None:
+            continue
+        d = d[d["phase"].isin(["approach", "creep"]) & d["p"].gt(0) & d["T"].notna()]
+        if d.empty:
+            continue
+        b = np.floor(d["T"] / BATCH_BIN_K) * BATCH_BIN_K + BATCH_BIN_K / 2
+        per_run.append(np.log10(d["p"]).groupby(b).mean())
+    if len(per_run) < 2:
+        return np.array([]), np.array([])
+    table = pd.concat(per_run, axis=1)
+    table = table[table.notna().sum(axis=1) >= 2]
+    return table.index.to_numpy(), 10 ** table.mean(axis=1).to_numpy()
+
+
+def batch_average_vs_time(summary, traces, step=0.5):
+    """Geometric-mean chamber pressure against time since onset, over the
+    averaged test runs. Returns (seconds, pressures)."""
+    grid = np.arange(BATCH_ALIGN_S[0], BATCH_ALIGN_S[1] + step, step)
+    curves = []
+    for _, r in summary[summary["in_average"] == 1].iterrows():
+        d = traces.get(r["run"])
+        if d is None or pd.isna(r.get("onset_time")):
+            continue
+        s = (d["time"] - pd.to_datetime(r["onset_time"])).dt.total_seconds()
+        ok = d["p"].gt(0)
+        if ok.sum() < 2:
+            continue
+        y = np.interp(grid, s[ok], np.log10(d["p"][ok]), left=np.nan, right=np.nan)
+        curves.append(y)
+    if len(curves) < 2:
+        return grid[:0], grid[:0]
+    c = np.vstack(curves)
+    n = np.sum(~np.isnan(c), axis=0)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)      # columns no run covers
+        mean = np.where(n >= 2, np.nanmean(c, axis=0), np.nan)
+    return grid, 10 ** mean
+
+
+def make_batch_figure(summary, traces, title):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    avg = summary[summary["in_average"] == 1]
+    t_open = pd.to_numeric(avg["t_open_degC"], errors="coerce").dropna()
+    colours = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    k = 0
+    for _, r in summary.iterrows():
+        d = traces.get(r["run"])
+        if d is None:
+            continue
+        scout = str(r["run"]).startswith("scout")
+        colour = "0.6" if scout else colours[k % len(colours)]
+        k += 0 if scout else 1
+        lw, alpha = (1.0, 0.7) if scout else (1.3, 0.9)
+        label = f"{r['run']}" + ("" if r["status"] == "opened" else f" ({r['status']})")
+        heat = d[d["phase"].isin(["baseline", "approach", "creep"])]
+        cool = d[d["phase"] == "cooldown"]
+        ax1.plot(heat["T"], heat["p"], color=colour, lw=lw, alpha=alpha, label=label)
+        ax1.plot(cool["T"], cool["p"], color=colour, lw=0.8, alpha=0.4, ls=":")
+        if pd.notna(r.get("onset_time")):
+            s = (d["time"] - pd.to_datetime(r["onset_time"])).dt.total_seconds()
+            w = s.between(*BATCH_ALIGN_S)
+            ax2.plot(s[w], d["p"][w], color=colour, lw=lw, alpha=alpha)
+    x, y = batch_average_vs_temperature(summary, traces)
+    if len(x):
+        ax1.plot(x, y, color="black", lw=2.5, label="average (test runs)")
+    x, y = batch_average_vs_time(summary, traces)
+    if len(x):
+        ax2.plot(x, y, color="black", lw=2.5)
+    if len(t_open):
+        m = t_open.mean()
+        sd = t_open.std(ddof=1) if len(t_open) > 1 else 0.0
+        ax1.axvline(m, color="black", ls="--", lw=1.2,
+                    label=f"mean T_open {m:.2f} °C" + (f" ± {sd:.2f} K" if sd else ""))
+        if sd:
+            ax1.axvspan(m - sd, m + sd, color="black", alpha=0.08)
+    ax2.axvline(0, color="black", ls="--", lw=1.2)
+    for ax in (ax1, ax2):
+        ax.set_yscale("log")
+        ax.set_ylabel("chamber pressure (mbar)")
+        ax.grid(True, which="both", alpha=0.3)
+    ax1.set_xlabel("valve temperature (°C)   solid = heating, dotted = cooldown")
+    ax2.set_xlabel("time since onset (s)")
+    ax1.set_title("chamber pressure vs valve temperature")
+    ax2.set_title("aligned at each run's onset")
+    ax1.legend(fontsize=8, loc="upper left")
+    fig.suptitle(title, fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def batch_title(folder, summary):
+    from pathlib import Path
+    avg = summary[summary["in_average"] == 1]
+    t = pd.to_numeric(avg["t_open_degC"], errors="coerce").dropna()
+    up = pd.to_numeric(avg["upstream_at_open_bar"], errors="coerce").dropna()
+    torque = summary["seat_screw_torque_Nm"].iloc[0] if len(summary) else float("nan")
+    parts = [Path(folder).name, f"{torque:g} N·m"]
+    if len(up):
+        parts.append(f"upstream {up.mean():.2f} bar ({up.min():.2f}-{up.max():.2f})")
+    if len(t):
+        sd = f" ± {t.std(ddof=1):.2f} K" if len(t) > 1 else ""
+        parts.append(f"T_open {t.mean():.2f} °C{sd}, n = {len(t)}")
+    return "   ·   ".join(parts)
+
+
+def plot_batch(folder, output=None, show=True):
+    from pathlib import Path
+    summary, traces = load_batch(folder)
+    print(f"\nbatch {Path(folder).name}")
+    cols = ["run", "status", "t_open_degC", "t_detect_degC", "open_to_detect_s",
+            "energy_at_open_J", "upstream_at_open_bar", "efold_K"]
+    print(summary[[c for c in cols if c in summary]].to_string(index=False))
+    fig = make_batch_figure(summary, traces, batch_title(folder, summary))
+    out = output or str(Path(folder) / "batch.png")
+    fig.savefig(out, dpi=150)
+    print(f"\nfigure written to {out}\n")
+    if show:
+        try:
+            plt.show()
+        except Exception:
+            pass
+    return out
+
+
 def main():
     global INTERACTIVE
     INTERACTIVE = len(sys.argv) == 1
@@ -804,6 +973,15 @@ def main():
             sys.exit("No file selected.")
     if args.no_show:
         matplotlib.use("Agg")
+
+    from pathlib import Path
+    target = Path(args.logfile)
+    if target.is_dir() or target.name == "summary.csv":
+        folder = target if target.is_dir() else target.parent
+        if not (folder / "summary.csv").exists():
+            fail(f"{folder} has no summary.csv — is it a batch folder?")
+        plot_batch(folder, args.output, show=not args.no_show)
+        return
 
     try:
         raw = pd.read_csv(args.logfile, nrows=5)

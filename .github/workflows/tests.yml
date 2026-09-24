@@ -19,6 +19,6 @@ jobs:
       # The hardware libraries (LabJackPython, keller-protocol) are not needed:
       # the tests use a fake LabJack and never talk to the Keller.
       - name: Install test dependencies
-        run: python -m pip install pytest pyserial numpy pandas matplotlib
+        run: python -m pip install pytest pyserial numpy pandas matplotlib openpyxl
       - name: Run tests
         run: python -m pytest

@@ -365,6 +365,34 @@ PRESSURE_BURST_MARGIN_K = 2.0      # land this far below the goal; the creep doe
 PRESSURE_BURST_MAX_S    = 120.0    # never burst longer (21 Sept: 25 → 150 °C ≈ 80 s)
 PRESSURE_COAST_MAX_S    = 60.0     # coast ends at the TC peak, or after this long
 
+# ─── Batches — repeated opening-point runs (see context.md, history entry 27) ─
+# Scout 1 heats towards the ceiling; scout 2 creeps from 10 K below scout 1's
+# opening; test runs creep from 5 K below scout 2's. Detection uses the auto-p
+# rule (PRESSURE_OPEN_DEC above a PRESSURE_BASE_* baseline).
+BATCH_TEST_RUNS_DEFAULT = 5        # test runs per batch (scouts not counted)
+BATCH_TEST_RUNS_MAX     = 50
+BATCH_CREEP_C_MIN       = 3.0      # creep rate, °C per minute (TC lags ~8.5 K at this rate)
+BATCH_SCOUT2_BELOW_K    = 10.0     # scout 2 starts this far below scout 1's T_open
+BATCH_TEST_BELOW_K      = 5.0      # test runs start this far below scout 2's T_open
+BATCH_CEILING_C         = 150.0    # no opening by here → the run failed (below TEMP_TRIP_C)
+BATCH_CEILING_HOLD_S    = 60.0     # …after holding at the ceiling this long
+BATCH_START_BAND_K      = 0.5      # creep starts once the TC is within this of the start
+BATCH_BASELINE_S        = 30.0     # scout 1 measures the chamber baseline this long, heater off
+BATCH_ONSET_DEC         = 0.015    # onset = last sample within this of the baseline (best guess)
+BATCH_COOL_BELOW_K      = 20.0     # cooldown: valve this far below the run's T_open…
+BATCH_COOL_MIN_C        = HEATER_HOLD_AMBIENT_C + 5.0   # …but never asked to go below this
+BATCH_RECOVER_DEC       = 0.025    # …and the chamber back within this of its baseline (≈ +6 %).
+                                   # Must be below PRESSURE_OPEN_DEC (+12 %), or the next run
+                                   # starts "already open" — 20 % was agreed, then found to do
+                                   # exactly that in simulation
+BATCH_COOL_MAX_S        = 1800.0   # a cooldown longer than this stops the batch
+BATCH_MAX_FAILS         = 2        # this many test runs in a row without opening stop it
+BATCH_SCOUT2_TRIES      = 3        # scout 2 opening during its approach (not creeping) is
+                                   # repeated this many times in all, each 10 K lower
+BATCH_DIR               = str(Path(__file__).resolve().parent.parent / "logs" / "batches")
+BATCH_WORKBOOK          = str(Path(__file__).resolve().parent.parent / "logs"
+                              / "TE-valve-opening-map.xlsx")
+
 # LabJack combined sample rate (both vacuum + thermocouple read here)
 LABJACK_SAMPLE_HZ     = 4          # Hz — reads vacuum and TC each cycle
 

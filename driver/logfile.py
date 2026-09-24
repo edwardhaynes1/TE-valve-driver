@@ -8,7 +8,7 @@ import os
 import time
 from datetime import datetime
 
-from . import control, schema, shared
+from . import batchrun, control, schema, shared
 from .control import AUTO_P, AUTO_T, MANUAL
 from .config import (
     LOG_DIR, LOG_INTERVAL_S, heater_current_a, heater_power_w,
@@ -97,6 +97,7 @@ def logger_thread():
             h = control.snapshot()
             out = shared.heater_output()
             seat_nm = shared.seat_screw_torque()
+            batch_run, batch_phase = batchrun.labels()
             on_s = round(control.take_on_time(), 3)
             duty = h['duty_actual']
             in_p = h['mode'] == AUTO_P and not h['p_init']
@@ -131,6 +132,8 @@ def logger_thread():
                 'heater_P_mean_meas': blank_or(out['p_meas_mean'], 4),
                 'heater_on_s': on_s,
                 'seat_screw_torque_Nm': blank_or(seat_nm, 3),
+                'batch_run': batch_run,
+                'batch_phase': batch_phase,
             }
             try:
                 writer.writerow([row[c] for c in schema.MAIN])
@@ -145,6 +148,7 @@ def logger_thread():
             if shared.health()['csv'] is False:
                 log_event("CSV logging resumed")
             shared.set_health(csv=True)
+            batchrun.record_row(row)          # the run's own file, during a batch
 
         start = time.time()
         n = 0

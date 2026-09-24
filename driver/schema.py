@@ -33,6 +33,8 @@ MAIN_COLUMNS = (
     ("heater_P_mean_meas",      "W, mean of per-tick V x I, blank unless sensing is wired"),
     ("heater_on_s",             "s, gate ON time since the previous row (from edge times)"),
     ("seat_screw_torque_Nm",    "N·m, TE-Valve seat screw torque as entered; blank = not recorded"),
+    ("batch_run",               "scout1 / scout2 / testrun01…, blank outside a batch"),
+    ("batch_phase",             "baseline / approach / creep / cooldown, blank outside a batch"),
 )
 
 # Switching log: te-sensor_<timestamp>_pwm.csv, one row per heater gate edge
@@ -44,6 +46,71 @@ PWM_COLUMNS = (
     ("note",      "blank for normal switching; otherwise the reason"),
 )
 
+# Batch summaries: <batch folder>/summary.csv and the opening map's Runs
+# sheet (one row per run), and the Batches sheet (one row per batch).
+RUN_SUMMARY_COLUMNS = (
+    ("batch",                        "batch name (its folder)"),
+    ("run",                          "scout1 / scout2 / testrun01…"),
+    ("in_average",                   "1 = a test run that opened (averaged), else 0"),
+    ("status",                       "opened / no opening / aborted"),
+    ("start_time",                   "ISO local time the run started"),
+    ("seat_screw_torque_Nm",         "N·m, as entered"),
+    ("start_degC",                   "creep start temperature (scout 1: heats towards the ceiling)"),
+    ("creep_degC_per_min",           "creep rate (blank for scout 1)"),
+    ("opened_during",                "approach / creep"),
+    ("onset_time",                   "ISO local time of the onset (ms)"),
+    ("detect_time",                  "ISO local time of detection (ms)"),
+    ("t_open_degC",                  "valve temperature at the onset (backdated): the opening point"),
+    ("t_detect_degC",                "valve temperature at detection"),
+    ("open_to_detect_s",             "s from onset to detection"),
+    ("chamber_baseline_mbar",        "chamber baseline before opening"),
+    ("chamber_at_open_mbar",         "chamber pressure at the onset"),
+    ("chamber_at_detect_mbar",       "chamber pressure at detection"),
+    ("dlog10p_dT_dec_per_K",         "rise of log10(chamber pressure) per K, onset to detection"),
+    ("efold_K",                      "K per e-fold of the rise above baseline, fitted onset to detection (blank if too few points)"),
+    ("energy_at_open_J",             "heater energy from the approach start to the onset, J"),
+    ("energy_at_detect_J",           "…to detection, J"),
+    ("heater_power_at_open_W",       "heater power (period mean, calc) at the onset"),
+    ("upstream_at_open_bar",         "upstream pressure at the onset (measured)"),
+    ("upstream_at_detect_bar",       "upstream pressure at detection (measured)"),
+    ("free_cooling_closed_degC",     "valve temperature where the chamber fell back below the opening threshold (indicative)"),
+    ("free_cooling_closed_s",        "s after detection when it did"),
+    ("cooldown_s",                   "s from detection (or failure) to the end of cooldown"),
+    ("note",                         "why a run failed or was cut short"),
+    ("file",                         "the run's trace, relative to the batch folder"),
+)
+
+BATCH_SUMMARY_COLUMNS = (
+    ("batch",                        "batch name (its folder)"),
+    ("start_time",                   "ISO local time"),
+    ("end_time",                     "ISO local time"),
+    ("status",                       "complete / stopped / aborted"),
+    ("note",                         "why it stopped or was aborted"),
+    ("seat_screw_torque_Nm",         "N·m, as entered"),
+    ("test_runs_requested",          "N"),
+    ("test_runs_opened",             "n: test runs in the averages"),
+    ("scout1_t_open_degC",           "rough opening point"),
+    ("scout2_t_open_degC",           "fine opening point; test runs start 5 K below it"),
+    ("creep_degC_per_min",           "creep rate"),
+    ("t_open_mean_degC",             "mean T_open of the averaged test runs"),
+    ("t_open_std_K",                 "sample standard deviation (blank if n < 2)"),
+    ("t_open_min_degC",              ""),
+    ("t_open_max_degC",              ""),
+    ("t_detect_mean_degC",           ""),
+    ("open_to_detect_mean_s",        ""),
+    ("efold_mean_K",                 "mean of the runs' e-folds that could be measured"),
+    ("energy_at_open_mean_J",        ""),
+    ("energy_at_open_std_J",         ""),
+    ("upstream_at_open_mean_bar",    "measured, averaged test runs"),
+    ("upstream_at_open_min_bar",     ""),
+    ("upstream_at_open_max_bar",     ""),
+    ("chamber_baseline_mean_mbar",   ""),
+    ("free_cooling_closed_mean_degC", "indicative"),
+    ("folder",                       "the batch folder"),
+)
+
 MAIN = tuple(name for name, _ in MAIN_COLUMNS)
 PWM = tuple(name for name, _ in PWM_COLUMNS)
+RUN_SUMMARY = tuple(name for name, _ in RUN_SUMMARY_COLUMNS)
+BATCH_SUMMARY = tuple(name for name, _ in BATCH_SUMMARY_COLUMNS)
 PWM_SUFFIX = "_pwm.csv"

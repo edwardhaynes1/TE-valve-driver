@@ -46,6 +46,22 @@ The opening map is an Excel workbook because that is where the results are
 used. If Excel has it open (Windows locks it), rows go to side files next to
 it and are merged the next time it can be saved.
 
+**Changed after simulation** (tests/batch_sim.py: the real controller on a
+thermal model whose seat lags the TC by 5 s, throttles with a 4 K e-fold
+and closes with hysteresis):
+* *Recovery threshold.* "Chamber back within 20 % of baseline" is looser
+  than the opening threshold (+12 %), so the next run was detected as open
+  within a second of starting. Recovery is now within 0.025 decades (≈ 6 %),
+  and a test checks it stays below the detection threshold.
+* *Scout 2 repeats.* With a 20 s seat lag, scout 1 read 35 K high and
+  scout 2 opened while still heating to its start. A scout 2 that opens
+  before it creeps is repeated 10 K lower (and below where it opened), up
+  to three tries; then the batch stops.
+* *e-fold* is fitted on the rise above baseline (as in the 16 Sept flow
+  map), not on log(total pressure), which is almost flat near baseline.
+On the 5 s model the test runs read 60.4 ± 0.04 °C for a seat opening at
+60 °C: the TC leads the seat by about rate × lag, the same every run.
+
 ## 26. Thermocouple found again after it is unplugged — 22 Sept 2026
 Unplugging and re-plugging the thermocouple while the driver ran left it
 without a valve temperature until restarted. The MAX31856 was set up only at

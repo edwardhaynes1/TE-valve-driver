@@ -6,12 +6,14 @@ import math
 import time
 import tkinter as tk
 from tkinter import font as tkfont
+from tkinter import messagebox
 
+from . import batchrun
 from . import logfile
 from . import readout
 from . import shared
 from .config import (
-    FLIGHT_POWER_BUDGET_W, HEATER_I_AIN, HEATER_MAX_DUTY, HEATER_PWM_PERIOD_S,
+    BATCH_TEST_RUNS_DEFAULT, BATCH_TEST_RUNS_MAX, FLIGHT_POWER_BUDGET_W, HEATER_I_AIN, HEATER_MAX_DUTY, HEATER_PWM_PERIOD_S,
     HEATER_R_OHM, HEATER_V_AIN, PID_SETPOINT_DEFAULT, PRESSURE_TARGET_DEFAULT,
     PRESSURE_TARGET_MIN, PRESSURE_TRIP_MBAR, TEMP_TRIP_C, heater_current_a,
     heater_power_w, heater_voltage_v,
@@ -175,6 +177,22 @@ class TEGui:
         self.seat_btn = tk.Button(row3, text="set", command=self._set_seat_screw, **btn)
         self.seat_btn.pack(side="left")
 
+        # Batch of opening-point runs (context.md, "Batches"). While one runs
+        # it owns the heater: the heater controls and the torque are locked,
+        # and DISARM aborts it.
+        row4 = tk.Frame(parent, bg=BG)
+        row4.pack(fill="x", pady=(0, 4))
+        self.runs_entry = self._entry(row4, "test runs", f"{BATCH_TEST_RUNS_DEFAULT}", width=4)
+        self.runs_entry.unbind("<Return>")
+        self.batch_btn = tk.Button(row4, text="start batch", command=self._start_batch, **btn)
+        self.batch_btn.pack(side="left", padx=(0, 6))
+        self.abort_btn = tk.Button(row4, text="abort batch", command=self._abort_batch, **btn)
+        self.abort_btn.pack(side="left")
+        self.batch_status = tk.Label(parent, text="", font=self.f, fg=DIM, bg=BG, anchor="w")
+        self.batch_status.pack(fill="x")
+        self._batch_running = False
+        self._confirm = messagebox.askokcancel      # tests replace it
+
         self.heater_status = tk.Label(parent, text="", font=self.f, fg=DIM,
                                       bg=BG, anchor="w")
         self.heater_status.pack(fill="x")
@@ -203,6 +221,7 @@ class TEGui:
                                 highlightbackground=PROMPT if locked else BORDER)
         buttons = [self.arm_btn, *self.mode_buttons, self.update_btn]
         entries = [self.duty_entry, self.sp_entry, self.p_entry]
+        self._apply_batch_lock()
         if locked:
             for w in buttons + entries:
                 w.configure(state="disabled", disabledforeground=BRIGHT)
@@ -216,6 +235,81 @@ class TEGui:
             for e in entries:
                 e.configure(disabledforeground=DIM)
             self._update_inputs()          # the selected mode's box only, as before
+
+    def _apply_batch_lock(self):
+        """While a batch runs it owns the heater: mode, duty, setpoint,
+        target, update and the torque are locked; ARM stays (as DISARM,
+        which aborts the batch). Start batch needs a torque, no batch
+        running and the heater disarmed; abort only works during one."""
+        busy = batchrun.running()
+        self._batch_running = busy
+        heater = [*self.mode_buttons, self.update_btn, self.duty_entry, self.sp_entry,
+                  self.p_entry, self.seat_entry, self.seat_btn, self.runs_entry]
+        if busy:
+            for w in heater:
+                w.configure(state="disabled")
+            for w in (*self.mode_buttons, self.update_btn, self.seat_btn):
+                w.configure(disabledforeground=DIM)
+            for e in (self.duty_entry, self.sp_entry, self.p_entry, self.runs_entry):
+                e.configure(highlightbackground=BORDER)
+                e.label.configure(fg=DIM)
+        elif not getattr(self, "_locked", True):
+            for w in (*self.mode_buttons, self.update_btn, self.seat_btn):
+                w.configure(state="normal")
+            for e in (self.seat_entry, self.runs_entry):
+                e.configure(state="normal")
+            self._update_inputs()
+        else:
+            for e in (self.seat_entry, self.runs_entry):
+                e.configure(state="normal")
+            self.seat_btn.configure(state="normal")
+        can_start = (not busy and shared.seat_screw_torque() is not None
+                     and not snapshot()['armed'])
+        self.batch_btn.configure(state="normal" if can_start else "disabled",
+                                 disabledforeground=DIM)
+        self.runs_entry.label.configure(fg=DIM if busy else TEXT)
+        self.abort_btn.configure(state="normal" if busy else "disabled",
+                                 fg=WARN if busy else TEXT, disabledforeground=DIM)
+
+    def _start_batch(self):
+        """Confirm the torque (and show the measured upstream pressure),
+        then start. The batch arms the heater itself, run by run."""
+        torque = shared.seat_screw_torque()
+        try:
+            n = int(self.runs_entry.get().strip())
+        except ValueError:
+            log_event(f"Batch: test runs '{self.runs_entry.get()}' is not a whole number")
+            return
+        if not 1 <= n <= BATCH_TEST_RUNS_MAX:
+            log_event(f"Batch: test runs must be 1 to {BATCH_TEST_RUNS_MAX}")
+            return
+        if torque is None:
+            log_event("Batch not started — enter the seat screw torque first")
+            return
+        if snapshot()['armed'] or batchrun.running():
+            log_event("Batch not started — disarm the heater first (the batch arms it "
+                      "itself), and wait for any running batch to end")
+            return
+        up, _ = shared.upstream()
+        up_txt = f"{up:.3f} bar (measured)" if up is not None else "not read (Keller offline)"
+        if not self._confirm(
+                "Start batch",
+                f"Seat screw torque: {torque:.2f} N·m\n"
+                f"Is that the torque on the valve now?\n\n"
+                f"Upstream pressure: {up_txt}\n"
+                f"Test runs: {n} (plus scout 1 and scout 2)\n\n"
+                f"The batch arms the heater itself for each run. "
+                f"SW171 must be on. DISARM or 'abort batch' stops it."):
+            log_event("Batch not started (cancelled)")
+            return
+        ok, msg = batchrun.start(n, logfile.LOG_FILE)
+        if not ok:
+            log_event(msg)
+        self._apply_gate()
+
+    def _abort_batch(self):
+        batchrun.abort("aborted by the operator")
+        self._apply_gate()
 
     def _set_seat_screw(self):
         """Record the seat screw torque typed in the box."""
@@ -238,6 +332,11 @@ class TEGui:
         if snapshot()['armed']:
             heater_command(armed=False)
             log_event("Heater DISARMED by operator")
+            if batchrun.running():
+                batchrun.abort("heater disarmed by the operator")
+        elif batchrun.running():
+            log_event("A batch is running and arms the heater itself — "
+                      "'abort batch' to stop it")
         else:
             self._send_update(quiet_if_unchanged=True)   # picks up un-sent edits to the active value, logged
             heater_command(armed=True)
@@ -404,6 +503,16 @@ class TEGui:
         self.heater_status.configure(text=text, fg=TAG_COLOUR[tag])
         text, tag = readout.loop_status(h)
         self.loop_status.configure(text=text, fg=TAG_COLOUR[tag])
+        busy = batchrun.running()
+        line = batchrun.status()
+        self.batch_status.configure(text=line or "", fg=BRIGHT if busy else DIM)
+        if busy != self._batch_running:
+            if not busy:
+                # The batch drove the heater in auto-t; back to the window's settings.
+                self._send_update(quiet_if_unchanged=True)
+            self._apply_gate()
+        else:
+            self._apply_batch_lock()
 
         events = shared.recent_events()
         up_chart   = hist['upstream']
@@ -437,6 +546,7 @@ class TEGui:
             self._poll_job = self.root.after(150, self._poll)
 
     def shutdown(self):
+        batchrun.abort("driver closed")          # writes the batch's files first
         heater_command(armed=False)
         log_event("Shutdown — heater disarmed")
         shared.stop.set()

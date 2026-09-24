@@ -8,12 +8,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from driver import config, control, controller, shared  # noqa: E402
+from driver import batchrun, config, control, controller, shared  # noqa: E402
 
 
 def reset_shared():
     shared.reset()
     control.reset()
+    batchrun.reset()
 
 
 class PackageAdapter:

@@ -2,6 +2,7 @@
 pyserial
 LabJackPython
 keller-protocol
+openpyxl        # the opening map (Excel)
 # plotter
 numpy
 pandas
