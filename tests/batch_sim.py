@@ -30,7 +30,8 @@ AMBIENT = 23.0
 class Rig:
     def __init__(self, open_c=60.0, hysteresis=5.0, efold=4.0, base=5e-7, a=0.05,
                  noise_dec=0.002, t0=1_000_000.0, seed=1, upstream_bar=3.0,
-                 upstream_leak_bar_s=0.0, k_up=0.0, fill_jump=0.0, pump_tail=0.0):
+                 upstream_leak_bar_s=0.0, k_up=0.0, fill_jump=0.0, pump_tail=0.0,
+                 open_scatter=0.0):
         self.open_c, self.hyst, self.efold, self.base, self.a = open_c, hysteresis, efold, base, a
         self.noise = noise_dec
         self.rng = random.Random(seed)
@@ -47,6 +48,8 @@ class Rig:
         self.extra = pump_tail * base      # a slowly falling tail, like the pump-down
         self.tau_extra = 600.0 if pump_tail else TAU_FILL
         self.fills = 0
+        self.open_scatter = open_scatter     # K, drawn afresh each time the valve shuts
+        self.jitter = self.rng.gauss(0.0, open_scatter) if open_scatter else 0.0
         self.rows = []                 # (t, row) as the logger would record them
         self._row_on = 0.0
         self._row_t = t0
@@ -62,6 +65,8 @@ class Rig:
             self.is_open = True
         elif self.is_open and self.Ts < opening - self.hyst:
             self.is_open = False
+            if self.open_scatter:
+                self.jitter = self.rng.gauss(0.0, self.open_scatter)
         target = self.base
         if self.is_open:
             target *= 1 + self.a * math.exp((self.Ts - opening) / self.efold)
@@ -72,7 +77,7 @@ class Rig:
         self.now += dt
 
     def opening(self):
-        return self.open_c + self.k_up * (self.upstream - 3.0)
+        return self.open_c + self.jitter + self.k_up * (self.upstream - 3.0)
 
     def fill(self):
         """Top up upstream: the chamber jumps, then decays over TAU_FILL."""
@@ -104,12 +109,14 @@ class Rig:
         return hist
 
     def run_batch(self, n_tests=3, torque=0.3, max_s=6 * 3600, dt=0.25, hook=None,
-                  topup_drop=None, topup_after_s=20.0, continue_after_s=None, history=()):
+                  topup_drop=None, topup_after_s=20.0, continue_after_s=None, history=(),
+                  known=None, old=None, retorqued=None):
         """Run a whole batch; returns (b, all messages). With topup_drop, the
         'operator' tops up topup_after_s after a pause, and presses continue
         at once — so the chamber is still jumping when the run resumes — or
         continue_after_s after the pause began. history: readings from before."""
-        b = batch.new_batch(n_tests, torque, self.now, topup_drop, history)
+        b = batch.new_batch(n_tests, torque, self.now, topup_drop, history, known=known,
+                            old=old if old is not None else known, retorqued=retorqued)
         cont = topup_after_s if continue_after_s is None else continue_after_s
         paused_at = None
         msgs_all, self.events = [], []

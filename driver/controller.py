@@ -5,7 +5,7 @@ locks, clock, logging, files or hardware.
     command(h, now, **kw)                operator commands: armed, mode,
                                          duty_cmd, setpoint_C, p_target_mbar
     step(h, now, dt, temp, tc_healthy, vac, vac_status, vac_healthy,
-         p_up, p_up_t, seat_nm) -> (duty, msgs)   one control step:
+         p_up, p_up_t, seat_nm, remembered) -> (duty, msgs)   one control step:
                                          interlocks first, then manual /
                                          auto-t / auto-p
     trip(h, reason, msgs)                latch the heater off
@@ -14,7 +14,8 @@ locks, clock, logging, files or hardware.
     take_on_time(h, now) -> seconds      ON time since the previous call
     force_off(h, device_lost)            device-side disarm (connect / lost)
     hold_duty(t_c) -> duty               measured hold power at t_c, as a duty
-    opening_point(seat_nm, learned)      where the valve opens for this torque
+    opening_point(seat_nm, learned, remembered)
+                                         where the valve opens for this torque
 
 Everything it needs comes in as arguments: the state `h` (changed in place),
 the time `now`, and the readings. Messages for the event log come back in
@@ -193,7 +194,7 @@ def command(h, now, **kwargs):
 
 
 def step(h, now, dt, temp, tc_healthy, vac=None, vac_status=None,
-         vac_healthy=True, p_up=None, p_up_t=None, seat_nm=None):
+         vac_healthy=True, p_up=None, p_up_t=None, seat_nm=None, remembered=None):
     """One control step: evaluate all interlocks, then the control law.
 
     Returns (duty 0-1, event messages). Duty is 0.0 unless every interlock
@@ -202,7 +203,7 @@ def step(h, now, dt, temp, tc_healthy, vac=None, vac_status=None,
     if not h['armed']:
         return 0.0, msgs
     duty = _interlocks_then_law(h, now, dt, temp, tc_healthy, vac, vac_status,
-                                vac_healthy, p_up, p_up_t, seat_nm, msgs)
+                                vac_healthy, p_up, p_up_t, seat_nm, msgs, remembered)
     # Response check bookkeeping: when did the current full-power stretch start?
     if h['armed'] and duty >= TC_RESPONSE_DUTY:
         if h['heat_t0'] is None:
@@ -214,7 +215,7 @@ def step(h, now, dt, temp, tc_healthy, vac=None, vac_status=None,
 
 
 def _interlocks_then_law(h, now, dt, temp, tc_healthy, vac, vac_status,
-                         vac_healthy, p_up, p_up_t, seat_nm, msgs):
+                         vac_healthy, p_up, p_up_t, seat_nm, msgs, remembered=None):
     mode     = h['mode']
     armed_at = h['armed_at']
 
@@ -279,7 +280,7 @@ def _interlocks_then_law(h, now, dt, temp, tc_healthy, vac, vac_status,
             return 0.0
         if vac is not None:
             setpoint = _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t,
-                                            seat_nm, msgs)
+                                            seat_nm, msgs, remembered)
         elif h['p_init']:
             return 0.0            # not initialised yet — don't heat on a stale setpoint
         # else: a single missed read — hold the last setpoint / override
@@ -455,12 +456,15 @@ def _entry_efold(i, items):
     return (lo or hi or (None, PRESSURE_EFOLD_REF_K))[1]
 
 
-def opening_point(seat_nm, learned=None):
+def opening_point(seat_nm, learned=None, remembered=None):
     """Where the valve opens for this torque, before any upstream shift:
         (opening_C, at_upstream_bar, efold_K, how, detail)
-    how is one of 'learned' (seen this session), 'calibrated' (a table
-    entry), 'interpolated' (between two), 'nearest' (outside the table),
-    'no torque' (PRESSURE_SEEK_START_C)."""
+    how is one of 'learned' (seen this session), 'remembered' (a batch's
+    result, openings.py: remembered = (opening °C, upstream bar or None,
+    detail) for this torque), 'calibrated' (a table entry), 'interpolated'
+    (between two), 'nearest' (outside the table), 'no torque'
+    (PRESSURE_SEEK_START_C). at_upstream_bar is None when the upstream
+    pressure wasn't read: then no upstream shift is applied."""
     items = sorted(SEAT_SCREW_VALVE.items())
     if seat_nm is None:
         return (PRESSURE_SEEK_START_C, PRESSURE_UP_REF_BAR, PRESSURE_EFOLD_REF_K,
@@ -479,6 +483,9 @@ def opening_point(seat_nm, learned=None):
     if learned is not None and abs(learned[2] - seat_nm) <= SEAT_SCREW_TOL_NM:
         return (learned[0], learned[1], efold, 'learned',
                 f"seen opening this session at {seat_nm:.2f} N·m")
+    if remembered is not None:
+        c, bar, detail = remembered
+        return c, bar, efold, 'remembered', detail
     for (tq, (c, bar, _)), ef in zip(items, efolds):
         if abs(seat_nm - tq) <= SEAT_SCREW_TOL_NM:
             return c, bar, ef, 'calibrated', f"{tq:.2f} N·m calibrated"
@@ -499,8 +506,9 @@ def opening_point(seat_nm, learned=None):
 
 
 def _upstream_shift(p_up, ref_bar=PRESSURE_UP_REF_BAR):
-    """Opening-point shift for upstream pressure p_up (bar abs.), K."""
-    if not PRESSURE_UP_ENABLE or p_up is None:
+    """Opening-point shift for upstream pressure p_up (bar abs.), K. None
+    for either pressure: no shift."""
+    if not PRESSURE_UP_ENABLE or p_up is None or ref_bar is None:
         return 0.0
     shift = -PRESSURE_UP_K_PER_BAR * (p_up - ref_bar)
     return max(-PRESSURE_UP_MAX_DOWN_K, min(PRESSURE_UP_MAX_SHIFT_K, shift))
@@ -510,16 +518,19 @@ def _ref_message(h, seat_nm, open_c, open_bar, detail):
     up = h['p_up_bar']
     upstream = (f"upstream {up:.3f} bar → shift {h['p_shift']:+.1f} K" if up is not None
                 else "no upstream reading — no shift")
+    at = f"{open_bar:g} bar" if open_bar is not None else "upstream not read"
     return (f"Pressure loop: opening point {h['p_ref']:.1f} °C — {detail} "
-            f"({open_c:.1f} °C at {open_bar:g} bar), {upstream}")
+            f"({open_c:.1f} °C at {at}), {upstream}")
 
 
-def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, seat_nm, msgs):
+def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, seat_nm, msgs,
+                        remembered=None):
     """Outer loop of the cascade: chamber pressure → valve temperature setpoint.
 
     Everything is relative to the OPENING POINT p_ref: the temperature
-    where flow starts, for this seat screw torque (SEAT_SCREW_VALVE, or what
-    was seen this session), shifted for upstream pressure.
+    where flow starts, for this seat screw torque (what was seen this
+    session, else a batch's remembered result, else SEAT_SCREW_VALVE),
+    shifted for upstream pressure.
 
     SEEK (valve shut). The setpoint jumps to the goal — p_ref, raised a
     little by the feedforward for large targets. From well below it
@@ -549,7 +560,7 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, seat_nm, msgs):
     tsp_hi = min(PRESSURE_TSP_MAX_C, TEMP_TRIP_C - 5.0)
     if p_up is not None and (p_up_t is None or now - p_up_t > PRESSURE_UP_MAX_AGE_S):
         p_up = None
-    open_c, open_bar, efold, how, detail = opening_point(seat_nm, h['p_learned'])
+    open_c, open_bar, efold, how, detail = opening_point(seat_nm, h['p_learned'], remembered)
     shift = _upstream_shift(p_up, open_bar)
     h.update(p_ref=open_c + shift, p_ref_how=how, p_efold=efold,
              p_shift=shift, p_up_bar=p_up)
@@ -566,7 +577,7 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, seat_nm, msgs):
     else:
         h['p_filt'] += dt / (PRESSURE_FILTER_S + dt) * (y - h['p_filt'])
         if h['p_phase'] == 'seek':
-            _seek_step(h, y, temp, now, dt, tsp_hi, p_up, seat_nm, msgs)
+            _seek_step(h, y, temp, now, dt, tsp_hi, p_up, seat_nm, msgs, remembered)
 
     if h['p_phase'] == 'seek':
         return h['setpoint_C']
@@ -608,7 +619,7 @@ def _start_seek(h, y, temp, now, tsp_hi, seat_nm, open_c, open_bar, detail, msgs
                     f"below {ref:.1f} °C for a clean baseline")
 
 
-def _seek_step(h, y, temp, now, dt, tsp_hi, p_up, seat_nm, msgs):
+def _seek_step(h, y, temp, now, dt, tsp_hi, p_up, seat_nm, msgs, remembered=None):
     """One SEEK step: baseline, opening detection, parking, burst, creep."""
     h['p_hist'].append((now, y))
     base = _pressure_baseline(h, now)
@@ -632,13 +643,14 @@ def _seek_step(h, y, temp, now, dt, tsp_hi, p_up, seat_nm, msgs):
         note = ""
         if seat_nm is not None:
             table = h['p_ref'] if h['p_ref_how'] != 'learned' else None
+            src = "remembered" if h['p_ref_how'] == 'remembered' else "table"
             # The valve lags the TC: on a rising TC it opened a little earlier.
             seen = min(temp, temp - PRESSURE_OPEN_LAG_S * h['rate'])
-            _, open_bar, _, _, _ = opening_point(seat_nm)
+            _, open_bar, _, _, _ = opening_point(seat_nm, None, remembered)
             h['p_learned'] = (seen - h['p_shift'], open_bar, seat_nm)   # at the calibration pressure
             h['p_ref'] = h['p_ref_logged'] = seen
             note = (f"; this session's opening point for {seat_nm:.2f} N·m is now "
-                    f"{seen:.1f} °C" + (f" (table: {table:.1f} °C)" if table is not None else ""))
+                    f"{seen:.1f} °C" + (f" ({src}: {table:.1f} °C)" if table is not None else ""))
         msgs.append(f"Pressure loop: valve opened at T_sp {tsp:.2f} °C "
                     f"(TC {temp:.2f} °C), baseline {10 ** base:.2e} mbar — "
                     f"now controlling to {h['p_target_mbar']:.2e} mbar{note}")

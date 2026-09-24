@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import logfile
+from . import openings
 from . import shared
 from .config import LOG_INTERVAL_S
 from .keller import detect_keller_bus, keller_thread
@@ -91,6 +92,8 @@ def main():
         return False
 
     logfile.init_paths()
+    remembered = openings.load()
+    print(remembered)
 
     print("Scanning for Keller sensor...")
     keller_port, keller_bus = detect_keller_bus()
@@ -118,6 +121,7 @@ def main():
     threading.Thread(target=logger_thread, daemon=True).start()
 
     log_event("System started")
+    log_event(remembered)
     if keller_ok:
         log_event(f"Keller online · {keller_port}")
 

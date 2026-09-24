@@ -13,7 +13,8 @@ from . import logfile
 from . import readout
 from . import shared
 from .config import (
-    BATCH_TEST_RUNS_DEFAULT, BATCH_TEST_RUNS_MAX, BATCH_TOPUP_DROP_DEFAULT_BAR,
+    BATCH_MIN_TESTS, BATCH_PRECISION_K, BATCH_TEST_RUNS_DEFAULT, BATCH_TEST_RUNS_MAX,
+    BATCH_TOPUP_DROP_DEFAULT_BAR,
     FLIGHT_POWER_BUDGET_W, HEATER_I_AIN, HEATER_MAX_DUTY, HEATER_PWM_PERIOD_S,
     HEATER_R_OHM, HEATER_V_AIN, PID_SETPOINT_DEFAULT, PRESSURE_TARGET_DEFAULT,
     PRESSURE_TARGET_MIN, PRESSURE_TRIP_MBAR, TEMP_TRIP_C, heater_current_a,
@@ -22,6 +23,7 @@ from .config import (
 from .control import AUTO_P, AUTO_T, MANUAL, MODES, heater_command, snapshot
 from .charts import draw_chart, make_chart
 from .labjack import LABJACK_AVAILABLE
+from .openings import describe as openings_text
 from .palette import (
     BG, BORDER, BRIGHT, DIM, FIELD, FIELD_HOT, PROMPT, PWR_LINE, TEMP_LINE, TEXT, UP_LINE,
     VAC_LINE, WARN,
@@ -183,7 +185,7 @@ class TEGui:
         # and DISARM aborts it.
         row4 = tk.Frame(parent, bg=BG)
         row4.pack(fill="x", pady=(0, 4))
-        self.runs_entry = self._entry(row4, "test runs", f"{BATCH_TEST_RUNS_DEFAULT}", width=4)
+        self.runs_entry = self._entry(row4, "test runs (max)", f"{BATCH_TEST_RUNS_DEFAULT}", width=4)
         self.runs_entry.unbind("<Return>")
         self.batch_btn = tk.Button(row4, text="start batch", command=self._start_batch, **btn)
         self.batch_btn.pack(side="left", padx=(0, 6))
@@ -199,7 +201,8 @@ class TEGui:
         self.batch_status = tk.Label(parent, text="", font=self.f, fg=DIM, bg=BG, anchor="w")
         self.batch_status.pack(fill="x")
         self._batch_running = False
-        self._confirm = messagebox.askokcancel      # tests replace it
+        self._confirm = messagebox.askokcancel      # tests replace these two
+        self._ask = messagebox.askyesnocancel
 
         self.heater_status = tk.Label(parent, text="", font=self.f, fg=DIM,
                                       bg=BG, anchor="w")
@@ -316,19 +319,39 @@ class TEGui:
             return
         up, _ = shared.upstream()
         up_txt = f"{up:.3f} bar (measured)" if up is not None else "not read (Keller offline)"
-        if not self._confirm(
+        entry, usable, why_not = batchrun.remembered(torque)
+        common = (f"Upstream pressure: {up_txt}\n"
+                  f"Test runs: up to {n}; it stops once the mean T_open is known "
+                  f"to ±{BATCH_PRECISION_K:g} K (at least {BATCH_MIN_TESTS})\n"
+                  + (f"Pause for a top-up if upstream falls {topup:g} bar\n" if topup
+                     else "No top-up pauses\n") +
+                  "\nThe batch arms the heater itself for each run. "
+                  "SW171 must be on. DISARM or 'abort batch' stops it.")
+        retorqued = None
+        if usable:
+            answer = self._ask(
                 "Start batch",
                 f"Seat screw torque: {torque:.2f} N·m\n"
-                f"Is that the torque on the valve now?\n\n"
-                f"Upstream pressure: {up_txt}\n"
-                f"Test runs: {n} (plus scout 1 and scout 2)\n"
-                + (f"Pause for a top-up if upstream falls {topup:g} bar\n\n" if topup
-                   else "No top-up pauses\n\n") +
-                f"The batch arms the heater itself for each run. "
-                f"SW171 must be on. DISARM or 'abort batch' stops it."):
-            log_event("Batch not started (cancelled)")
-            return
-        ok, msg = batchrun.start(n, logfile.LOG_FILE, topup)
+                f"Remembered opening point: {openings_text(entry)}\n\n"
+                f"Has the seat screw been re-torqued (or the valve disturbed) since "
+                f"the last batch at {torque:.2f} N·m?\n\n"
+                f"No: start from the remembered opening point (no scouts).\n"
+                f"Yes: find it again with scout 1 and scout 2.\n\n" + common)
+            if answer is None:
+                log_event("Batch not started (cancelled)")
+                return
+            retorqued = bool(answer)
+        else:
+            note = (f"Remembered opening point not used ({why_not}): scout 1 and "
+                    f"scout 2 first.\n" if entry is not None else
+                    "No remembered opening point: scout 1 and scout 2 first.\n")
+            if not self._confirm(
+                    "Start batch",
+                    f"Seat screw torque: {torque:.2f} N·m\n"
+                    f"Is that the torque on the valve now?\n\n" + note + common):
+                log_event("Batch not started (cancelled)")
+                return
+        ok, msg = batchrun.start(n, logfile.LOG_FILE, topup, retorqued=retorqued)
         if not ok:
             log_event(msg)
         self._apply_gate()

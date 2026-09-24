@@ -1,18 +1,27 @@
-"""Batches of opening-point runs (context.md, "Batches"; history entry 27).
+"""Batches of opening-point runs (context.md, "Batches"; history 27-30).
 
 Agreed behaviour (24 Sept 2026):
   * a batch needs the seat screw torque; upstream pressure is measured only
-  * scout 1: baseline wait, then heat towards the ceiling until the valve opens
-  * scout 2: creep at 3 °C/min from 10 K below scout 1's T_open
-    (repeated 10 K lower if it opens before it could creep)
-  * test runs: creep from 5 K below scout 2's T_open; only they are averaged
+  * every run: cool (heater off) to the hold temperature — 35 °C, or 20 K
+    below the opening point if lower, not below 28 °C — hold it 4 min with
+    auto-t, approach once the chamber is settled, creep at 3 °C/min
+  * scout 1 heats towards the ceiling; scout 2 creeps from 10 K below scout
+    1's T_open (repeated 10 K lower if it opens before it could creep)
+  * a remembered opening point (operator: not re-torqued) replaces the scouts
+  * test runs start a margin below the reference: 3 × scatter + 0.5 K,
+    2-5 K (5 K while unknown), +2 K if upstream moved > 1 bar
+  * a test run that opens while approaching isn't averaged; a scout 2
+    follows (find again)
+  * the batch stops once the mean T_open is within ±1 K (95 %) with ≥ 3
+    test runs; N is the most
+  * detection: +1e-7 mbar or +12 %, whichever first, at least 0.02 decades
   * T_open is backdated to the onset; T_detect is logged beside it
   * the heater is disarmed at detection and re-armed for each run
-  * cooldown: 20 K below T_open (not below 28 °C) and the chamber back at baseline
   * no opening by the ceiling → scouts stop the batch; two failed test runs
-    in a row stop it; disarm, trip, lost gauge or abort end it
+    in a row stop it; disarm, trip, lost gauge or abort end it; so does the
+    valve opening while holding
   * every run → its CSV, summary.csv and the Runs sheet; the batch → the
-    Batches sheet, batch.json and batch.png
+    Batches sheet, batch.json, batch.png and (maybe) the remembered point
 """
 import csv
 import importlib.util
@@ -23,7 +32,8 @@ import pytest
 
 import batch_sim
 from batch_sim import Rig
-from driver import batch, batchrun, config, control, controller, schema, shared, workbook
+from driver import (batch, batchrun, config, control, controller, openings, schema, shared,
+                    workbook)
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -35,40 +45,53 @@ def summaries(rig, b):
 # ── the sequence, on the simulated rig ─────────────────────────────────────
 
 def test_a_complete_batch():
+    # A repeatable valve: precise enough after the minimum 3 test runs, not N.
     rig = Rig(open_c=60.0)
-    b, msgs = rig.run_batch(n_tests=4)
-    assert b['state'] == batch.COMPLETE
+    b, msgs = rig.run_batch(n_tests=8)
+    assert b['state'] == batch.COMPLETE and "precise enough" in b['note']
     names = [r['name'] for r in b['runs']]
-    assert names == ['scout1', 'scout2', 'testrun01', 'testrun02', 'testrun03', 'testrun04']
+    assert names == ['scout1', 'scout2', 'testrun01', 'testrun02', 'testrun03']
     s = summaries(rig, b)
     tests = [x for x in s if x['in_average'] == 1]
-    assert len(tests) == 4 and all(x['opened_during'] == 'creep' for x in tests)
+    assert len(tests) == 3 and all(x['opened_during'] == 'creep' for x in tests)
     t = [x['t_open_degC'] for x in tests]
     # The TC leads the seat by ~5 s × 0.05 °C/s: T_open reads a little high, repeatably
     assert all(60.0 <= v <= 61.5 for v in t) and max(t) - min(t) < 0.3
     # scout 1 heats fast, so it reads high; scouts are never averaged
     assert s[0]['t_open_degC'] > max(t) + 5 and s[0]['in_average'] == 0 == s[1]['in_average']
     row = batch.batch_summary(b, s)
-    assert row['test_runs_opened'] == 4 and abs(row['t_open_mean_degC'] - sum(t) / 4) < 0.01
-    assert row['t_open_std_K'] != ''
+    assert row['test_runs_opened'] == 3 and abs(row['t_open_mean_degC'] - sum(t) / 3) < 0.01
+    assert row['t_open_std_K'] != '' and row['t_open_ci95_K'] <= config.BATCH_PRECISION_K
+    assert row['started_from'] == 'scouts'
 
 
-def test_starts_follow_the_scouts():
+def test_starts_follow_the_scouts_then_the_margin_narrows():
     rig = Rig(open_c=60.0)
-    b, _ = rig.run_batch(n_tests=2)
-    s1, s2, t1, t2 = b['runs']
+    b, _ = rig.run_batch(n_tests=3)
+    s1, s2, t1, t2, t3 = b['runs']
     assert s2['start_c'] == pytest.approx(s1['T_onset'] - config.BATCH_SCOUT2_BELOW_K)
-    assert t1['start_c'] == t2['start_c'] == pytest.approx(s2['T_onset'] - config.BATCH_TEST_BELOW_K)
+    # no scatter known yet: the widest margin, from scout 2, then from test run 1
+    assert t1['margin'] == t2['margin'] == config.BATCH_MARGIN_MAX_K
+    assert t1['ref_c'] == pytest.approx(s2['T_onset'])
+    assert t2['ref_c'] == pytest.approx(t1['T_onset'])
+    # two test runs give a scatter: 3 × it + 0.5 K, at least 2 K
+    sd = __import__('statistics').stdev([t1['T_onset'], t2['T_onset']])
+    assert t3['margin'] == pytest.approx(batch.margin(sd)) == pytest.approx(config.BATCH_MARGIN_MIN_K)
+    for r in (t1, t2, t3):
+        assert r['start_c'] == pytest.approx(r['ref_c'] - r['margin'])
 
 
 def test_heater_disarmed_at_detection_and_rearmed_per_run():
     seen = []
 
     def hook(rig, b):
-        seen.append((b['run']['name'], b['phase'], rig.h['armed'], rig.h['armed_at']))
+        if b['state'] == batch.RUNNING:
+            seen.append((b['run']['name'], b['phase'], rig.h['armed'], rig.h['armed_at']))
     rig = Rig(open_c=60.0)
     rig.run_batch(n_tests=2, hook=hook)
-    assert not any(armed for _, phase, armed, _ in seen if phase in ('settle', 'cooldown'))
+    # heater off while cooling; on (auto-t) from the hold to detection
+    assert not any(armed for _, phase, armed, _ in seen if phase == 'cooldown')
+    assert all(armed for _, phase, armed, _ in seen if phase == 'creep')
     arm_times = {name: at for name, phase, armed, at in seen if armed}
     assert len(arm_times) == 4 and len(set(arm_times.values())) == 4   # a fresh 60 min each
 
@@ -101,9 +124,10 @@ def test_labels_for_the_log():
     rig = Rig(open_c=60.0)
     phases = set()
     rig.run_batch(n_tests=1, hook=lambda r, b: phases.add(batch.labels(b)))
-    assert ('scout1', 'settle') in phases and ('scout2', 'settle') in phases
-    assert ('scout1', 'baseline') not in phases and ('testrun01', 'creep') in phases
+    assert ('scout1', 'cooldown') in phases and ('scout1', 'hold') in phases
+    assert ('scout2', 'hold') in phases and ('testrun01', 'creep') in phases
     assert ('scout2', 'cooldown') in phases
+    assert not any(ph in ('settle', 'baseline') for _, ph in phases)
     assert {r['batch_run'] for _, r in rig.rows} >= {'scout1', 'scout2', 'testrun01'}
 
 
@@ -117,10 +141,12 @@ def test_upstream_is_measured_per_run():
     assert row['upstream_at_open_min_bar'] < row['upstream_at_open_max_bar']
 
 
-def test_scout2_repeats_lower_if_it_opens_before_creeping(monkeypatch):
-    monkeypatch.setattr(batch_sim, "TAU_SEAT", 20.0)            # a laggier seat: scout 1 reads ~35 K high
+def test_scout2_repeats_lower_if_it_opens_before_creeping():
+    def hook(rig, b):
+        if b['run']['name'] == 'scout2' and b['phase'] == batch.HOLD:
+            rig.open_c = 45.0               # well below scout 2's start (scout 1 − 10 K)
     rig = Rig(open_c=60.0)
-    b, msgs = rig.run_batch(n_tests=1)
+    b, msgs = rig.run_batch(n_tests=1, hook=hook)
     names = [r['name'] for r in b['runs']]
     assert 'scout2b' in names
     first = b['runs'][1]
@@ -204,7 +230,7 @@ def test_needs_a_torque():
 
 def test_recovery_is_tighter_than_detection():
     # Otherwise the next run would start "already open" (found in simulation).
-    assert config.BATCH_RECOVER_DEC < config.PRESSURE_OPEN_DEC
+    assert 0 < config.BATCH_RECOVER_FRACTION < 1
 
 
 # ── onset, e-fold, energy ──────────────────────────────────────────────────
@@ -321,23 +347,33 @@ def test_files_workbook_and_plot(batch_dirs, clock):
     shared.set_seat_screw_torque(0.3)
     shared.store_keller(3.1, None, clock.t)
     sensors()
-    ok, name = batchrun.start(2, main_log="te-sensor_x.csv", start_thread=False)
+    ok, name = batchrun.start(3, main_log="te-sensor_x.csv", start_thread=False)
     assert ok and name.endswith("_0.30Nm_3.10bar")
     drive(clock, Rig(open_c=60.0))
     folder = Path(batchrun.folder())
     assert {p.name for p in folder.iterdir()} >= {
-        "scout1.csv", "scout2.csv", "testrun01.csv", "testrun02.csv", "summary.csv", "batch.json"}
+        "scout1.csv", "scout2.csv", "testrun01.csv", "testrun02.csv", "testrun03.csv",
+        "summary.csv", "batch.json"}
     rows = list(csv.DictReader(open(folder / "testrun01.csv", encoding="utf-8")))
     assert rows and tuple(rows[0]) == schema.MAIN
-    assert {r['batch_phase'] for r in rows} == {'settle', 'approach', 'creep', 'cooldown'}
+    assert {r['batch_phase'] for r in rows} == {'hold', 'approach', 'creep', 'cooldown'}
     summary = list(csv.DictReader(open(folder / "summary.csv", encoding="utf-8")))
-    assert [r['run'] for r in summary] == ['scout1', 'scout2', 'testrun01', 'testrun02']
+    assert [r['run'] for r in summary] == ['scout1', 'scout2', 'testrun01', 'testrun02',
+                                           'testrun03']
     assert all(float(r['energy_at_open_J']) > 0 for r in summary[2:])
+    assert all(float(r['hold_degC']) == config.BATCH_COOL_TO_C for r in summary)
+    assert all(float(r['hold_s']) >= config.BATCH_HOLD_S for r in summary)
     info = json.load(open(folder / "batch.json", encoding="utf-8"))
     assert info['seat_screw_torque_Nm'] == 0.3 and info['results']['status'] == 'complete'
     assert info['settings']['BATCH_CREEP_C_MIN'] == config.BATCH_CREEP_C_MIN
+    assert info['settings']['BATCH_HOLD_S'] == config.BATCH_HOLD_S
+    # the result is now the remembered opening point
+    assert info['results']['remembered_after'] == 'yes' and info['remembered']['n'] == 3
+    saved = json.load(open(config.OPENINGS_FILE, encoding="utf-8"))['points']['0.30']
+    assert saved['t_open_C'] == pytest.approx(info['results']['t_open_mean_degC'], abs=0.01)
+    assert saved['upstream_bar'] == pytest.approx(3.0, abs=0.01)
     wb = openpyxl.load_workbook(config.BATCH_WORKBOOK)
-    assert wb['Runs'].max_row == 5 and wb['Batches'].max_row == 2
+    assert wb['Runs'].max_row == 6 and wb['Batches'].max_row == 2
     assert [c.value for c in wb['Batches'][1]] == list(schema.BATCH_SUMMARY)
     assert not control.snapshot()['armed']
     assert batchrun.labels() == ('', '')
@@ -351,7 +387,7 @@ def test_files_workbook_and_plot(batch_dirs, clock):
     spec.loader.exec_module(plotter)
     s, traces = plotter.load_batch(folder)
     x, y = plotter.batch_average_vs_temperature(s, traces)
-    assert len(x) > 5
+    assert len(x) > 5 and list(x) == sorted(x)          # drawn left to right
     out = plotter.plot_batch(folder, str(folder / "batch.png"), show=False)
     assert Path(out).stat().st_size > 10_000
 
@@ -397,24 +433,60 @@ def test_the_logger_labels_rows_and_copies_them(batch_dirs, monkeypatch):
     shared.stop.set()
     th.join(timeout=3)
     main = list(csv.DictReader(open(batch_dirs / "t.csv", encoding="utf-8")))
-    assert main[1]['batch_run'] == 'scout1' and main[1]['batch_phase'] == 'settle'
+    assert main[1]['batch_run'] == 'scout1' and main[1]['batch_phase'] in ('cooldown', 'hold')
     run = list(csv.DictReader(open(Path(batchrun.folder()) / "scout1.csv", encoding="utf-8")))
     assert len(run) >= 3 and run[0]['batch_run'] == 'scout1'
 
 
 # ── the real rig: settling, top-ups, the leak, the ceiling ─────────────────
 
+def approach_times(rig, **kw):
+    """Run a batch; [(when the hold time was reached, when the approach
+    began)] for every run."""
+    seen, out = [], []
+
+    def hook(r, b):
+        seen.append((r.now, b['run']['name'], b['phase'], b['hold_since']))
+    b, msgs = rig.run_batch(hook=lambda r, b_: hook(r, b_), **kw)
+    for i in range(1, len(seen)):
+        t, name, ph, since = seen[i]
+        if ph == batch.APPROACH and seen[i - 1][2] == batch.HOLD:
+            out.append((seen[i - 1][3] + config.BATCH_HOLD_S, t))
+    return b, out, msgs
+
+
+def rising(rig, t0, over_s):
+    """The chamber doubles over over_s from t0 (outgassing, say), then stays."""
+    rig.base = 5e-7 * (1 + min(max(rig.now - t0, 0.0), over_s) / over_s)
+
+
 def test_waits_for_a_rising_chamber_before_heating():
-    # The chamber rises for the first 3 min (say, after filling upstream).
-    def hook(rig, b):
-        rig.base = 5e-7 * (1 + min(rig.now - rig.t_start, 180) / 180)
+    # Rising (0.03 dec/min) from 2 min before the start until 10 min: longer
+    # than the hold. It was rising before the heater came on, so it's the
+    # chamber's own rise: the batch waits it out.
     rig = Rig(open_c=60.0)
-    rig.t_start = rig.now
-    armed = []
-    b, _ = rig.run_batch(n_tests=1, hook=lambda r, b: (hook(r, b), armed.append((r.now, r.h['armed'])))[0])
-    first = next(t for t, a in armed if a) - rig.t_start
-    assert first >= 180                                # not while it was rising
+    t0 = rig.now
+    history = []
+    for _ in range(480):
+        rising(rig, t0, 600)
+        rig.advance(0.25)
+        history.append((rig.now, rig.vac()[0]))
+    approach = []
+    b, _ = rig.run_batch(n_tests=1, history=history, hook=lambda r, b: (
+        rising(r, t0, 600), b['phase'] == batch.APPROACH and approach.append(r.now)))
+    assert approach[0] - t0 >= 600                     # not while it was rising
     assert b['state'] == batch.COMPLETE and b['runs'][0]['opened_during'] is not None
+
+
+def test_a_rise_that_starts_with_the_hold_looks_like_the_valve():
+    # Flat before; rising from the moment the heater warms the valve, then
+    # steady higher: indistinguishable from the valve opening below the hold
+    # temperature — the batch stops and says so rather than measure from it.
+    rig = Rig(open_c=60.0)
+    history = rig.idle(120)
+    t0 = rig.now
+    b, _ = rig.run_batch(n_tests=1, history=history, hook=lambda r, b: rising(r, t0, 120))
+    assert b['state'] == batch.STOPPED and "hold temperature" in b['note']
 
 
 def test_a_falling_chamber_does_not_hold_it_up():
@@ -446,7 +518,7 @@ def test_top_up_pause_and_the_chamber_jump_after_filling():
     b, msgs = rig.run_batch(n_tests=4, topup_drop=0.3,
                             hook=lambda r, b: phases.append((b['phase'], r.h['armed'])))
     assert b['state'] == batch.COMPLETE and b['top_ups'] >= 1 and rig.fills == b['top_ups']
-    assert not any(armed for phase, armed in phases if phase in (batch.TOPUP, batch.SETTLE))
+    assert not any(armed for phase, armed in phases if phase in (batch.TOPUP, batch.COOLDOWN))
     # no false openings from the jump: every test run opened while creeping, near 60 °C
     tests = [r for r in b['runs'] if r['counts']]
     assert all(r['opened_during'] == batch.CREEP and 60.0 <= r['T_onset'] <= 61.5 for r in tests)
@@ -510,62 +582,35 @@ def test_top_up_needs_the_keller(batch_dirs):
     assert ok
 
 
-# ── no waiting when there is nothing to wait for ───────────────────────────
+# ── no waiting beyond the hold when there is nothing to wait for ──────────
 
-def first_arm(rig, **kw):
-    arms = []
-    b, msgs = rig.run_batch(hook=lambda r, b: arms.append((r.now, r.h['armed'])), **kw)
-    return b, next(t for t, a in arms if a), msgs
-
-
-def test_a_settled_chamber_starts_at_once():
-    rig = Rig(open_c=60.0)
-    history = rig.idle(120)                     # the driver's readings before start
-    t0 = rig.now
-    b, armed_at, _ = first_arm(rig, n_tests=1, history=history)
-    assert armed_at - t0 < 1.0 and b['state'] == batch.COMPLETE
+def test_a_settled_chamber_approaches_as_soon_as_the_hold_is_done():
+    for history in (True, False):
+        rig = Rig(open_c=60.0)
+        hist = rig.idle(120) if history else ()
+        b, times, _ = approach_times(rig, n_tests=3, history=hist)
+        assert b['state'] == batch.COMPLETE and len(times) == 5
+        assert all(0 <= began - done < 1.0 for done, began in times)
 
 
-def test_without_history_it_collects_a_minute_first():
-    rig = Rig(open_c=60.0)
-    t0 = rig.now
-    _, armed_at, _ = first_arm(rig, n_tests=1)
-    assert 0.8 * config.BATCH_SETTLE_WINDOW_S <= armed_at - t0 < config.BATCH_SETTLE_WINDOW_S + 5
-
-
-def test_a_rising_history_still_waits():
-    rig = Rig(open_c=60.0, fill_jump=0.7)
-    rig.fill()                                  # just filled: the chamber jumps
-    history = rig.idle(5)
-    t0 = rig.now
-    _, armed_at, _ = first_arm(rig, n_tests=1, history=history)
-    assert armed_at - t0 > 30
-
-
-def test_continue_long_after_the_fill_needs_no_wait():
+def test_continue_long_after_the_fill_needs_no_extra_wait():
     # topped up 20 s into the pause, continue pressed 5 min later: settled by then
     rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60, fill_jump=0.7)
-    events = []
-
-    def hook(r, b):
-        events.append((r.now, b['phase'], r.h['armed']))
-    b, msgs = rig.run_batch(n_tests=3, topup_drop=0.3, continue_after_s=300, hook=hook)
+    b, times, _ = approach_times(rig, n_tests=4, topup_drop=0.3, continue_after_s=300)
     assert b['top_ups'] >= 1 and b['state'] == batch.COMPLETE
-    resumed = next(i for i, (t, ph, a) in enumerate(events)
-                   if ph == batch.SETTLE and events[i - 1][1] == batch.TOPUP)
-    armed = next(t for t, ph, a in events[resumed:] if a)
-    assert armed - events[resumed][0] < 1.0
+    assert all(0 <= began - done < 1.0 for done, began in times)
 
 
-def test_continue_right_after_the_fill_waits_for_the_jump():
-    rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60, fill_jump=0.7)
-    events = []
-    b, _ = rig.run_batch(n_tests=3, topup_drop=0.3,
-                         hook=lambda r, b: events.append((r.now, b['phase'], r.h['armed'])))
-    resumed = next(i for i, (t, ph, a) in enumerate(events)
-                   if ph == batch.SETTLE and events[i - 1][1] == batch.TOPUP)
-    armed = next(t for t, ph, a in events[resumed:] if a)
-    assert armed - events[resumed][0] >= 0.8 * config.BATCH_SETTLE_WINDOW_S
+def test_a_fill_that_outlasts_the_hold_delays_the_approach(monkeypatch):
+    # A slow fill tail (τ 400 s, falling faster than the settle limit when
+    # the hold ends): the approach waits for it; the jump isn't an opening.
+    monkeypatch.setattr(batch_sim, "TAU_FILL", 400.0)
+    rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60, fill_jump=3.0)
+    b, times, msgs = approach_times(rig, n_tests=4, topup_drop=0.3)
+    assert b['top_ups'] >= 1 and b['state'] == batch.COMPLETE, b['note']
+    assert max(began - done for done, began in times) > 30
+    tests = [r for r in b['runs'] if r['counts']]
+    assert all(r['opened_during'] == batch.CREEP and 60.0 <= r['T_onset'] <= 61.5 for r in tests)
 
 
 def test_the_driver_keeps_timed_chamber_readings():
@@ -575,3 +620,203 @@ def test_the_driver_keeps_timed_chamber_readings():
     assert shared.vacuum_history() == [(100.0, 1e-6)]
     shared.reset()
     assert shared.vacuum_history() == []
+
+
+# ── the hold ───────────────────────────────────────────────────────────────
+
+def test_hold_temperature_rule():
+    b = batch.new_batch(3, 0.3, 0.0)
+    assert batch.hold_temperature(b) == config.BATCH_COOL_TO_C          # nothing known
+    for t_open, hold in ((146.0, 35.0), (60.0, 35.0), (50.0, 30.0), (40.0, 28.0)):
+        k = dict(t_open_C=t_open, upstream_bar=3.0, scatter_K=0.3, creep_C_min=3.0)
+        assert batch.hold_temperature(batch.new_batch(3, 0.3, 0.0, known=k)) == hold
+
+
+def test_every_run_holds_first():
+    seen = []
+    rig = Rig(open_c=60.0)
+    b, _ = rig.run_batch(n_tests=3, hook=lambda r, b: seen.append((b['run']['name'], b['phase'],
+                                                                  r.T, r.h['setpoint_C'])))
+    for r in b['runs']:
+        assert r['hold_c'] == config.BATCH_COOL_TO_C and r['held_s'] >= config.BATCH_HOLD_S
+        # it approached from the hold temperature: the TC was within the band
+        at_start = [T for name, ph, T, _ in seen if name == r['name'] and ph == batch.HOLD]
+        assert abs(at_start[-1] - r['hold_c']) <= config.BATCH_HOLD_BAND_K
+
+
+def test_the_valve_opening_while_holding_stops_the_batch():
+    rig = Rig(open_c=30.0)                              # opens below the 35 °C hold
+    b, _ = rig.run_batch(n_tests=3, history=rig.idle(120))
+    assert b['state'] == batch.STOPPED and "hold temperature" in b['note']
+    assert [r['name'] for r in b['runs']] == ['scout1'] and not rig.h['armed']
+
+
+# ── the stopping rule ──────────────────────────────────────────────────────
+
+def test_student_t():
+    assert batch.t975(1) == 12.706 and batch.t975(2) == 4.303 and batch.t975(30) == 2.042
+    assert batch.t975(31) == pytest.approx(2.040, abs=0.002)
+    assert batch.t975(120) == pytest.approx(1.980, abs=0.002)
+    assert batch.t975(0) is None
+
+
+def test_more_scatter_needs_more_runs_and_N_is_the_most():
+    rig = Rig(open_c=60.0, open_scatter=1.5, seed=4)
+    b, _ = rig.run_batch(n_tests=10)
+    mean, sd, n, half = batch.precision(b)
+    assert b['state'] == batch.COMPLETE and n > config.BATCH_MIN_TESTS
+    assert half <= config.BATCH_PRECISION_K and "precise enough" in b['note']
+    # before the last run it wasn't precise enough yet
+    rig = Rig(open_c=60.0, open_scatter=1.5, seed=4)
+    b, _ = rig.run_batch(n_tests=4)
+    assert b['state'] == batch.COMPLETE and "all 4 test runs done" in b['note']
+    assert sum(r['counts'] for r in b['runs']) == 4
+
+
+def test_the_upstream_correction_removes_the_leak_scatter_not_the_mean():
+    rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60, k_up=-12.0)
+    b, _ = rig.run_batch(n_tests=10)
+    runs = [r for r in b['runs'] if r['averaged']]
+    raw = [r['T_onset'] for r in runs]
+    mean, sd, n, half = batch.precision(b)
+    assert mean == pytest.approx(sum(raw) / len(raw))              # the mean is untouched
+    assert sd < 0.5 < __import__('statistics').stdev(raw)          # the leak's scatter is gone
+    assert b['state'] == batch.COMPLETE and "precise enough" in b['note']
+
+
+def test_margin_rule():
+    assert batch.margin(None) == config.BATCH_MARGIN_MAX_K
+    assert batch.margin(0.1) == config.BATCH_MARGIN_MIN_K
+    assert batch.margin(1.0) == pytest.approx(3.5)
+    assert batch.margin(3.0) == config.BATCH_MARGIN_MAX_K
+    assert batch.margin(1.0, up_moved_bar=-1.2) == pytest.approx(5.5)
+    assert batch.margin(1.0, up_moved_bar=0.8) == pytest.approx(3.5)
+
+
+# ── detection threshold ────────────────────────────────────────────────────
+
+def test_absolute_or_relative_whichever_first_with_a_floor():
+    import math
+    lg = math.log10
+    # low background: +12 % comes before +1e-7 mbar
+    assert batch.open_threshold_dec(lg(5e-7)) == pytest.approx(0.05)
+    # 1e-6 mbar: +1e-7 is +10 % — first
+    assert batch.open_threshold_dec(lg(1e-6)) == pytest.approx(lg(1.1))
+    # high background: 1e-7 would be under the noise floor
+    assert batch.open_threshold_dec(lg(5e-6)) == pytest.approx(config.BATCH_DETECT_FLOOR_DEC)
+
+
+def test_detection_at_a_higher_background_is_earlier_than_plus_12_percent(monkeypatch):
+    rig = Rig(open_c=60.0, base=1.5e-6)
+    b, _ = rig.run_batch(n_tests=3)
+    t_abs = [r['T_detect'] for r in b['runs'] if r['averaged']]
+    monkeypatch.setattr(batch, "BATCH_DETECT_ABS_MBAR", None)
+    rig = Rig(open_c=60.0, base=1.5e-6)
+    b, _ = rig.run_batch(n_tests=3)
+    t_rel = [r['T_detect'] for r in b['runs'] if r['averaged']]
+    assert max(t_abs) < min(t_rel)
+
+
+# ── starting from a remembered opening point ───────────────────────────────
+
+KNOWN = dict(torque_Nm=0.3, t_open_C=60.3, upstream_bar=3.0, k_per_bar=-12.0,
+             k_per_bar_from='batch fit', scatter_K=0.15, n=3, ci95_K=0.4,
+             creep_C_min=3.0, batch='20260924_120000_0.30Nm_3.00bar', date='24 Sep 2026')
+
+
+def test_remembered_start_skips_the_scouts():
+    rig = Rig(open_c=60.0)
+    b, _ = rig.run_batch(n_tests=6, known=dict(KNOWN), retorqued=False)
+    names = [r['name'] for r in b['runs']]
+    assert names == ['testrun01', 'testrun02', 'testrun03']
+    t1 = b['runs'][0]
+    assert t1['ref_c'] == pytest.approx(KNOWN['t_open_C'])
+    assert t1['margin'] == pytest.approx(batch.margin(KNOWN['scatter_K']))
+    assert b['state'] == batch.COMPLETE
+    assert batch.batch_summary(b, [])['started_from'].startswith('remembered')
+
+
+def test_remembered_start_is_shifted_for_the_upstream_pressure_now():
+    known = dict(KNOWN, upstream_bar=3.5)            # measured at 3.5 bar, now 3.0
+    rig = Rig(open_c=60.0)
+    b, _ = rig.run_batch(n_tests=3, known=known, retorqued=False)
+    t1 = b['runs'][0]
+    assert t1['ref_c'] == pytest.approx(60.3 + (-12.0) * (3.0 - 3.5), abs=0.01)
+
+
+def test_find_again_when_the_valve_moved_down():
+    rig = Rig(open_c=50.0)                           # remembered 60.3, now opens at 50
+    b, _ = rig.run_batch(n_tests=6, known=dict(KNOWN), retorqued=False)
+    names = [r['name'] for r in b['runs']]
+    assert names[:2] == ['testrun01', 'scout2'] and b['finds'] == 1
+    t1, s2 = b['runs'][:2]
+    assert t1['opened_during'] == batch.APPROACH and not t1['averaged']
+    assert s2['start_c'] == pytest.approx(min(t1['start_c'], t1['T_onset']) - 10.0)
+    mean, _, n, _ = batch.precision(b)
+    assert b['state'] == batch.COMPLETE and n >= 3 and 50.0 <= mean <= 51.0
+    assert b['runs'][2]['ref_c'] == pytest.approx(s2['T_onset'])   # from the re-scout
+    e = batch.remembered_entry(b, "x")
+    assert e is not None and e['t_open_C'] == pytest.approx(mean, abs=0.01)
+
+
+def test_a_valve_that_moved_up_just_creeps_longer():
+    rig = Rig(open_c=72.0)
+    b, _ = rig.run_batch(n_tests=6, known=dict(KNOWN), retorqued=False)
+    assert b['finds'] == 0 and b['runs'][0]['opened_during'] == batch.CREEP
+    assert b['state'] == batch.COMPLETE
+    assert 72.0 <= batch.precision(b)[0] <= 73.0
+
+
+# ── what gets remembered ───────────────────────────────────────────────────
+
+def ended_batch(t_opens, ups=None, known=None, old=None, retorqued=None):
+    """A finished batch with test runs at these T_opens (no simulation)."""
+    b = batch.new_batch(10, 0.3, 1_000_000.0, known=known, old=old, retorqued=retorqued)
+    b['runs'] = []
+    for i, t in enumerate(t_opens):
+        r = batch._new_run(b, i + 2, 0.0, None)
+        r.update(status=batch.OPENED, opened_during=batch.CREEP, averaged=True, T_onset=t,
+                 up_open=(ups[i] if ups else 3.0))
+        b['runs'].append(r)
+    b['run'] = b['runs'][-1] if b['runs'] else b['run']
+    b['ended'] = 1_000_100.0
+    return b
+
+
+def test_remembered_when_nothing_was_before():
+    e = batch.remembered_entry(ended_batch([60.1]), "b1")
+    assert e['t_open_C'] == 60.1 and e['n'] == 1 and e['scatter_K'] is None
+    assert e['creep_C_min'] == config.BATCH_CREEP_C_MIN and e['batch'] == "b1"
+    assert e['settings']['hold_s'] == config.BATCH_HOLD_S
+
+
+def test_replaced_after_three_test_runs():
+    e = batch.remembered_entry(ended_batch([60.2, 60.4, 60.3], known=KNOWN, old=KNOWN,
+                                           retorqued=False), "b2")
+    assert e['n'] == 3 and e['t_open_C'] == pytest.approx(60.3)
+
+
+def test_kept_after_a_short_batch_that_agrees():
+    assert batch.remembered_entry(ended_batch([60.5], known=KNOWN, old=KNOWN,
+                                              retorqued=False), "b3") is None
+
+
+def test_replaced_after_a_short_batch_that_shows_it_moved():
+    e = batch.remembered_entry(ended_batch([64.0], known=KNOWN, old=KNOWN,
+                                           retorqued=False), "b4")
+    assert e is not None and e['t_open_C'] == 64.0
+
+
+def test_moved_is_judged_at_the_old_upstream_pressure():
+    # 63.3 °C at 2.75 bar is 60.3 °C at 3.0 bar with −12 K/bar: not moved
+    assert batch.remembered_entry(ended_batch([63.3], ups=[2.75], known=KNOWN, old=KNOWN,
+                                              retorqued=False), "b5") is None
+
+
+def test_replaced_whenever_the_valve_was_disturbed():
+    e = batch.remembered_entry(ended_batch([60.5], old=KNOWN, retorqued=True), "b6")
+    assert e is not None and e['n'] == 1
+
+
+def test_nothing_to_remember_without_a_creeping_opening():
+    assert batch.remembered_entry(ended_batch([]), "b7") is None

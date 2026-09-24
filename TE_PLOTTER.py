@@ -839,7 +839,7 @@ def batch_average_vs_temperature(summary, traces):
         per_run.append(np.log10(d["p"]).groupby(b).mean())
     if len(per_run) < 2:
         return np.array([]), np.array([])
-    table = pd.concat(per_run, axis=1)
+    table = pd.concat(per_run, axis=1).sort_index()   # bins in temperature order
     table = table[table.notna().sum(axis=1) >= 2]
     return table.index.to_numpy(), 10 ** table.mean(axis=1).to_numpy()
 
@@ -898,7 +898,7 @@ def make_batch_figure(summary, traces, title):
         k += 0 if scout else 1
         lw, alpha = (1.0, 0.7) if scout else (1.3, 0.9)
         label = f"{r['run']}" + ("" if r["status"] == "opened" else f" ({r['status']})")
-        heat = d[d["phase"].isin(["baseline", "settle", "approach", "creep"])]
+        heat = d[d["phase"].isin(["baseline", "settle", "hold", "approach", "creep"])]
         cool = d[d["phase"] == "cooldown"]
         ax1.plot(heat["T"], heat["p"], color=colour, lw=lw, alpha=alpha, label=label)
         ax1.plot(cool["T"], cool["p"], color=colour, lw=0.8, alpha=0.4, ls=":")

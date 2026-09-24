@@ -34,7 +34,7 @@ MAIN_COLUMNS = (
     ("heater_on_s",             "s, gate ON time since the previous row (from edge times)"),
     ("seat_screw_torque_Nm",    "N·m, TE-Valve seat screw torque as entered; blank = not recorded"),
     ("batch_run",               "scout1 / scout2 / testrun01…, blank outside a batch"),
-    ("batch_phase",             "settle / approach / creep / cooldown / top-up, blank outside a batch"),
+    ("batch_phase",             "cooldown / hold / approach / creep / top-up (settle: 24 Sept 2026 only), blank outside a batch"),
 )
 
 # Switching log: te-sensor_<timestamp>_pwm.csv, one row per heater gate edge
@@ -51,7 +51,7 @@ PWM_COLUMNS = (
 RUN_SUMMARY_COLUMNS = (
     ("batch",                        "batch name (its folder)"),
     ("run",                          "scout1 / scout2 / testrun01…"),
-    ("in_average",                   "1 = a test run that opened (averaged), else 0"),
+    ("in_average",                   "1 = a test run that opened while creeping (averaged), else 0"),
     ("status",                       "opened / no opening / aborted"),
     ("start_time",                   "ISO local time the run started"),
     ("seat_screw_torque_Nm",         "N·m, as entered"),
@@ -78,6 +78,10 @@ RUN_SUMMARY_COLUMNS = (
     ("cooldown_s",                   "s from detection (or failure) to the end of cooldown"),
     ("note",                         "why a run failed or was cut short"),
     ("file",                         "the run's trace, relative to the batch folder"),
+    ("reference_degC",               "test runs: the reference T_open, shifted to the upstream pressure at the start"),
+    ("margin_K",                     "test runs: how far below the reference it started"),
+    ("hold_degC",                    "the hold temperature before the approach"),
+    ("hold_s",                       "s held (within BATCH_HOLD_BAND_K) before the approach"),
 )
 
 BATCH_SUMMARY_COLUMNS = (
@@ -111,6 +115,17 @@ BATCH_SUMMARY_COLUMNS = (
     ("top_ups",                      "how many times the batch paused for a top-up"),
     ("free_cooling_closed_mean_degC", "indicative"),
     ("folder",                       "the batch folder"),
+    ("started_from",                 "scouts, or the remembered opening point (and its batch)"),
+    ("t_open_ci95_K",                "± of the mean T_open, 95 % (Student t × scatter ÷ √n): the stopping rule"),
+    ("t_open_corrected_std_K",       "scatter of T_open corrected to the mean upstream pressure"),
+    ("slope_used_K_per_bar",         "K/bar used for that correction"),
+    ("slope_from",                   "batch fit / remembered / default"),
+    ("find_agains",                  "test runs that opened while still approaching (the valve had moved)"),
+    ("hold_degC",                    "hold temperature of the averaged test runs"),
+    ("hold_s",                       "BATCH_HOLD_S"),
+    ("detect_abs_mbar",              "BATCH_DETECT_ABS_MBAR (blank = off)"),
+    ("detect_rel_dec",               "BATCH_DETECT_REL_DEC"),
+    ("remembered_after",             "yes = this result is now the remembered opening point"),
 )
 
 MAIN = tuple(name for name, _ in MAIN_COLUMNS)

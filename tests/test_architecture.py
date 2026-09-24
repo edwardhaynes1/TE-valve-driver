@@ -11,7 +11,8 @@ ALLOWED = {
     "config": set(),
     "controller": {"config"},
     "shared": {"config"},
-    "control": {"config", "shared", "controller"},
+    "openings": {"config"},
+    "control": {"config", "shared", "controller", "openings"},
     "thermocouple": {"config", "shared"},
     "palette": set(),
     "charts": {"config", "palette"},
@@ -20,11 +21,11 @@ ALLOWED = {
     "labjack": {"config", "shared", "control", "thermocouple"},
     "batch": {"config", "controller"},
     "workbook": set(),
-    "batchrun": {"config", "shared", "control", "schema", "batch", "workbook"},
+    "batchrun": {"config", "shared", "control", "schema", "batch", "workbook", "openings"},
     "logfile": {"config", "shared", "control", "schema", "batchrun"},
     "gui": {"config", "shared", "control", "labjack", "logfile", "palette",
-            "charts", "readout", "batchrun"},
-    "app": {"config", "shared", "control", "keller", "labjack", "logfile", "gui"},
+            "charts", "readout", "batchrun", "openings"},
+    "app": {"config", "shared", "control", "keller", "labjack", "logfile", "gui", "openings"},
 }
 HARDWARE_OR_GUI = {"serial", "u3", "keller_protocol", "tkinter"}
 
@@ -70,7 +71,7 @@ def test_batch_logic_has_no_clock_threads_or_io():
 
 def test_control_and_logs_need_no_hardware_or_gui():
     for module in ("config", "controller", "shared", "control", "schema", "logfile",
-                   "batch", "batchrun", "workbook"):
+                   "batch", "batchrun", "workbook", "openings"):
         _, external = imports_of(module)
         assert not external & HARDWARE_OR_GUI, f"{module} imports {external & HARDWARE_OR_GUI}"
 

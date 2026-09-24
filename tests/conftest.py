@@ -8,13 +8,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from driver import batchrun, config, control, controller, shared  # noqa: E402
+from driver import batchrun, config, control, controller, openings, shared  # noqa: E402
 
 
 def reset_shared():
     shared.reset()
     control.reset()
     batchrun.reset()
+    openings.reset()
 
 
 class PackageAdapter:
@@ -95,7 +96,9 @@ class FakeClock:
 
 
 @pytest.fixture(autouse=True)
-def fresh_state(monkeypatch, capsys):
+def fresh_state(monkeypatch, capsys, tmp_path):
+    # never read or write the real logs/opening-points.json
+    monkeypatch.setattr(config, "OPENINGS_FILE", str(tmp_path / "opening-points.json"))
     reset_shared()
     clock = FakeClock()
     monkeypatch.setattr(control, "clock", clock)

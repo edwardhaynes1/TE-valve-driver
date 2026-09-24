@@ -365,15 +365,29 @@ PRESSURE_BURST_MARGIN_K = 2.0      # land this far below the goal; the creep doe
 PRESSURE_BURST_MAX_S    = 120.0    # never burst longer (21 Sept: 25 → 150 °C ≈ 80 s)
 PRESSURE_COAST_MAX_S    = 60.0     # coast ends at the TC peak, or after this long
 
-# ─── Batches — repeated opening-point runs (see context.md, history entry 27) ─
-# Scout 1 heats towards the ceiling; scout 2 creeps from 10 K below scout 1's
-# opening; test runs creep from 5 K below scout 2's. Detection uses the auto-p
-# rule (PRESSURE_OPEN_DEC above a PRESSURE_BASE_* baseline).
-BATCH_TEST_RUNS_DEFAULT = 5        # test runs per batch (scouts not counted)
+# ─── Batches — repeated opening-point runs (see context.md; history 27-30) ───
+# Every run: cool to the hold temperature, hold it, then approach and creep
+# until the valve opens. Scout 1 heats towards the ceiling; scout 2 creeps
+# from 10 K below scout 1's opening; test runs creep from a margin below the
+# reference. A remembered opening point (OPENINGS_FILE) replaces the scouts.
+BATCH_TEST_RUNS_DEFAULT = 5        # most test runs per batch (scouts not counted); it stops
+                                   # earlier once the mean is precise enough
 BATCH_TEST_RUNS_MAX     = 50
+BATCH_MIN_TESTS         = 3        # never stop on precision before this many test runs
+BATCH_PRECISION_K       = 1.0      # stop when the mean T_open's 95 % interval is within ±this
 BATCH_CREEP_C_MIN       = 3.0      # creep rate, °C per minute (TC lags ~8.5 K at this rate)
 BATCH_SCOUT2_BELOW_K    = 10.0     # scout 2 starts this far below scout 1's T_open
-BATCH_TEST_BELOW_K      = 5.0      # test runs start this far below scout 2's T_open
+# Margin — how far below the reference a test run starts: each K costs 20 s of
+# creep, too little and the valve opens while still approaching.
+BATCH_MARGIN_SCATTER_X  = 3.0      # × the scatter of T_open…
+BATCH_MARGIN_ADD_K      = 0.5      # …+ this (the approach lands up to ~0.5 K high)…
+BATCH_MARGIN_MIN_K      = 2.0      # …kept between these;
+BATCH_MARGIN_MAX_K      = 5.0      # also used while no scatter is known (was the fixed margin)
+BATCH_MARGIN_UP_BAR     = 1.0      # upstream moved more than this from the reference's…
+BATCH_MARGIN_UP_ADD_K   = 2.0      # …adds this
+BATCH_SLOPE_MIN_TESTS   = 4        # the batch's own K/bar slope is used from this many test runs…
+BATCH_SLOPE_MAX_SE      = 4.0      # …if its standard error is below this, K/bar; else the
+                                   # remembered slope, else −PRESSURE_UP_K_PER_BAR
 BATCH_CEILING_C         = 155.0    # no opening by here → the run failed. 5 K below TEMP_TRIP_C,
                                    # like PRESSURE_TSP_MAX_C: 0.45 N·m opened at ~146 °C at 2.7 bar
                                    # (24 Sept 2026) and 158 °C at 1 bar (21 Sept) — was 150
@@ -385,11 +399,13 @@ BATCH_START_BAND_K      = 0.5      # creep starts once the TC is within this of 
 # 1.4 → 2.35e-6 mbar with the valve cold, then fell back over ~4 min.
 BATCH_SETTLE_WINDOW_S   = 60.0     # trend = straight-line fit of log10(p) over this long
 BATCH_SETTLE_MAX_RISE_DEC_MIN = 0.01   # settled when rising slower than this (≈ +2.3 %/min)
-BATCH_SETTLE_MAX_FALL_DEC_MIN = 0.03   # …and falling slower than this (≈ −7 %/min): the
-                                   # baseline (a median of the last 5-30 s) then lags the
-                                   # chamber by ≤ 0.009 decades, well under PRESSURE_OPEN_DEC.
-                                   # 24 Sept 2026: the tail fell 1.5 %/min; after an opening
-                                   # the chamber was back within ~90 s
+BATCH_SETTLE_MAX_FALL_DEC_MIN = 0.01   # …and falling slower than this (≈ −2.3 %/min). A
+                                   # falling chamber hides the valve's first flow for the
+                                   # whole approach and creep (1-2 min): at the earlier
+                                   # 0.03 dec/min that was as much as the detection
+                                   # threshold, and a slow fill tail read T_open ~7 K high in
+                                   # simulation (history 30); at 0.01, < 1 K. 24 Sept 2026:
+                                   # the pump-down tail fell 1.5 %/min, so it passes
 BATCH_SETTLE_MAX_S      = 1800.0   # still rising after this long: the batch stops
 # Top-up — optional (set when starting): if upstream has fallen this far below
 # its value at the start of the batch, pause before the next run and ask for
@@ -400,12 +416,24 @@ BATCH_FILL_RISE_BAR     = 0.05     # a rise this big during the top-up pause is 
                                    # chamber is judged from when upstream stopped rising
 BATCH_UP_FIT_MIN_SPREAD_BAR = 0.05 # fit T_open against upstream only over at least this range
 BATCH_ONSET_DEC         = 0.015    # onset = last sample within this of the baseline (best guess)
-BATCH_COOL_BELOW_K      = 20.0     # cooldown: valve this far below the run's T_open…
-BATCH_COOL_MIN_C        = HEATER_HOLD_AMBIENT_C + 5.0   # …but never asked to go below this
-BATCH_RECOVER_DEC       = 0.025    # …and the chamber back within this of its baseline (≈ +6 %).
-                                   # Must be below PRESSURE_OPEN_DEC (+12 %), or the next run
-                                   # starts "already open" — 20 % was agreed, then found to do
-                                   # exactly that in simulation
+# Cold start — every run starts from the hold temperature, so every T_open is
+# the opening point of a cold, closed valve in the same state (history 30).
+# The valve has memory (it opened at 158 °C on a first heat-up, 140-148 °C on
+# re-heats, 0.45 N·m); a shallow cooldown gives a precise number for another
+# state. Change these for a deep-vs-shallow check; they are stored with results.
+BATCH_COOL_TO_C         = 35.0     # hold temperature…
+BATCH_COOL_BELOW_K      = 20.0     # …or this far below the reference, if lower…
+BATCH_COOL_MIN_C        = HEATER_HOLD_AMBIENT_C + 5.0   # …but never below this
+BATCH_HOLD_S            = 240.0    # auto-t holds it this long (the body lags the TC 150-250 s)
+BATCH_HOLD_BAND_K       = 1.0      # the hold time counts once the TC is within this of it
+# Detection — open when the chamber rises above its baseline by the absolute
+# rise or the relative one, whichever comes first, but not less than the floor.
+BATCH_DETECT_REL_DEC    = 0.05     # +12 % (the auto-p rule)
+BATCH_DETECT_ABS_MBAR   = 1e-7     # a throughput: flow ≈ pumping speed × rise. None = off
+BATCH_DETECT_FLOOR_DEC  = 0.02     # +4.7 %: the gauge noise is ~0.003 decades (24 Sept 2026)
+BATCH_RECOVER_FRACTION  = 0.5      # cooldown: chamber back within this × the threshold. Below
+                                   # 1, or the next run would start "already open" (found in
+                                   # simulation with a 20 % recovery)
 BATCH_COOL_MAX_S        = 1800.0   # a cooldown longer than this stops the batch
 BATCH_MAX_FAILS         = 2        # this many test runs in a row without opening stop it
 BATCH_SCOUT2_TRIES      = 3        # scout 2 opening during its approach (not creeping) is
@@ -413,6 +441,8 @@ BATCH_SCOUT2_TRIES      = 3        # scout 2 opening during its approach (not cr
 BATCH_DIR               = str(Path(__file__).resolve().parent.parent / "logs" / "batches")
 BATCH_WORKBOOK          = str(Path(__file__).resolve().parent.parent / "logs"
                               / "TE-valve-opening-map.xlsx")
+OPENINGS_FILE           = str(Path(__file__).resolve().parent.parent / "logs"
+                              / "opening-points.json")   # remembered opening points
 
 # LabJack combined sample rate (both vacuum + thermocouple read here)
 LABJACK_SAMPLE_HZ     = 4          # Hz — reads vacuum and TC each cycle

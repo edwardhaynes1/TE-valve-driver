@@ -35,8 +35,7 @@ def gui(tk_root, tmp_path, monkeypatch):
     monkeypatch.setattr(batchrun, "PLOT", False)
     real_start = batchrun.start
     monkeypatch.setattr(batchrun, "start",
-                        lambda n, main_log="", topup=None, start_thread=True:
-                        real_start(n, main_log, topup, False))
+                        lambda *a, **k: real_start(*a, **{**k, 'start_thread': False}))
     g = TEGui(root=tk.Toplevel(tk_root))
     g._confirm = lambda *a: True
     g.root.update()
@@ -116,3 +115,48 @@ def test_disarm_aborts_and_arm_is_refused_during_a_batch(gui):
     control.heater_command(armed=True)             # as the batch does
     gui._toggle_arm()                              # DISARM
     assert not control.snapshot()['armed'] and not batchrun.running()
+
+
+# ── the re-torque question (a remembered opening point exists) ─────────────
+
+REMEMBERED = dict(torque_Nm=0.30, t_open_C=61.2, upstream_bar=3.0, k_per_bar=-12.0,
+                  scatter_K=0.2, n=4, ci95_K=0.3, creep_C_min=config.BATCH_CREEP_C_MIN,
+                  batch='20260924_1612', date='24 Sep 2026')
+
+
+def asked(gui, answer):
+    """Start with the re-torque dialog answering `answer`; returns its text."""
+    from driver import openings
+    openings.remember(dict(REMEMBERED))
+    enter_torque(gui)
+    seen = []
+    gui._ask = lambda title, text: seen.append(text) or answer
+    gui._confirm = lambda *a: pytest.fail("the plain confirmation shouldn't be shown")
+    gui._start_batch()
+    batchrun.tick()
+    return seen[0] if seen else ""
+
+
+def test_not_retorqued_starts_from_the_remembered_point(gui):
+    text = asked(gui, False)
+    assert "Has the seat screw been re-torqued" in text and "61.2 °C at 3.00 bar" in text
+    assert batchrun.running() and batchrun.labels()[0] == 'testrun01'
+
+
+def test_retorqued_scouts(gui):
+    asked(gui, True)
+    assert batchrun.running() and batchrun.labels()[0] == 'scout1'
+
+
+def test_cancel_at_the_question_starts_nothing(gui):
+    asked(gui, None)
+    assert not batchrun.running()
+
+
+def test_no_question_without_a_remembered_point(gui):
+    enter_torque(gui)
+    seen = []
+    gui._ask = lambda *a: pytest.fail("no re-torque question without a remembered point")
+    gui._confirm = lambda title, text: seen.append(text) or True
+    gui._start_batch()
+    assert "No remembered opening point" in seen[0] and batchrun.running()

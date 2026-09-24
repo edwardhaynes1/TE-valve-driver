@@ -45,6 +45,28 @@ result stays meaningful. Agreed one question at a time; the reasons:
   temperature, which the lag inflates: after a disarm at ~146 °C the TC
   falls ~1 °C/s and reads far below the body. It stays labelled indicative.
 
+Found in simulation while building it (tests/batch_sim.py, now with a
+run-to-run scatter of the opening point):
+* **Opened while holding.** A valve opening below the hold temperature
+  (0.25 N·m at 5 bar opened near 27 °C on 21 Sept) raised the chamber
+  slowly while warming; the hold's fresh baseline followed it, and the run
+  then measured from the raised level. Now the settled level at the end of
+  the hold is compared with the lowest level since it began. An external
+  rise already under way when the hold starts (outgassing) is waited out
+  instead, as before; one that starts with the heating can't be told from
+  the valve, so the batch stops and says both.
+* **Falling-chamber limit 0.03 → 0.01 dec/min.** A falling background hides
+  the first flow through the whole approach and creep; a slow fill tail
+  read T_open ~7 K high at 0.03, < 1 K at 0.01. The measured pump-down tail
+  (1.5 %/min) still passes, and the 4 min hold usually covers the wait.
+* **Off by one.** The stopping rule first counted the run that had just
+  opened only after its cooldown, so it ran one test run too many.
+
+Simulated times (sim valve, TC time constant 80 s; the real body cools
+slower, so expect longer): from a remembered opening point, 3 test runs in
+~22 min (12 of them holding); with scouts ~36 min; 1.5 K of scatter needed
+7 test runs, ~69 min.
+
 ## 29. No settling wait when the chamber is already settled — 24 Sept 2026
 Settling waited ~50 s at the start of every batch, because the batch began
 with no chamber readings and the trend needs most of a minute; and ~50 s

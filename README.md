@@ -47,47 +47,56 @@ would need that gets a warning and the minimum setpoint.
 
 To measure the valve's *opening point* (the valve temperature where flow
 starts) with a mean and spread, set the seat screw torque and the upstream
-pressure by hand, enter the torque, choose the number of **test runs**
+pressure by hand, enter the torque, choose the most **test runs** it may do
 (default 5) and the **top-up** limit (default 0.3 bar; blank = never), and
-press **start batch**. It asks you to confirm the torque and shows the
-measured upstream pressure; then it runs by itself. Before every run it
-**settles**, heater off, until the chamber pressure is neither rising nor
-falling fast (a top-up's jump or outgassing would look like an opening).
-If it already is, there is no wait: the batch starts from the driver's
-recent readings, and after a top-up judges the chamber from when the
-upstream pressure stopped rising.
-If upstream has fallen by the top-up limit, it pauses before the next run:
-top up and press **continue**.
+press **start batch**. It shows the measured upstream pressure and asks you
+to confirm the torque, or, if an opening point is remembered for it, **has
+the seat screw been re-torqued (or the valve disturbed) since?** *No* skips
+the scouts. Then it runs by itself, and stops as soon as the mean T_open is
+known to **±1 K** (95 %, at least 3 test runs).
+
+Every run starts cold: heater off until the valve is at the **hold
+temperature** (35 °C, or 20 K below the opening point if lower, never below
+28 °C) and the chamber is back at its baseline; then auto-t **holds** it for
+4 min, so every run opens from the same thermal state; then it heats to the
+run's start and **creeps** at 3 °C/min until the valve opens. The approach
+waits until the chamber is neither rising nor falling faster than ~2 %/min
+(a fill's jump or outgassing would look like an opening; a falling chamber
+hides it). If upstream has fallen by the top-up limit, it pauses before the
+next run: top up and press **continue**.
 
 | Run | What it does |
 |---|---|
-| **scout 1** | Settles, then heats towards 155 °C until the valve opens. Fast, so it reads high. |
-| **scout 2** | Creeps at 3 °C/min from 10 K below scout 1's reading. If it opens before it could creep, it repeats 10 K lower (`scout2b`, …). |
-| **test runs 1 … N** | Creep at 3 °C/min from 5 K below scout 2's reading. Only these are averaged. |
+| **scout 1** | Heats towards 155 °C until the valve opens. Fast, so it reads high. Skipped with a remembered opening point. |
+| **scout 2** | Creeps from 10 K below scout 1's reading. If it opens before it could creep, it repeats 10 K lower (`scout2b`, …). |
+| **test runs 1 … N** | Creep from a margin below the best estimate so far (3 × the scatter + 0.5 K, 2-5 K). Only these are averaged. One that opens while still approaching means the valve moved: it isn't averaged, and a scout 2 finds the opening point again. |
 
-The opening is detected as in auto-p (chamber pressure 0.05 decades above
-its baseline), and **T_open** is backdated to where the rise began; the
-valve temperature at detection is logged too, with the heater energy since
-the approach started and the upstream pressure. The heater is **disarmed at
-detection**, and the valve cools to 20 K below T_open (not below 28 °C) with
-the chamber back at its baseline before the next run re-arms it.
+The opening is detected when the chamber rises 1 × 10⁻⁷ mbar or 12 % above
+its baseline, whichever comes first, and **T_open** is backdated to where the
+rise began; the valve temperature at detection is logged too, with the
+heater energy since the approach started and the upstream pressure. The
+heater is **disarmed at detection**. At the end the result becomes the
+**remembered opening point** for the torque (`logs/opening-points.json`) —
+after ≥ 3 test runs, or if it shows the valve moved — which auto-p also
+uses instead of the `SEAT_SCREW_VALVE` guesses.
 
 The rig leaks, so every run opens at a different upstream pressure: each
-batch also fits T_open against upstream pressure (K/bar), and reports the
-scatter left over. A batch stops by itself if a scout doesn't open by
-155 °C, if two test runs in a row don't, or if a cooldown or a settle takes
-over 30 min. Start is refused without a valve temperature or chamber
-reading (or, with top-ups on, an upstream reading). **abort batch**,
-DISARM, any trip, the chamber gauge failing while heating, or closing the
-driver ends it at once. While it runs, the heater controls and the torque
-are locked.
+batch fits T_open against upstream pressure (K/bar), and judges the scatter
+after correcting for it. A batch stops by itself if a scout doesn't open by
+155 °C, if two test runs in a row don't, if the valve opens while warming to
+the hold temperature, or if a cooldown or the chamber settling takes over
+30 min. Start is refused without a valve temperature or chamber reading
+(or, with top-ups on, an upstream reading). **abort batch**, DISARM, any
+trip, the chamber gauge failing while heating, or closing the driver ends
+it at once. While it runs, the heater controls and the torque are locked.
 
 Results: a folder per batch in `logs/batches/` (each run's trace, a
 `summary.csv`, `batch.json` with the settings and results, and `batch.png`),
 and a row per run and per batch in `logs/TE-valve-opening-map.xlsx`. If the
 workbook is open in Excel, rows wait in a side file and are moved in next
-time. Settings: `BATCH_*` in `driver/config.py`. Terms:
-[context.md](prog-documentation/context.md), "Batches".
+time. Settings: `BATCH_*` in `driver/config.py` (hold depth and time, margin,
+precision, detection). Terms: [context.md](prog-documentation/context.md),
+"Batches".
 
 ### Heater voltage, current and power
 
@@ -155,7 +164,7 @@ SPI lines stay free.
   chip up again within `TC_RETRY_S` (1 s) of it answering. A heater that
   tripped meanwhile stays off until re-armed.
 - **A batch** arms the heater itself, once per run (so the 60 min limit
-  applies per run), and disarms it the moment the valve opens. While heating
+  applies per run, hold included), and disarms it the moment the valve opens. While heating
   it also stops on no valid gauge reading for 2 s or chamber pressure above
   5e-4 mbar; DISARM or a trip aborts it.
 - A **trip latches**: press DISARM, then ARM, to clear it.
@@ -215,6 +224,7 @@ driver/
   batch.py            batch sequence: phases, detection, onset, summaries. Like
                       controller.py: no threads, clock, files or hardware
   batchrun.py         runs a batch: its thread, heater commands and files
+  openings.py         remembered opening points (logs/opening-points.json)
   workbook.py         the opening map (Excel), with a side file if it's locked
   logfile.py          the two CSV logs
   schema.py           CSV column names (shared with the plotter)
@@ -230,8 +240,10 @@ tests/                pytest suite, scenarios and golden record
 Dependencies only point one way: `config` ← `controller`, `shared` ←
 `control`, `thermocouple` ← `keller`, `labjack`, `logfile`, `readout` ←
 `gui` ← `app` (with `palette` ← `charts` alongside; `batch` ← `batchrun`
-← `logfile`, `gui`, with `workbook` alongside). `controller` and `batch` import
-nothing but `config` and pure standard modules; `test_architecture.py`
+← `logfile`, `gui`, with `workbook` alongside; `openings` ← `control`,
+`batchrun`, `gui`, `app`). `controller` imports nothing but `config`, and
+`batch` nothing but `config` and `controller`'s mode names, plus pure
+standard modules; `test_architecture.py`
 enforces this, and that no module reaches into another's private names.
 
 ## Test
