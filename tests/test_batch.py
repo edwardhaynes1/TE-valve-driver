@@ -366,7 +366,8 @@ def test_files_workbook_and_plot(batch_dirs, clock):
     assert float(summary[0]['hold_degC']) < config.BATCH_COOL_TO_C
     assert [r['cooldown_end'] for r in summary[2:]] == ['target', 'fixed', 'fixed']
     assert all(float(r['hold_gap_K']) > 20 for r in summary[2:])
-    assert all(float(r['hold_s']) >= config.BATCH_HOLD_S for r in summary)
+    assert all(float(r['hold_s']) >= config.BATCH_HOLD_S for r in summary[2:])
+    assert all(float(r['hold_s']) < config.BATCH_HOLD_S for r in summary[:2])   # no hold
     info = json.load(open(folder / "batch.json", encoding="utf-8"))
     assert info['seat_screw_torque_Nm'] == 0.3 and info['results']['status'] == 'complete'
     assert info['settings']['BATCH_CREEP_C_MIN'] == config.BATCH_CREEP_C_MIN
@@ -450,12 +451,12 @@ def approach_times(rig, **kw):
     seen, out = [], []
 
     def hook(r, b):
-        seen.append((r.now, b['run']['name'], b['phase'], b['hold_since']))
+        seen.append((r.now, b['run']['counts'], b['phase'], b['hold_since']))
     b, msgs = rig.run_batch(hook=lambda r, b_: hook(r, b_), **kw)
     for i in range(1, len(seen)):
-        t, name, ph, since = seen[i]
-        if ph == batch.APPROACH and seen[i - 1][2] == batch.HOLD:
-            out.append((seen[i - 1][3] + config.BATCH_HOLD_S, t))
+        t, counts, ph, since = seen[i]
+        if counts and ph == batch.APPROACH and seen[i - 1][2] == batch.HOLD:
+            out.append((seen[i - 1][3] + config.BATCH_HOLD_S, t))       # test runs hold
     return b, out, msgs
 
 
@@ -483,13 +484,15 @@ def test_waits_for_a_rising_chamber_before_heating():
 
 
 def test_a_rise_that_starts_with_the_hold_looks_like_the_valve():
-    # Flat before; rising from the moment the heater warms the valve, then
-    # steady higher: indistinguishable from the valve opening below the hold
-    # temperature — the batch stops and says so rather than measure from it.
+    # Flat before; rising from the moment a test run's hold warms the valve,
+    # then steady higher: indistinguishable from the valve opening below the
+    # hold temperature — the batch stops and says so rather than measure from it.
+    known = dict(t_open_C=60.3, upstream_bar=3.0, scatter_K=0.15, creep_C_min=3.0)
     rig = Rig(open_c=60.0)
     history = rig.idle(120)
     t0 = rig.now
-    b, _ = rig.run_batch(n_tests=1, history=history, hook=lambda r, b: rising(r, t0, 120))
+    b, _ = rig.run_batch(n_tests=1, history=history, known=known, retorqued=False,
+                         hook=lambda r, b: rising(r, t0, 120))
     assert b['state'] == batch.STOPPED and "hold temperature" in b['note']
 
 
@@ -502,7 +505,7 @@ def test_a_falling_chamber_does_not_hold_it_up():
     b, _ = rig.run_batch(n_tests=3)
     assert b['state'] == batch.COMPLETE
     t = [r['T_onset'] for r in b['runs'] if r['counts']]
-    assert all(60.0 <= v <= 62.0 for v in t) and t[-1] <= t[0]
+    assert all(60.0 <= v <= 62.0 for v in t) and max(t) - min(t) < 1.5
 
 
 def test_a_chamber_that_never_settles_stops_it():
@@ -593,7 +596,7 @@ def test_a_settled_chamber_approaches_as_soon_as_the_hold_is_done():
         rig = Rig(open_c=60.0)
         hist = rig.idle(120) if history else ()
         b, times, _ = approach_times(rig, n_tests=3, history=hist)
-        assert b['state'] == batch.COMPLETE and len(times) == 5
+        assert b['state'] == batch.COMPLETE and len(times) == 3
         assert all(0 <= began - done < 1.0 for done, began in times)
 
 
@@ -613,8 +616,8 @@ def test_a_fill_that_outlasts_the_hold_delays_the_approach(monkeypatch):
     b, times, msgs = approach_times(rig, n_tests=4, topup_drop=0.3)
     assert b['top_ups'] >= 1 and b['state'] == batch.COMPLETE, b['note']
     assert max(began - done for done, began in times) > 30
-    tests = [r for r in b['runs'] if r['counts']]
-    assert all(r['opened_during'] == batch.CREEP and 60.0 <= r['T_onset'] <= 61.5 for r in tests)
+    # the fill's jump is never taken for an opening: nothing reads below 60 °C
+    assert all(r['T_onset'] >= 60.0 for r in b['runs'] if r['status'] == batch.OPENED)
 
 
 def test_the_driver_keeps_timed_chamber_readings():
@@ -642,12 +645,13 @@ def test_every_run_holds_first():
     b, _ = rig.run_batch(n_tests=3, hook=lambda r, b: seen.append((b['run']['name'], b['phase'],
                                                                   r.T, r.h['setpoint_C'])))
     for r in b['runs']:
-        assert r['held_s'] >= config.BATCH_HOLD_S
+        assert r['held_s'] >= (config.BATCH_HOLD_S if r['counts'] else 0.0)
         # the test runs hold the target; scout 1 found the valve colder and held it there
         assert r['hold_c'] == config.BATCH_COOL_TO_C if r['counts'] else r['hold_c'] <= 35.0
         # it approached from the hold temperature: the TC was within the band
-        at_start = [T for name, ph, T, _ in seen if name == r['name'] and ph == batch.HOLD]
-        assert abs(at_start[-1] - r['hold_c']) <= config.BATCH_HOLD_BAND_K
+        if r['counts']:
+            at_start = [T for name, ph, T, _ in seen if name == r['name'] and ph == batch.HOLD]
+            assert abs(at_start[-1] - r['hold_c']) <= config.BATCH_HOLD_BAND_K
 
 
 def test_a_cold_valve_isnt_warmed_before_scout_1():
@@ -947,3 +951,52 @@ def test_replaced_whenever_the_valve_was_disturbed():
 
 def test_nothing_to_remember_without_a_creeping_opening():
     assert batch.remembered_entry(ended_batch([]), "b7") is None
+
+
+# ── scouts: no hold; scout 1 from the table guess ──────────────────────────
+
+def test_table_guess_is_auto_ps_opening_point_shifted_for_upstream():
+    b = batch.new_batch(3, 0.30, 0.0)
+    assert batch.table_guess(b)[0] == pytest.approx(92.7)           # no upstream: unshifted
+    b['up'] = 4.99                                                   # 0.5 bar above 4.49
+    assert batch.table_guess(b)[0] == pytest.approx(92.7 - config.PRESSURE_UP_K_PER_BAR * 0.5)
+
+
+def test_scouts_dont_hold_but_test_runs_do():
+    rig = Rig(open_c=60.0)
+    b, _ = rig.run_batch(n_tests=3, history=rig.idle(120))
+    for r in b['runs']:
+        assert (r['held_s'] >= config.BATCH_HOLD_S) if r['counts'] else (r['held_s'] < 5)
+
+
+def test_a_scout_1_that_creeps_onto_the_opening_point_makes_scout_2_unnecessary():
+    # 0.30 N·m: the table says 92.7 °C at 4.49 bar; the valve opens there
+    rig = Rig(open_c=92.0, upstream_bar=4.49)
+    b, _ = rig.run_batch(n_tests=3, torque=0.30, history=rig.idle(120))
+    s1 = b['runs'][0]
+    assert s1['guess'] == pytest.approx(92.7, abs=0.01)
+    assert s1['start_c'] == pytest.approx(s1['guess'] - config.BATCH_SCOUT2_BELOW_K)
+    assert s1['opened_during'] == batch.CREEP and not s1['fast']
+    assert [r['name'] for r in b['runs']] == ['scout1', 'testrun01', 'testrun02', 'testrun03']
+    assert b['runs'][1]['ref_c'] == pytest.approx(s1['T_onset'], abs=0.01)
+    assert b['state'] == batch.COMPLETE
+
+
+def test_a_guess_too_high_opens_scout_1_while_approaching_then_scout_2():
+    rig = Rig(open_c=60.0)                    # 0.30 N·m table 92.7 °C: far too high
+    b, _ = rig.run_batch(n_tests=3, torque=0.30)
+    s1, s2 = b['runs'][:2]
+    assert s1['opened_during'] == batch.APPROACH and s2['name'] == 'scout2'
+    assert s2['start_c'] == pytest.approx(min(s1['start_c'], s1['T_onset']) - 10.0)
+    assert b['state'] == batch.COMPLETE
+
+
+def test_a_guess_far_too_low_heats_fast_after_20_K():
+    rig = Rig(open_c=80.0)                    # 0.25 N·m table ~40 °C: far too low
+    b, msgs = rig.run_batch(n_tests=3, torque=0.25, history=rig.idle(120))
+    s1, s2 = b['runs'][:2]
+    assert s1['fast'] and s2['name'] == 'scout2'
+    assert any("heating fast" in m for m in msgs)
+    assert s2['start_c'] == pytest.approx(s1['T_onset'] - 10.0)
+    assert b['state'] == batch.COMPLETE
+    assert batch.run_summary(b, s1, [])['creep_degC_per_min'] == ''

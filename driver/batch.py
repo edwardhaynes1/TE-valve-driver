@@ -29,7 +29,9 @@ BATCH_COOL_SLOW_S with the minimum gap to the opening point secured — and
 the chamber back at its baseline) → hold (auto-t at the hold temperature for BATCH_HOLD_S, until the
 chamber is settled) → approach (auto-t to the start temperature) → creep
 (setpoint up at BATCH_CREEP_C_MIN) → detection (heater disarmed) → the next
-run's cooldown. Scout 1 heats straight towards the ceiling instead. The
+run's cooldown. Scouts don't hold (BATCH_SCOUT_HOLD_S), only wait for a
+settled chamber. Scout 1 starts from the table guess; one that opens while
+creeping makes scout 2 unnecessary. The
 batch stops once the mean T_open of its test runs is precise enough, or
 after N test runs. A test run that opens while still approaching started
 above the opening point: a scout 2 follows (find again). With a top-up
@@ -47,7 +49,8 @@ from datetime import datetime
 from .config import (
     BATCH_CEILING_C, BATCH_CEILING_HOLD_S, BATCH_COOL_BELOW_K, BATCH_COOL_MAX_S,
     BATCH_COOL_SLOW_K, BATCH_COOL_SLOW_S, BATCH_COOL_TO_C, BATCH_CREEP_C_MIN,
-    BATCH_DETECT_ABS_MBAR, BATCH_GAP_BUFFER_K, BATCH_MIN_GAP_K,
+    BATCH_DETECT_ABS_MBAR, BATCH_GAP_BUFFER_K, BATCH_GUESS_ABOVE_K, BATCH_MIN_GAP_K,
+    BATCH_SCOUT_HOLD_S, PRESSURE_UP_MAX_DOWN_K, PRESSURE_UP_MAX_SHIFT_K,
     BATCH_DETECT_FLOOR_DEC, BATCH_DETECT_REL_DEC, BATCH_FILL_RISE_BAR,
     BATCH_HOLD_BAND_K, BATCH_HOLD_S, BATCH_MARGIN_ADD_K, BATCH_MARGIN_MAX_K,
     BATCH_MARGIN_MIN_K, BATCH_MARGIN_SCATTER_X, BATCH_MARGIN_UP_ADD_K,
@@ -61,7 +64,7 @@ from .config import (
     PRESSURE_FILTER_S, PRESSURE_TRIP_MBAR, PRESSURE_UP_K_PER_BAR, VAC_HIGH_STATES,
     heater_power_w,
 )
-from .controller import AUTO_T
+from .controller import AUTO_T, opening_point
 
 COOLDOWN, HOLD, APPROACH, CREEP, TOPUP = 'cooldown', 'hold', 'approach', 'creep', 'top-up'
 HEATING = (HOLD, APPROACH, CREEP)
@@ -162,6 +165,7 @@ def _new_run(b, index, now, start_c, attempt=0):
         t_detect=None, T_detect=None, y_detect=None,
         closed_t=None, closed_T=None, t_fail=None, cool_end_t=None, efold=None,
         why="", ref_c=None, margin=None, hold_c=None, held_s=None, cool_end=None,
+        guess=None, fast=False,
     )
 
 
@@ -186,12 +190,34 @@ def _averaged(b, since=0):
     return [r for r in _all_runs(b)[since:] if r['averaged']]
 
 
+def _reliable_scout(r):
+    """A scout reading good enough to start test runs from: it opened while
+    creeping (not during the approach, and not after heating fast)."""
+    return (r['index'] < 2 and r['status'] == OPENED and r['opened_during'] == CREEP
+            and not r['fast'])
+
+
 def _last_scout2(b, since=0):
+    """The last reliable scout reading (scout 2, or a scout 1 that crept)."""
     found = None
     for r in _all_runs(b)[since:]:
-        if r['index'] == 1 and r['status'] == OPENED and r['opened_during'] == CREEP:
+        if _reliable_scout(r):
             found = r
     return found
+
+
+def table_guess(b):
+    """(opening °C, how) auto-p would start from with no batch result: the
+    SEAT_SCREW_VALVE table for this torque, shifted for the upstream
+    pressure now (−PRESSURE_UP_K_PER_BAR per bar, within auto-p's limits)."""
+    c, bar, _, how, _ = opening_point(b['torque'])
+    shift = 0.0
+    if b['up'] is not None and bar is not None:
+        shift = max(-PRESSURE_UP_MAX_DOWN_K,
+                    min(PRESSURE_UP_MAX_SHIFT_K, -PRESSURE_UP_K_PER_BAR * (b['up'] - bar)))
+    return c + shift, (f"the torque table's {c:.1f} °C at {bar:g} bar" if bar is not None
+                       else f"the torque table's {c:.1f} °C") + (
+        f", shifted {shift:+.1f} K for upstream {b['up']:.2f} bar" if shift else "")
 
 
 def slope(b):
@@ -383,7 +409,7 @@ def step(b, now, temp, vac, vac_status, heater, p_up=None, p_up_t=None):
         elif phase == APPROACH:
             _approach(b, now, temp, heater, msgs)
         else:
-            _creep(b, now, cmds)
+            _creep(b, now, cmds, msgs)
     elif phase == COOLDOWN:
         _cooldown(b, now, temp, cmds, msgs, events)
     return cmds, msgs, events
@@ -468,8 +494,9 @@ def _hold(b, now, temp, cmds, msgs, events):
         if b['hold_since'] is None:
             b['hold_since'] = now
     held = now - b['hold_since'] if b['hold_since'] is not None else 0.0
+    need = BATCH_HOLD_S if run['counts'] else BATCH_SCOUT_HOLD_S
     b['trend'] = trend = chamber_trend(b['hist'], now, since=b['settle_from'])
-    if held >= BATCH_HOLD_S and _settled(trend) and b['base'] is not None \
+    if held >= need and _settled(trend) and b['base'] is not None \
             and temp is not None:
         cold = b['cold_base']
         if b['hold_check'] and cold is not None and b['base'] - cold > open_threshold_dec(cold):
@@ -478,11 +505,17 @@ def _hold(b, now, temp, cmds, msgs, events):
         run['held_s'] = held
         b['settle_from'] = None
         if run['index'] == 0:
-            b['sp'] = BATCH_CEILING_C
-            cmds.append(dict(setpoint_C=BATCH_CEILING_C))
-            msgs.append(f"Batch: scout1 — held {held:.0f} s, chamber settled "
-                        f"({trend:+.3f} dec/min, baseline {10 ** b['base']:.2e} mbar); "
-                        f"heating towards {BATCH_CEILING_C:g} °C until the valve opens")
+            guess, how = table_guess(b)
+            run['guess'] = guess
+            run['start_c'] = min(BATCH_CEILING_C - _CEILING_BAND_K,
+                                 guess - BATCH_SCOUT2_BELOW_K)
+            run['why'] = f"{BATCH_SCOUT2_BELOW_K:g} K below {how}"
+            b['sp'] = run['start_c']
+            cmds.append(dict(setpoint_C=round(run['start_c'], 3)))
+            msgs.append(f"Batch: scout1 — chamber settled ({trend:+.3f} dec/min, baseline "
+                        f"{10 ** b['base']:.2e} mbar); heating to {run['start_c']:.1f} °C "
+                        f"({run['why']}), then creep; fast to {BATCH_CEILING_C:g} °C if "
+                        f"not open by {guess + BATCH_GUESS_ABOVE_K:.1f} °C")
         else:
             if run['counts']:
                 gap = _plan_start(b, run)
@@ -571,8 +604,22 @@ def _approach(b, now, temp, heater, msgs):
                     f"+{BATCH_CREEP_C_MIN:g} °C/min from {run['start_c']:.1f} °C")
 
 
-def _creep(b, now, cmds):
+def _creep(b, now, cmds, msgs=None):
     run = b['run']
+    if run['fast']:
+        return                                   # heating fast to the ceiling
+    if run['guess'] is not None and b['sp'] is not None \
+            and b['sp'] >= run['guess'] + BATCH_GUESS_ABOVE_K:
+        # The table guess was far too low: creeping on would take tens of
+        # minutes. Heat fast instead, as scouts did before (reads high; a
+        # scout 2 follows).
+        run['fast'] = True
+        b['sp'] = BATCH_CEILING_C
+        cmds.append(dict(setpoint_C=BATCH_CEILING_C))
+        if msgs is not None:
+            msgs.append(f"Batch: {run['name']} — not open {BATCH_GUESS_ABOVE_K:g} K above "
+                        f"the table guess: heating fast towards {BATCH_CEILING_C:g} °C")
+        return
     sp = min(BATCH_CEILING_C,
              run['start_c'] + BATCH_CREEP_C_MIN / 60.0 * (now - b['creep_t0']))
     if b['sp'] is None or abs(sp - b['sp']) >= 0.01:
@@ -775,9 +822,16 @@ def _after_run(b, now, temp, cmds, msgs, events):
     """Choose the next run once one has cooled down."""
     run = b['run']
     below = BATCH_SCOUT2_BELOW_K
+    if run['index'] == 0 and _reliable_scout(run):
+        # it crept onto the opening point: as good as a scout 2
+        return _next_run(b, now, temp, cmds, msgs, events, None, None, "")
     if run['index'] == 0:
-        return _next_run(b, now, temp, cmds, msgs, events, 1, run['T_onset'] - below,
-                         f"{below:g} K below scout1's {run['T_onset']:.2f} °C")
+        low = run['T_onset'] if run['fast'] or run['start_c'] is None else \
+            min(run['start_c'], run['T_onset'])
+        why = ("opened while approaching the table guess" if not run['fast']
+               else "read while heating fast")
+        return _next_run(b, now, temp, cmds, msgs, events, 1, low - below,
+                         f"{below:g} K below scout1's {low:.2f} °C ({why})")
     if run['index'] == 1 and run['opened_during'] == APPROACH:
         b['scout2_tries'] += 1
         if b['scout2_tries'] >= BATCH_SCOUT2_TRIES:
@@ -1016,7 +1070,8 @@ def run_summary(b, run, rows, batch_name="", file=""):
         'start_time': _iso(run['t_start']),
         'seat_screw_torque_Nm': b['torque'],
         'start_degC': _rnd(run['start_c'], 2),
-        'creep_degC_per_min': BATCH_CREEP_C_MIN if run['index'] > 0 else '',
+        'creep_degC_per_min': BATCH_CREEP_C_MIN if (run['start_c'] is not None
+                                                     and not run['fast']) else '',
         'opened_during': run['opened_during'] or '',
         'onset_time': _iso_ms(run['t_onset']),
         'detect_time': _iso_ms(run['t_detect']),

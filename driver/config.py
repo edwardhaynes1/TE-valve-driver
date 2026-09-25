@@ -376,7 +376,11 @@ BATCH_TEST_RUNS_MAX     = 50
 BATCH_MIN_TESTS         = 3        # never stop on precision before this many test runs
 BATCH_PRECISION_K       = 1.0      # stop when the mean T_open's 95 % interval is within ±this
 BATCH_CREEP_C_MIN       = 3.0      # creep rate, °C per minute (TC lags ~8.5 K at this rate)
-BATCH_SCOUT2_BELOW_K    = 10.0     # scout 2 starts this far below scout 1's T_open
+BATCH_SCOUT2_BELOW_K    = 10.0     # scout 1 starts this far below the table guess; scout 2
+                                   # this far below scout 1's T_open
+BATCH_GUESS_ABOVE_K     = 20.0     # scout 1 not open this far above the table guess: it heats
+                                   # fast to the ceiling instead of creeping on (history 32)
+BATCH_SCOUT_HOLD_S      = 0.0      # scouts aren't averaged: no hold, just a settled chamber
 # Margin — how far below the reference a test run starts: each K costs 20 s of
 # creep, too little and the valve opens while still approaching.
 BATCH_MARGIN_SCATTER_X  = 3.0      # × the scatter of T_open…

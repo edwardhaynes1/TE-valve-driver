@@ -60,8 +60,8 @@ temperature** — 35 °C, or 20 K below the opening point if lower, or, near
 room temperature, wherever it stops cooling faster than 1 K/min once it is
 at least 5 K below the opening point (**adaptive cooling**, for low
 opening points such as 0.25 N·m) — and the chamber is back at its baseline;
-then auto-t **holds** it for 4 min, so every run opens from the same
-thermal state. The first test run fixes the hold temperature for the batch,
+then auto-t **holds** it for 4 min, so every test run opens from the same
+thermal state (scouts aren't averaged, so they don't hold). The first test run fixes the hold temperature for the batch,
 and it is remembered with the result, so the next batch at that torque
 starts from the same state; then it heats to the
 run's start and **creeps** at 3 °C/min until the valve opens. The approach
@@ -72,8 +72,8 @@ next run: top up and press **continue**.
 
 | Run | What it does |
 |---|---|
-| **scout 1** | Heats towards 155 °C until the valve opens. Fast, so it reads high. Skipped with a remembered opening point. |
-| **scout 2** | Creeps from 10 K below scout 1's reading. If it opens before it could creep, it repeats 10 K lower (`scout2b`, …). |
+| **scout 1** | Heats to 10 K below the torque table's guess (auto-p's opening point, shifted for upstream) and creeps. If it opens while creeping, the test runs follow directly. If it hasn't opened 20 K above the guess, it heats fast to 155 °C instead (and reads high). Skipped with a remembered opening point. |
+| **scout 2** | Only if scout 1 opened while approaching or after heating fast: creeps from 10 K below scout 1's reading. If it opens before it could creep, it repeats 10 K lower (`scout2b`, …). |
 | **test runs 1 … N** | Creep from a margin below the best estimate so far (3 × the scatter + 0.5 K, 2-5 K). Only these are averaged. One that opens while still approaching means the valve moved: it isn't averaged, and a scout 2 finds the opening point again. |
 
 The opening is detected when the chamber rises 1 × 10⁻⁷ mbar or 12 % above
