@@ -4,6 +4,23 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 32. Scouts don't hold, and scout 1 starts from the table guess — 25 Sept 2026
+First 0.45 N·m batch after entry 31: nothing remembered, so scout 1 held
+the cold valve at 29.5 °C for 4 min before heating fast towards 155 °C —
+although the torque says the valve opens near 120-150 °C, and scouts aren't
+averaged, so their starting state doesn't matter. Agreed:
+* **Scouts skip the 4 min hold** (`BATCH_SCOUT_HOLD_S` = 0). They still wait
+  for a settled chamber: a drifting chamber would still look like an
+  opening. Test runs keep the full hold.
+* **Scout 1 starts 10 K below the table guess** (auto-p's opening point
+  from `SEAT_SCREW_VALVE`, shifted for upstream) and creeps, instead of
+  heating fast and reading 5-35 K high. If it opens while creeping, it is a
+  good reading, so the test runs follow at once — no scout 2. If it opens
+  during the approach (guess high), scout 2 starts 10 K below where it
+  opened. If it hasn't opened 20 K above the guess (`BATCH_GUESS_ABOVE_K`;
+  guess far too low), it heats fast to the ceiling as before rather than
+  creep for tens of minutes, and scout 2 follows.
+
 ## 31. Adaptive cooling: batches work for low opening points — 25 Sept 2026
 Asked for: batches that also work at 0.25 N·m, where the valve opens near
 40 °C (and near 27 °C at 5 bar). Entry 30's hold rule (35 °C, or T_open −
