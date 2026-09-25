@@ -4,6 +4,30 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 31. Adaptive cooling: batches work for low opening points — 25 Sept 2026
+Asked for: batches that also work at 0.25 N·m, where the valve opens near
+40 °C (and near 27 °C at 5 bar). Entry 30's hold rule (35 °C, or T_open −
+20 K, never below 28 °C) aimed at 28 °C there, and the 24 Sept cooling log
+(te-sensor_20260924_161238, heater off, 57 → 36.5 °C) shows why that fails:
+the TC falls fast (single-exponential fit: time constant 150 s) towards
+~35 °C, the body temperature, and the body then cools slowly towards the
+lab (~27 °C at the Keller head). 28 °C could take far longer than the 30 min
+cooldown limit. Agreed one question at a time:
+* **Adaptive cooling.** A cooldown ends at the target (35 °C or T_open −
+  20 K), or once the valve cools slower than 1 K/min — if it is already
+  ≥ 5 K below the best guess of T_open. Edward chose 1 K/min (proposed:
+  0.15 K/min); alone it would stop near 37-38 °C, a 2-3 K gap at 0.25 N·m,
+  so it applies only once the gap is secured. The 28 °C floor is gone.
+* **Minimum gap 5 K** between the hold temperature and a test run's
+  reference; less stops the batch: an opening point too close to room
+  temperature can't be started cold without cooling hardware.
+* **One hold temperature per batch,** fixed at the first test run's
+  cooldown (rounded up to 0.5 K) — adaptive cooling would otherwise let the
+  starting state drift run to run. Scouts' holds are provisional (their
+  reference isn't known yet); a find-again frees it (the valve moved). A
+  cooldown that can't reach it again in 30 min stops the batch rather than
+  mix starting states.
+
 ## 30. Batches remember the opening point, stop when precise, and start cold — 24 Sept 2026
 Asked for: remember T_open so the driver has it as its baseline (and finds
 it again if it moves), and make batches as short as possible while the
