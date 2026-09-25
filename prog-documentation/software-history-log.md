@@ -28,6 +28,23 @@ cooldown limit. Agreed one question at a time:
   cooldown that can't reach it again in 30 min stops the batch rather than
   mix starting states.
 
+Found in simulation (tests/batch_sim.py now has an optional two-stage
+valve — TC fast to a body that cools slowly — and a settable lab
+temperature):
+* A cold valve at the start counted as "slowed" at once, so a batch from a
+  remembered point fixed its hold at room temperature, and every later run
+  had to cool slowly back to it (54 vs 43 min). The remembered point now
+  carries its batch's hold temperature, and the next batch starts from it
+  (0.25 N·m: 24 min for 3 test runs).
+* Scout 1 warmed a cold valve to 35 °C, which would open one that opens at
+  30-33 °C although a start at room temperature gives the 5 K gap. A cold
+  valve with nothing known yet is now held where it is.
+* After a top-up pause the valve had cooled to room temperature and the
+  previous fix held it there: only with nothing known (scout 1) now.
+* Cooling to exactly 5 K below the guess and rounding the hold up broke the
+  gap, and so did the next test run reading 0.1 K lower: adaptive cooling
+  aims for 6 K (a 1 K buffer, `BATCH_GAP_BUFFER_K`) on the rounded hold.
+
 ## 30. Batches remember the opening point, stop when precise, and start cold — 24 Sept 2026
 Asked for: remember T_open so the driver has it as its baseline (and finds
 it again if it moves), and make batches as short as possible while the

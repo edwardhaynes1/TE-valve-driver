@@ -82,6 +82,8 @@ RUN_SUMMARY_COLUMNS = (
     ("margin_K",                     "test runs: how far below the reference it started"),
     ("hold_degC",                    "the hold temperature before the approach"),
     ("hold_s",                       "s held (within BATCH_HOLD_BAND_K) before the approach"),
+    ("hold_gap_K",                   "T_open − the hold temperature: how cold a start it was"),
+    ("cooldown_end",                 "target / slowed (adaptive cooling) / fixed (the batch's hold temperature)"),
 )
 
 BATCH_SUMMARY_COLUMNS = (
@@ -126,6 +128,7 @@ BATCH_SUMMARY_COLUMNS = (
     ("detect_abs_mbar",              "BATCH_DETECT_ABS_MBAR (blank = off)"),
     ("detect_rel_dec",               "BATCH_DETECT_REL_DEC"),
     ("remembered_after",             "yes = this result is now the remembered opening point"),
+    ("hold_gap_min_K",               "the smallest T_open − hold temperature of the averaged test runs"),
 )
 
 MAIN = tuple(name for name, _ in MAIN_COLUMNS)

@@ -13,6 +13,13 @@ over TAU_FILL.
 
 G and TAU_TC roughly match the 21 Sept holds (2 W ≈ 90 °C) and bursts
 (~2.5 °C/s at full power from cold).
+
+body_tau (optional) makes it two-stage, as the 24 Sept 2026 cooling log
+shows (the TC falls fast to the body temperature, then the body cools
+slowly towards the lab):
+    C1 dT/dt  = P − (T − Tb)/R1          C1 = 3 J/K, R1 = 20 K/W (60 s)
+    C2 dTb/dt = (T − Tb)/R1 − (Tb − ambient)/R2    R2 = G − R1, C2 = body_tau/R2
+Same steady state (G K/W); ambient is settable (a warmer lab).
 """
 import math
 import random
@@ -31,12 +38,14 @@ class Rig:
     def __init__(self, open_c=60.0, hysteresis=5.0, efold=4.0, base=5e-7, a=0.05,
                  noise_dec=0.002, t0=1_000_000.0, seed=1, upstream_bar=3.0,
                  upstream_leak_bar_s=0.0, k_up=0.0, fill_jump=0.0, pump_tail=0.0,
-                 open_scatter=0.0):
+                 open_scatter=0.0, body_tau=None, ambient=AMBIENT, start_c=None):
         self.open_c, self.hyst, self.efold, self.base, self.a = open_c, hysteresis, efold, base, a
         self.noise = noise_dec
         self.rng = random.Random(seed)
         self.now = t0
-        self.T = self.Ts = AMBIENT
+        self.ambient = ambient
+        self.body_tau = body_tau
+        self.T = self.Ts = self.Tb = start_c if start_c is not None else ambient
         self.p = base
         self.is_open = False
         self.h = controller.new_state()
@@ -58,7 +67,15 @@ class Rig:
     # the plant
     def advance(self, dt):
         P = config.heater_power_w(self.duty)
-        self.T += dt * (G_K_PER_W * P - (self.T - AMBIENT)) / TAU_TC
+        if self.body_tau is None:
+            self.T += dt * (G_K_PER_W * P - (self.T - self.ambient)) / TAU_TC
+        else:
+            c1, r1 = 3.0, 20.0
+            r2 = G_K_PER_W - r1
+            c2 = self.body_tau / r2
+            q12 = (self.T - self.Tb) / r1
+            self.T += dt * (P - q12) / c1
+            self.Tb += dt * (q12 - (self.Tb - self.ambient) / r2) / c2
         self.Ts += dt * (self.T - self.Ts) / TAU_SEAT
         opening = self.opening()
         if not self.is_open and self.Ts >= opening:

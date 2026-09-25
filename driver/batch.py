@@ -23,8 +23,10 @@ threads, clock, files or hardware (like controller.py). See context.md,
     batch_summary(b, summaries) -> dict schema.BATCH_SUMMARY
     status_text(b) -> str               one line for the window
 
-A run: cooldown (heater off, to the hold temperature, chamber back at its
-baseline) → hold (auto-t at the hold temperature for BATCH_HOLD_S, until the
+A run: cooldown (heater off, to the hold temperature — or, adaptive
+cooling, until the valve cools slower than BATCH_COOL_SLOW_K per
+BATCH_COOL_SLOW_S with the minimum gap to the opening point secured — and
+the chamber back at its baseline) → hold (auto-t at the hold temperature for BATCH_HOLD_S, until the
 chamber is settled) → approach (auto-t to the start temperature) → creep
 (setpoint up at BATCH_CREEP_C_MIN) → detection (heater disarmed) → the next
 run's cooldown. Scout 1 heats straight towards the ceiling instead. The
@@ -44,7 +46,8 @@ from datetime import datetime
 
 from .config import (
     BATCH_CEILING_C, BATCH_CEILING_HOLD_S, BATCH_COOL_BELOW_K, BATCH_COOL_MAX_S,
-    BATCH_COOL_MIN_C, BATCH_COOL_TO_C, BATCH_CREEP_C_MIN, BATCH_DETECT_ABS_MBAR,
+    BATCH_COOL_SLOW_K, BATCH_COOL_SLOW_S, BATCH_COOL_TO_C, BATCH_CREEP_C_MIN,
+    BATCH_DETECT_ABS_MBAR, BATCH_GAP_BUFFER_K, BATCH_MIN_GAP_K,
     BATCH_DETECT_FLOOR_DEC, BATCH_DETECT_REL_DEC, BATCH_FILL_RISE_BAR,
     BATCH_HOLD_BAND_K, BATCH_HOLD_S, BATCH_MARGIN_ADD_K, BATCH_MARGIN_MAX_K,
     BATCH_MARGIN_MIN_K, BATCH_MARGIN_SCATTER_X, BATCH_MARGIN_UP_ADD_K,
@@ -126,6 +129,7 @@ def new_batch(n_tests, torque_nm, now, topup_drop_bar=None, history=(), known=No
                               * LABJACK_SAMPLE_HZ * 2)),
         y_filt=None, last_t=None, base=None, bad_vac=0,
         sp=None, creep_t0=None, ceiling_since=None, hold_since=None, hold_c=None,
+        hold_fixed=None, next_hold=None, cool_hist=[], cool_end=None,
         cold_base=None, hold_check=False,
     )
     for t, mbar in history:
@@ -136,9 +140,14 @@ def new_batch(n_tests, torque_nm, now, topup_drop_bar=None, history=(), known=No
     if known is not None:
         b['tests_started'] = 1
         b['run'] = _new_run(b, 2, now, None)
+        # Start from the hold temperature the remembered result was measured
+        # from, so this batch's runs start from the same state as its.
+        held = (known.get('settings') or {}).get('hold_C')
+        if isinstance(held, (int, float)):
+            b['hold_fixed'] = float(held)
     else:
         b['run'] = _new_run(b, 0, now, None)
-    b['hold_c'] = hold_temperature(b)
+    b['hold_c'] = hold_target(b)
     return b
 
 
@@ -152,7 +161,7 @@ def _new_run(b, index, now, start_c, attempt=0):
         t_onset=None, T_onset=None, y_onset=None,
         t_detect=None, T_detect=None, y_detect=None,
         closed_t=None, closed_T=None, t_fail=None, cool_end_t=None, efold=None,
-        why="", ref_c=None, margin=None, hold_c=None, held_s=None,
+        why="", ref_c=None, margin=None, hold_c=None, held_s=None, cool_end=None,
     )
 
 
@@ -256,18 +265,32 @@ def reference(b):
     return None
 
 
-def hold_temperature(b):
-    """BATCH_COOL_TO_C, or BATCH_COOL_BELOW_K below the best guess of the
-    opening point if that is lower, but not below BATCH_COOL_MIN_C."""
+def opening_guess(b):
+    """Best guess of the opening point, °C, or None: the reference, or the
+    latest opening seen if that is lower (after a find-again the reference
+    can be stale)."""
     ref = reference(b)
     guess = ref[0] if ref else None
     opened = [r['T_onset'] for r in _all_runs(b) if r['status'] == OPENED]
-    if opened:                      # after a find-again the reference can be stale
+    if opened:
         guess = opened[-1] if guess is None else min(guess, opened[-1])
+    return guess
+
+
+def hold_target(b):
+    """BATCH_COOL_TO_C, or BATCH_COOL_BELOW_K below the best guess of the
+    opening point if that is lower. No floor: near room temperature the
+    cooldown ends by adaptive cooling instead (history 31)."""
+    guess = opening_guess(b)
     target = BATCH_COOL_TO_C
     if guess is not None:
         target = min(target, guess - BATCH_COOL_BELOW_K)
-    return max(BATCH_COOL_MIN_C, target)
+    return target
+
+
+def hold_temperature(b):
+    """The batch's hold temperature once fixed, else the hold target."""
+    return b['hold_fixed'] if b['hold_fixed'] is not None else hold_target(b)
 
 
 def margin(scatter, up_moved_bar=None):
@@ -294,6 +317,7 @@ def _plan_start(b, run):
     shift = (f", shifted {k * moved:+.1f} K for upstream {moved:+.2f} bar"
              if moved is not None and abs(k * moved) >= 0.05 else "")
     run['why'] = f"{m:.1f} K below {how}, {at_now:.2f} °C{shift}"
+    return at_now - b['hold_c']                      # the gap: see BATCH_MIN_GAP_K
 
 
 # ── one step ────────────────────────────────────────────────────────────────
@@ -323,8 +347,12 @@ def step(b, now, temp, vac, vac_status, heater, p_up=None, p_up_t=None):
         if b['known'] is not None:
             msgs.append(f"Batch: starting from the remembered opening point for "
                         f"{b['torque']:.2f} N·m, {b['known']['t_open_C']:.1f} °C — no scouts")
+        fixed = b['hold_fixed']
         msgs.append(f"Batch: {run['name']} — heater off, cooling to "
-                    f"{b['hold_c']:.1f} °C to hold there")
+                    + (f"{fixed:.1f} °C (the remembered result's hold temperature)"
+                       if fixed is not None else
+                       f"{b['hold_c']:.1f} °C, or until it cools slower than "
+                       f"{BATCH_COOL_SLOW_K:g} K/min") + ", to hold there")
     _update_baseline(b, now)
     run['samples'][-1] = (now, temp, y, b['base'])      # the baseline as it stood then
     phase = b['phase']
@@ -363,6 +391,8 @@ def step(b, now, temp, vac, vac_status, heater, p_up=None, p_up_t=None):
 
 def _enter(b, phase, now):
     b['phase'], b['phase_t0'] = phase, now
+    if phase == COOLDOWN:
+        b['cool_hist'] = []
 
 
 def _line(pts):
@@ -391,10 +421,19 @@ def _settled(trend):
 
 
 def _enter_hold(b, now, cmds, msgs):
-    """Arm the heater in auto-t at the hold temperature."""
+    """Arm the heater in auto-t at the hold temperature: where the cooldown
+    ended (next_hold). The first test run's fixes it for the batch."""
     run = b['run']
-    b['hold_c'] = hold_c = hold_temperature(b)
+    hold_c = b['next_hold'] if b['next_hold'] is not None else hold_temperature(b)
+    b['next_hold'] = None
+    if run['counts'] and b['hold_fixed'] is None:
+        b['hold_fixed'] = hold_c
+        msgs.append(f"Batch: hold temperature fixed at {hold_c:.1f} °C for this batch's "
+                    f"test runs" + (" (adaptive cooling: the valve cools slowly from here)"
+                                    if b['cool_end'] == 'slowed' else ""))
+    b['hold_c'] = hold_c
     run['hold_c'] = hold_c
+    run['cool_end'] = b['cool_end']
     # Was the chamber already rising before the heater came on? Then a rise
     # during the hold is the chamber's own (outgassing, a fill): just wait
     # for it. Unknown (no readings yet, or only just after a fill) counts
@@ -446,7 +485,9 @@ def _hold(b, now, temp, cmds, msgs, events):
                         f"heating towards {BATCH_CEILING_C:g} °C until the valve opens")
         else:
             if run['counts']:
-                _plan_start(b, run)
+                gap = _plan_start(b, run)
+                if gap < BATCH_MIN_GAP_K:
+                    return _too_close(b, now, run['ref_c'], cmds, msgs, events)
             b['sp'] = run['start_c']
             cmds.append(dict(setpoint_C=round(run['start_c'], 3)))
             msgs.append(f"Batch: {run['name']} — held {held:.0f} s, chamber settled "
@@ -464,6 +505,21 @@ def _hold(b, now, temp, cmds, msgs, events):
         _finish(b, now, STOPPED, f"{run['name']}: {run['note']}", msgs, events)
 
 
+def _too_close(b, now, t_open, cmds, msgs, events):
+    """The opening point is less than the minimum gap above the hold
+    temperature: this valve can't be started cold here."""
+    run = b['run']
+    run.update(status=RUN_ABORTED,
+               note=f"opening point {t_open:.1f} °C is only {t_open - b['hold_c']:.1f} K "
+                    f"above the hold temperature {b['hold_c']:.1f} °C (minimum "
+                    f"{BATCH_MIN_GAP_K:g} K)")
+    cmds.append(dict(armed=False))
+    _end_run(b, now, events)
+    _finish(b, now, STOPPED, f"{run['note']} — too close to room temperature to start the "
+            f"valve cold without cooling it", msgs, events)
+    return cmds, msgs, events
+
+
 def _opened_while_holding(b, now, temp, cold, cmds, msgs, events):
     run = b['run']
     rise = 100 * (10 ** (b['base'] - cold) - 1)
@@ -474,7 +530,7 @@ def _opened_while_holding(b, now, temp, cold, cmds, msgs, events):
     cmds.append(dict(armed=False))
     _end_run(b, now, events)
     _finish(b, now, STOPPED, f"{run['note']} — its opening point is below the hold "
-            f"temperature; lower BATCH_COOL_TO_C (and BATCH_COOL_MIN_C) in config.py",
+            f"temperature — too close to room temperature to start the valve cold",
             msgs, events)
 
 
@@ -602,6 +658,7 @@ def _detected(b, now, temp, cmds, msgs, events):
     if run['counts'] and phase == APPROACH:
         run['note'] = ("opened while still approaching, not averaged: it started above "
                        "the opening point — finding it again")
+        b['hold_fixed'] = None          # the valve moved: the next test run fixes it anew
         note = " — it started above the opening point: not averaged, finding it again"
     msgs.append(f"Batch: {run['name']} — valve opened: T_open {T_on:.2f} °C "
                 f"(onset, {now - t_on:.1f} s before detection at {temp:.2f} °C), "
@@ -648,25 +705,65 @@ def _cooldown(b, now, temp, cmds, msgs, events):
     it hasn't heated yet) or the next run."""
     run = b['run']
     fresh = run['status'] is None                  # this run hasn't heated yet
-    target = hold_temperature(b)
+    fixed = b['hold_fixed']
+    target = fixed if fixed is not None else hold_target(b)
+    if temp is not None:
+        b['cool_hist'].append((now, temp))
     base = run['base'] if run['base'] is not None else (None if fresh else b['base'])
     yf = b['y_filt']
     if (run['T_detect'] is not None and run['closed_t'] is None and yf is not None
             and base is not None and yf <= base + open_threshold_dec(base)):
         run['closed_t'], run['closed_T'] = now, temp
-    cooled = temp is not None and temp <= target + BATCH_HOLD_BAND_K
+    reached = temp is not None and temp <= target + BATCH_HOLD_BAND_K
+    slowed = gap_ok = False
+    if temp is not None and fixed is None and not reached:
+        # Adaptive cooling: cooling slower than BATCH_COOL_SLOW_K per
+        # BATCH_COOL_SLOW_S, with the valve already BATCH_MIN_GAP_K below the
+        # best guess of the opening point (history 31).
+        then = [T for t, T in b['cool_hist'] if t <= now - BATCH_COOL_SLOW_S]
+        slowed = bool(then) and then[-1] - temp < BATCH_COOL_SLOW_K
+        guess = opening_guess(b)
+        # judged on the hold it would give (rounded up to 0.5 K), with a
+        # buffer: the rounding, or the next test runs reading a little lower,
+        # mustn't undo the gap just secured
+        gap_ok = guess is None or (guess - math.ceil(temp * 2.0) / 2.0
+                                   >= BATCH_MIN_GAP_K + BATCH_GAP_BUFFER_K)
+    cooled = reached or (slowed and gap_ok)
     recovered = base is None or (yf is not None and yf <= base + BATCH_RECOVER_FRACTION
                                  * open_threshold_dec(base))
     if cooled and recovered:
+        if reached:
+            # Nothing known yet about the opening point (scout 1) and the valve
+            # already colder than the target: hold it where it is — warming a
+            # valve that opens low could open it. Once there is a guess, the
+            # target is ≥ BATCH_COOL_BELOW_K below it, so warming up is safe.
+            hold = target
+            if fixed is None and opening_guess(b) is None:
+                hold = min(target, math.ceil(temp * 2.0) / 2.0)
+            b['next_hold'], b['cool_end'] = hold, 'target'
+        else:
+            b['next_hold'], b['cool_end'] = math.ceil(temp * 2.0) / 2.0, 'slowed'
+        if fixed is not None:
+            b['cool_end'] = 'fixed'
         if fresh:
             return _enter_hold(b, now, cmds, msgs)
         run['cool_end_t'] = now
         _end_run(b, now, events)
         return _after_run(b, now, temp, cmds, msgs, events)
     if now - b['phase_t0'] > BATCH_COOL_MAX_S:
-        what = ("valve still above" if not cooled else "chamber still above")
+        if cooled:
+            what = "chamber still above its baseline"
+        elif fixed is not None:
+            what = (f"the valve didn't get back to the batch's hold temperature "
+                    f"{fixed:.1f} °C: the lab warmer?")
+        elif slowed:
+            what = (f"the valve cools no further than ~{temp:.1f} °C, less than "
+                    f"{BATCH_MIN_GAP_K:g} K below its opening point (~{opening_guess(b):.1f} "
+                    f"°C): too close to room temperature to start it cold")
+        else:
+            what = f"valve still above {target:.1f} °C"
         run['note'] = (run['note'] + "; " if run['note'] else "") + \
-            f"cooldown over {BATCH_COOL_MAX_S / 60:g} min ({what} target)"
+            f"cooldown over {BATCH_COOL_MAX_S / 60:g} min — {what}"
         if fresh:
             run['status'] = RUN_ABORTED
         run['cool_end_t'] = now
@@ -843,7 +940,8 @@ def remembered_entry(b, batch_name=""):
         ci95_K=round(half, 3) if half is not None else None, **{'from': src},
         creep_C_min=BATCH_CREEP_C_MIN,
         settings=dict(cool_to_C=BATCH_COOL_TO_C, cool_below_K=BATCH_COOL_BELOW_K,
-                      cool_min_C=BATCH_COOL_MIN_C, hold_s=BATCH_HOLD_S,
+                      cool_slow_K=BATCH_COOL_SLOW_K, cool_slow_s=BATCH_COOL_SLOW_S,
+                      min_gap_K=BATCH_MIN_GAP_K, hold_C=b['hold_fixed'], hold_s=BATCH_HOLD_S,
                       detect_abs_mbar=BATCH_DETECT_ABS_MBAR,
                       detect_rel_dec=BATCH_DETECT_REL_DEC,
                       detect_floor_dec=BATCH_DETECT_FLOOR_DEC),
@@ -944,6 +1042,9 @@ def run_summary(b, run, rows, batch_name="", file=""):
         'margin_K': _rnd(run['margin'], 2),
         'hold_degC': _rnd(run['hold_c'], 2),
         'hold_s': _rnd(run['held_s'], 0),
+        'hold_gap_K': _rnd(run['T_onset'] - run['hold_c'], 2)
+                      if opened and run['hold_c'] is not None else '',
+        'cooldown_end': run['cool_end'] or '',
     }
 
 
@@ -1028,6 +1129,9 @@ def batch_summary(b, summaries, batch_name="", folder="", remembered=False):
         'slope_from': k_from,
         'find_agains': b['finds'],
         'hold_degC': _rnd(_stats([r['hold_c'] for r in b['runs'] if r['averaged']])[0], 2),
+        'hold_gap_min_K': _rnd(min((r['T_onset'] - r['hold_c'] for r in b['runs']
+                                    if r['averaged'] and r['hold_c'] is not None),
+                                   default=None), 2),
         'hold_s': BATCH_HOLD_S,
         'detect_abs_mbar': BATCH_DETECT_ABS_MBAR if BATCH_DETECT_ABS_MBAR else '',
         'detect_rel_dec': BATCH_DETECT_REL_DEC,

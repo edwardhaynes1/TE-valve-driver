@@ -361,7 +361,11 @@ def test_files_workbook_and_plot(batch_dirs, clock):
     assert [r['run'] for r in summary] == ['scout1', 'scout2', 'testrun01', 'testrun02',
                                            'testrun03']
     assert all(float(r['energy_at_open_J']) > 0 for r in summary[2:])
-    assert all(float(r['hold_degC']) == config.BATCH_COOL_TO_C for r in summary)
+    # test runs hold the target; scout 1 found the valve colder and held it there
+    assert all(float(r['hold_degC']) == config.BATCH_COOL_TO_C for r in summary[2:])
+    assert float(summary[0]['hold_degC']) < config.BATCH_COOL_TO_C
+    assert [r['cooldown_end'] for r in summary[2:]] == ['target', 'fixed', 'fixed']
+    assert all(float(r['hold_gap_K']) > 20 for r in summary[2:])
     assert all(float(r['hold_s']) >= config.BATCH_HOLD_S for r in summary)
     info = json.load(open(folder / "batch.json", encoding="utf-8"))
     assert info['seat_screw_torque_Nm'] == 0.3 and info['results']['status'] == 'complete'
@@ -624,12 +628,12 @@ def test_the_driver_keeps_timed_chamber_readings():
 
 # ── the hold ───────────────────────────────────────────────────────────────
 
-def test_hold_temperature_rule():
+def test_hold_target_rule():
     b = batch.new_batch(3, 0.3, 0.0)
-    assert batch.hold_temperature(b) == config.BATCH_COOL_TO_C          # nothing known
-    for t_open, hold in ((146.0, 35.0), (60.0, 35.0), (50.0, 30.0), (40.0, 28.0)):
+    assert batch.hold_target(b) == config.BATCH_COOL_TO_C             # nothing known
+    for t_open, hold in ((146.0, 35.0), (60.0, 35.0), (50.0, 30.0), (40.0, 20.0)):
         k = dict(t_open_C=t_open, upstream_bar=3.0, scatter_K=0.3, creep_C_min=3.0)
-        assert batch.hold_temperature(batch.new_batch(3, 0.3, 0.0, known=k)) == hold
+        assert batch.hold_target(batch.new_batch(3, 0.3, 0.0, known=k)) == hold   # no floor
 
 
 def test_every_run_holds_first():
@@ -638,17 +642,140 @@ def test_every_run_holds_first():
     b, _ = rig.run_batch(n_tests=3, hook=lambda r, b: seen.append((b['run']['name'], b['phase'],
                                                                   r.T, r.h['setpoint_C'])))
     for r in b['runs']:
-        assert r['hold_c'] == config.BATCH_COOL_TO_C and r['held_s'] >= config.BATCH_HOLD_S
+        assert r['held_s'] >= config.BATCH_HOLD_S
+        # the test runs hold the target; scout 1 found the valve colder and held it there
+        assert r['hold_c'] == config.BATCH_COOL_TO_C if r['counts'] else r['hold_c'] <= 35.0
         # it approached from the hold temperature: the TC was within the band
         at_start = [T for name, ph, T, _ in seen if name == r['name'] and ph == batch.HOLD]
         assert abs(at_start[-1] - r['hold_c']) <= config.BATCH_HOLD_BAND_K
 
 
-def test_the_valve_opening_while_holding_stops_the_batch():
-    rig = Rig(open_c=30.0)                              # opens below the 35 °C hold
+def test_a_cold_valve_isnt_warmed_before_scout_1():
+    # Nothing known yet: the valve at 23 °C is held at 23 °C, not warmed to 35 —
+    # so a valve opening at 30 °C (lab 23 °C, a 7 K gap) can still be measured.
+    rig = Rig(open_c=30.0)
     b, _ = rig.run_batch(n_tests=3, history=rig.idle(120))
+    assert b['runs'][0]['hold_c'] == 23.0
+    assert b['state'] == batch.COMPLETE, b['note']
+    assert all(r['T_onset'] - r['hold_c'] >= config.BATCH_MIN_GAP_K
+               for r in b['runs'] if r['averaged'])
+
+
+def test_the_valve_opening_while_holding_stops_the_batch():
+    # Remembered from a hold at 35 °C, but the valve has moved: it now opens
+    # at 31 °C, so warming to the remembered hold temperature opens it.
+    known = dict(t_open_C=50.0, upstream_bar=3.0, scatter_K=0.3, creep_C_min=3.0,
+                 settings=dict(hold_C=35.0))
+    rig = Rig(open_c=31.0)
+    b, _ = rig.run_batch(n_tests=3, history=rig.idle(120), known=known, retorqued=False)
     assert b['state'] == batch.STOPPED and "hold temperature" in b['note']
-    assert [r['name'] for r in b['runs']] == ['scout1'] and not rig.h['armed']
+    assert [r['name'] for r in b['runs']] == ['testrun01'] and not rig.h['armed']
+
+
+# ── adaptive cooling (0.25 N·m: the valve opens near room temperature) ────
+
+def low(**kw):
+    """A 0.25 N·m-like valve: opens near 40 °C, two-stage cooling (the TC
+    falls fast to the body, the body cools slowly to the lab)."""
+    return Rig(**{**dict(open_c=40.0, body_tau=1500.0, open_scatter=0.3), **kw})
+
+
+def test_low_opening_point_completes_with_an_adaptive_hold():
+    rig = low()
+    b, _ = rig.run_batch(n_tests=8, history=rig.idle(120))
+    assert b['state'] == batch.COMPLETE, b['note']
+    tests = [r for r in b['runs'] if r['averaged']]
+    # the first test run's cooldown ended by slowing down, and fixed the hold
+    assert tests[0]['cool_end'] == 'slowed' and all(r['cool_end'] == 'fixed' for r in tests[1:])
+    assert {r['hold_c'] for r in tests} == {b['hold_fixed']}
+    assert b['hold_fixed'] > config.HEATER_HOLD_AMBIENT_C          # not all the way to the lab
+    assert b['hold_fixed'] * 2 == int(b['hold_fixed'] * 2)         # rounded to 0.5 K
+    assert all(r['T_onset'] - r['hold_c'] >= config.BATCH_MIN_GAP_K for r in tests)
+    row = batch.batch_summary(b, [])
+    assert row['hold_gap_min_K'] >= config.BATCH_MIN_GAP_K
+
+
+def test_the_next_batch_starts_from_the_same_hold_temperature():
+    rig = low()
+    b, _ = rig.run_batch(n_tests=8, history=rig.idle(120))
+    e = batch.remembered_entry(b, "first")
+    assert e['settings']['hold_C'] == b['hold_fixed']
+    rig = low(seed=7)
+    b2, _ = rig.run_batch(n_tests=8, history=rig.idle(120), known=e, retorqued=False)
+    assert b2['state'] == batch.COMPLETE and b2['hold_fixed'] == b['hold_fixed']
+    assert {r['hold_c'] for r in b2['runs']} == {b['hold_fixed']}
+    assert b2['ended'] - b2['started'] < b['ended'] - b['started']
+
+
+def test_it_keeps_cooling_until_the_gap_is_secured():
+    # A warm valve body (38 °C, cooling ~0.3 K/min): it cools slower than
+    # 1 K/min from the start, only 2 K below the opening point. The cooldown
+    # carries on until the gap is secured, rather than hold there and then
+    # stop on the gap guard.
+    known = dict(t_open_C=40.5, upstream_bar=3.0, scatter_K=0.3, creep_C_min=3.0)
+    rig = low(start_c=38.0, body_tau=3000.0, open_scatter=0.0)
+    b, _ = rig.run_batch(n_tests=4, known=known, retorqued=False)
+    assert b['state'] == batch.COMPLETE, b['note']
+    assert b['runs'][0]['cool_end'] == 'slowed'
+    assert all(r['T_onset'] - r['hold_c'] >= config.BATCH_MIN_GAP_K
+               for r in b['runs'] if r['averaged'])
+
+
+def test_the_rounded_hold_keeps_the_gap():
+    # A 33.5 °C lab: cooling slows right at 5 K below the opening point;
+    # rounding the hold up must not undo the gap.
+    rig = low(ambient=33.5, open_scatter=0.0)
+    b, _ = rig.run_batch(n_tests=4, history=rig.idle(120))
+    if b['state'] == batch.STOPPED:                    # it may honestly not make it…
+        assert "too close to room temperature" in b['note'] and "cooldown" in b['note']
+    else:                                              # …but never by rounding
+        assert all(r['T_onset'] - r['hold_c'] >= config.BATCH_MIN_GAP_K
+                   for r in b['runs'] if r['averaged'])
+
+
+def test_too_close_to_room_temperature_stops_it():
+    # 0.25 N·m at 5 bar: opens ~29 °C in a 27 °C lab — can't get 5 K below
+    rig = low(open_c=29.0, ambient=27.0, open_scatter=0.0)
+    b, _ = rig.run_batch(n_tests=3, history=rig.idle(120))
+    assert b['state'] == batch.STOPPED and "too close to room temperature" in b['note']
+    assert not rig.h['armed']
+
+
+def test_a_reference_too_close_to_the_hold_stops_before_heating():
+    # remembered hold 37 °C but the opening point 40 °C: a 3 K gap
+    known = dict(t_open_C=40.0, upstream_bar=3.0, scatter_K=0.3, creep_C_min=3.0,
+                 settings=dict(hold_C=37.0))
+    rig = low(open_c=40.0, open_scatter=0.0)
+    b, _ = rig.run_batch(n_tests=3, history=rig.idle(120), known=known, retorqued=False)
+    assert b['state'] == batch.STOPPED and "minimum 5 K" in b['note']
+    assert b['runs'][0]['start_c'] is not None and b['runs'][0]['T_onset'] is None
+
+
+def test_a_hold_that_cant_be_reached_again_stops_it():
+    def hook(rig, b):
+        if b['hold_fixed'] is not None and b['phase'] == batch.CREEP:
+            rig.ambient = 38.0                           # the lab (or rig) warms up
+    rig = low()
+    b, _ = rig.run_batch(n_tests=8, history=rig.idle(120), hook=hook)
+    assert b['state'] == batch.STOPPED and "lab warmer" in b['note']
+
+
+def test_a_find_again_frees_the_hold():
+    known = dict(t_open_C=60.3, upstream_bar=3.0, scatter_K=0.15, creep_C_min=3.0,
+                 k_per_bar=-12.0, settings=dict(hold_C=35.0))
+    rig = Rig(open_c=45.0)                               # moved down: target 25 °C now
+    b, _ = rig.run_batch(n_tests=6, history=rig.idle(120), known=known, retorqued=False)
+    assert b['finds'] == 1 and b['state'] == batch.COMPLETE
+    assert b['hold_fixed'] < 35.0
+    assert all(r['T_onset'] - r['hold_c'] >= config.BATCH_MIN_GAP_K
+               for r in b['runs'] if r['averaged'])
+
+
+def test_the_approach_message_says_why():
+    rig = Rig(open_c=60.0)
+    b, msgs = rig.run_batch(n_tests=3)
+    starts = [m for m in msgs if "testrun" in m and "heating to" in m]
+    assert starts and all("K below" in m and "()" not in m for m in starts)
 
 
 # ── the stopping rule ──────────────────────────────────────────────────────

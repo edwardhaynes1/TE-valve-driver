@@ -56,9 +56,14 @@ the scouts. Then it runs by itself, and stops as soon as the mean T_open is
 known to **±1 K** (95 %, at least 3 test runs).
 
 Every run starts cold: heater off until the valve is at the **hold
-temperature** (35 °C, or 20 K below the opening point if lower, never below
-28 °C) and the chamber is back at its baseline; then auto-t **holds** it for
-4 min, so every run opens from the same thermal state; then it heats to the
+temperature** — 35 °C, or 20 K below the opening point if lower, or, near
+room temperature, wherever it stops cooling faster than 1 K/min once it is
+at least 5 K below the opening point (**adaptive cooling**, for low
+opening points such as 0.25 N·m) — and the chamber is back at its baseline;
+then auto-t **holds** it for 4 min, so every run opens from the same
+thermal state. The first test run fixes the hold temperature for the batch,
+and it is remembered with the result, so the next batch at that torque
+starts from the same state; then it heats to the
 run's start and **creeps** at 3 °C/min until the valve opens. The approach
 waits until the chamber is neither rising nor falling faster than ~2 %/min
 (a fill's jump or outgassing would look like an opening; a falling chamber
@@ -84,8 +89,9 @@ The rig leaks, so every run opens at a different upstream pressure: each
 batch fits T_open against upstream pressure (K/bar), and judges the scatter
 after correcting for it. A batch stops by itself if a scout doesn't open by
 155 °C, if two test runs in a row don't, if the valve opens while warming to
-the hold temperature, or if a cooldown or the chamber settling takes over
-30 min. Start is refused without a valve temperature or chamber reading
+the hold temperature, if the opening point is less than 5 K above the hold
+temperature (too close to room temperature to start cold), or if a cooldown
+or the chamber settling takes over 30 min. Start is refused without a valve temperature or chamber reading
 (or, with top-ups on, an upstream reading). **abort batch**, DISARM, any
 trip, the chamber gauge failing while heating, or closing the driver ends
 it at once. While it runs, the heater controls and the torque are locked.

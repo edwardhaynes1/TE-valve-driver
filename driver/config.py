@@ -421,9 +421,20 @@ BATCH_ONSET_DEC         = 0.015    # onset = last sample within this of the base
 # The valve has memory (it opened at 158 °C on a first heat-up, 140-148 °C on
 # re-heats, 0.45 N·m); a shallow cooldown gives a precise number for another
 # state. Change these for a deep-vs-shallow check; they are stored with results.
-BATCH_COOL_TO_C         = 35.0     # hold temperature…
-BATCH_COOL_BELOW_K      = 20.0     # …or this far below the reference, if lower…
-BATCH_COOL_MIN_C        = HEATER_HOLD_AMBIENT_C + 5.0   # …but never below this
+BATCH_COOL_TO_C         = 35.0     # hold target…
+BATCH_COOL_BELOW_K      = 20.0     # …or this far below the opening point, if lower. No floor:
+# Adaptive cooling (history 31) — near room temperature the valve cools ever
+# more slowly (24 Sept 2026: the TC falls with a ~150 s time constant to the
+# body, ~35 °C, then the body cools slowly), so a cooldown also ends once the
+# valve cools slower than this, if it is already the minimum gap below the
+# opening point. The first test run's cooldown fixes the hold for the batch.
+BATCH_COOL_SLOW_K       = 1.0      # cooled less than this…
+BATCH_COOL_SLOW_S       = 60.0     # …over this long: it has (nearly) stopped cooling
+BATCH_MIN_GAP_K         = 5.0      # a test run's reference must be this far above the hold
+                                   # temperature, or the batch stops: too close to room
+                                   # temperature to start cold (0.25 N·m at 5 bar: ~27 °C)
+BATCH_GAP_BUFFER_K      = 1.0      # adaptive cooling aims this much beyond the minimum gap, so
+                                   # the scatter of later test runs' T_open can't undo it
 BATCH_HOLD_S            = 240.0    # auto-t holds it this long (the body lags the TC 150-250 s)
 BATCH_HOLD_BAND_K       = 1.0      # the hold time counts once the TC is within this of it
 # Detection — open when the chamber rises above its baseline by the absolute
