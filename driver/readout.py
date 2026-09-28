@@ -81,7 +81,8 @@ def status_segments(readings, health, heater, output, labjack_available,
         seg += [("---", "dim"), ("  (not entered)\n", "prompt")]
     else:
         seg += [(f"{seat_screw_nm:.2f} N·m\n", "bright")]
-    seg.append(("\n", "dim"))
+    # No blank line before the heater lines: every row given to the status
+    # panel is a row taken from the charts.
     for label, value, note, tag in heater_vi_lines(h, output, ok['labjack']):
         seg += [(label, "dim"), (value, tag), (note + "\n", "dim")]
     return seg

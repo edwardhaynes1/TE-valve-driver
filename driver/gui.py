@@ -73,7 +73,7 @@ class TEGui:
         outer.pack(fill="both", expand=True, padx=8, pady=8)
 
         self.status_text = tk.Text(outer, bg=BG, fg=TEXT, font=self.f,
-                                   height=14, bd=0, highlightthickness=0,
+                                   height=12, bd=0, highlightthickness=0,
                                    state="disabled", wrap="none", cursor="arrow")
         self.status_text.pack(fill="x")
         self.status_text.tag_config("bright", foreground=BRIGHT)
@@ -190,21 +190,40 @@ class TEGui:
         self.batch_btn.pack(side="left", padx=(0, 6))
         self.abort_btn = tk.Button(row4, text="abort batch", command=self._abort_batch, **btn)
         self.abort_btn.pack(side="left")
-        self.batch_status = tk.Label(parent, text="", font=self.f, fg=DIM, bg=BG, anchor="w")
-        self.batch_status.pack(fill="x")
+        # The three one-line status labels below the controls live in their
+        # own frame and take up a row only while they have something to say
+        # (_show_lines), so empty ones don't eat into the charts.
+        self._lines_frame = tk.Frame(parent, bg=BG)
+        self._lines_frame.pack(fill="x")
+        self.batch_status = tk.Label(self._lines_frame, text="", font=self.f, fg=DIM,
+                                     bg=BG, anchor="w")
         self._batch_running = False
         self._confirm = messagebox.askokcancel      # tests replace these two
         self._ask = messagebox.askyesnocancel
 
-        self.heater_status = tk.Label(parent, text="", font=self.f, fg=DIM,
+        self.heater_status = tk.Label(self._lines_frame, text="", font=self.f, fg=DIM,
                                       bg=BG, anchor="w")
-        self.heater_status.pack(fill="x")
-        self.loop_status = tk.Label(parent, text="", font=self.f, fg=DIM,
+        self.loop_status = tk.Label(self._lines_frame, text="", font=self.f, fg=DIM,
                                     bg=BG, anchor="w")
-        self.loop_status.pack(fill="x")
+        self._shown_lines = None
         self._update_inputs()
         self._send_update()
         self._apply_gate()
+
+    def _show_lines(self):
+        """Pack the batch / heater / loop status labels that have text, in
+        that order, and forget the empty ones. Re-packs only when the set of
+        visible lines changes, so the charts don't jitter every poll."""
+        labels = (self.batch_status, self.heater_status, self.loop_status)
+        shown = tuple(bool(lbl.cget("text")) for lbl in labels)
+        if shown == self._shown_lines:
+            return
+        self._shown_lines = shown
+        for lbl in labels:
+            lbl.pack_forget()
+        for lbl, on in zip(labels, shown):
+            if on:
+                lbl.pack(fill="x")
 
     def _apply_gate(self):
         """Lock every other control until the seat screw torque is entered.
@@ -533,6 +552,7 @@ class TEGui:
         busy = batchrun.running()
         line = batchrun.status()
         self.batch_status.configure(text=line or "", fg=BRIGHT if busy else DIM)
+        self._show_lines()
         if busy != self._batch_running:
             if not busy:
                 # The batch drove the heater in auto-t; back to the window's settings.
