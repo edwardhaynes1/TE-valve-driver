@@ -209,11 +209,12 @@ def test_cyclerun_writes_its_files_and_the_openings(clock, monkeypatch):
     rows = openmap.load()
     assert len(rows) >= 6 and {r['setting'] for r in rows} == {name}
     assert all(r['detect_rule'] == "+5e-08 mbar" for r in rows)
-    trace = Path(config.OPENINGS_CSV).parent / rows[1]['source']
+    trace = Path(config.OPENINGS_CSV).parent / rows[1]['source']   # (absolute stays absolute)
     lines = list(csv.DictReader(open(trace, encoding="utf-8")))
     assert lines and {'approach', 'creep', 'cooldown'} <= {r['batch_phase'] for r in lines}
     events = " | ".join(t for _, t in shared.recent_events())
     assert "map: " + name in events and "Cycling stopped: test" in events
+    assert "file error" not in events
     # the next start at this torque can continue the setting
     assert cyclerun.last_setting(0.45) == name
     ok, again = cyclerun.start(retorqued=False, start_thread=False)
@@ -221,6 +222,17 @@ def test_cyclerun_writes_its_files_and_the_openings(clock, monkeypatch):
     cyclerun.stop("test")
     ok, new = cyclerun.start(retorqued=True, start_thread=False)
     assert ok and new != name
+
+
+def test_the_trace_path_survives_another_drive(monkeypatch):
+    # Windows: the repo on a network share, the table on C: (28 Sept, the
+    # lab laptop) — relpath raises ValueError; the full path is stored instead.
+    import os
+    def other_drive(path, start):
+        raise ValueError("path is on mount '\\\\titania\\Space$', start on mount 'C:'")
+    monkeypatch.setattr(os.path, "relpath", other_drive)
+    p = os.path.join("S:", "logs", "cycles", "x", "cycle001.csv")
+    assert cyclerun._source(p) == p
 
 
 def test_start_is_refused_without_the_torque_or_armed(clock):

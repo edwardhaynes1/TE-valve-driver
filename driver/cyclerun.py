@@ -271,9 +271,8 @@ def _opening(cyc):
     """A creeping opening: into the table, refit, log the status, redraw."""
     global _fit
     with _lock:
-        rel = os.path.relpath(os.path.join(_folder, f"{cyc['name']}.csv"),
-                              os.path.dirname(config.OPENINGS_CSV))
-        row = cycle.opening_row(_c, cyc, openmap.current_rule(), rel.replace(os.sep, "/"))
+        row = cycle.opening_row(_c, cyc, openmap.current_rule(),
+                                _source(os.path.join(_folder, f"{cyc['name']}.csv")))
     if row is None:
         return
     ok, message = openmap.append(row)
@@ -290,6 +289,17 @@ def _opening(cyc):
             log_event(f"Opening map terms: {terms}")
     if PLOT:
         _plot_map()
+
+
+def _source(path):
+    """The cycle's trace, relative to the openings table's folder — or the
+    full path if there is no relative one (on Windows: another drive, or a
+    network share against a local drive)."""
+    try:
+        rel = os.path.relpath(path, os.path.dirname(config.OPENINGS_CSV))
+    except ValueError:
+        return path
+    return rel.replace(os.sep, "/")
 
 
 def _plot_map():

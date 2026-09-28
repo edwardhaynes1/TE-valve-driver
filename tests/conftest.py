@@ -105,6 +105,7 @@ def fresh_state(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(config, "MAP_FIGURE", str(tmp_path / "opening-map.png"))
     monkeypatch.setattr(config, "BATCH_WORKBOOK", str(tmp_path / "map.xlsx"))
     monkeypatch.setattr(config, "BATCH_DIR", str(tmp_path / "batches"))
+    monkeypatch.setattr(config, "CYCLE_DIR", str(tmp_path / "cycles"))
     reset_shared()
     clock = FakeClock()
     monkeypatch.setattr(control, "clock", clock)
