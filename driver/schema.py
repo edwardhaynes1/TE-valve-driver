@@ -34,7 +34,7 @@ MAIN_COLUMNS = (
     ("heater_on_s",             "s, gate ON time since the previous row (from edge times)"),
     ("seat_screw_torque_Nm",    "N·m, TE-Valve seat screw torque as entered; blank = not recorded"),
     ("batch_run",               "scout1 / scout2 / testrun01…, blank outside a batch"),
-    ("batch_phase",             "cooldown / hold / approach / creep / top-up (settle: 24 Sept 2026 only), blank outside a batch"),
+    ("batch_phase",             "cooldown / hold / approach / creep (top-up: until history 33; settle: 24 Sept 2026 only), blank outside a batch"),
 )
 
 # Switching log: te-sensor_<timestamp>_pwm.csv, one row per heater gate edge
@@ -114,7 +114,7 @@ BATCH_SUMMARY_COLUMNS = (
     ("t_open_vs_upstream_K_per_bar", "slope of a straight-line fit of T_open against upstream pressure (n ≥ 3, spread ≥ 0.05 bar)"),
     ("t_open_vs_upstream_se_K_per_bar", "its standard error"),
     ("t_open_resid_std_K",           "scatter of T_open about that fit: the scatter the leak doesn't explain"),
-    ("top_ups",                      "how many times the batch paused for a top-up"),
+    ("top_ups",                      "how many times the batch paused for a top-up (blank since history 33: no pauses)"),
     ("free_cooling_closed_mean_degC", "indicative"),
     ("folder",                       "the batch folder"),
     ("started_from",                 "scouts, or the remembered opening point (and its batch)"),

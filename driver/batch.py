@@ -2,8 +2,7 @@
 threads, clock, files or hardware (like controller.py). See context.md,
 "Batches", and history-log entries 27-30.
 
-    new_batch(n_tests, torque_nm, now, topup_drop_bar, history, known, old,
-              retorqued)                a fresh batch. known: a remembered
+    new_batch(n_tests, torque_nm, now, history, known, old, retorqued)                a fresh batch. known: a remembered
                                         opening point to start from (the
                                         scouts are skipped); old: the one on
                                         file (replaced or not at the end)
@@ -14,7 +13,6 @@ threads, clock, files or hardware (like controller.py). See context.md,
                                         in order. events: ('run_start', run),
                                         ('run_end', run), ('batch_end', b)
     abort(b, reason) -> (commands, msgs, events)
-    resume(b, now) -> msgs              after a top-up: carry on
     labels(b) -> (run name, phase)      for the log rows
     precision(b) -> (mean, std, n, ±K)  the stopping rule's numbers
     remembered_entry(b, name) -> entry  what to remember now, or None
@@ -34,11 +32,11 @@ settled chamber. Scout 1 starts from the table guess; one that opens while
 creeping makes scout 2 unnecessary. The
 batch stops once the mean T_open of its test runs is precise enough, or
 after N test runs. A test run that opens while still approaching started
-above the opening point: a scout 2 follows (find again). With a top-up
-limit set, a run whose upstream pressure has fallen that far waits in
-top-up (heater off) until resume(); the chamber is then judged from when
-the upstream pressure stopped rising (the fill), or from resume() if no
-fill was seen.
+above the opening point: a scout 2 follows (find again). The upstream
+pressure isn't held: it is measured, and corrected for (history 33). A
+hand refill while cooling or holding is waited out (the chamber settles);
+one while heating (upstream up BATCH_REFILL_RISE_BAR) discards the run,
+which is repeated (scout2b, testrun02b …).
 """
 
 import math
@@ -51,7 +49,7 @@ from .config import (
     BATCH_COOL_SLOW_K, BATCH_COOL_SLOW_S, BATCH_COOL_TO_C, BATCH_CREEP_C_MIN,
     BATCH_DETECT_ABS_MBAR, BATCH_GAP_BUFFER_K, BATCH_GUESS_ABOVE_K, BATCH_MIN_GAP_K,
     BATCH_SCOUT_HOLD_S, PRESSURE_UP_MAX_DOWN_K, PRESSURE_UP_MAX_SHIFT_K,
-    BATCH_DETECT_FLOOR_DEC, BATCH_DETECT_REL_DEC, BATCH_FILL_RISE_BAR,
+    BATCH_DETECT_FLOOR_DEC, BATCH_DETECT_REL_DEC,
     BATCH_HOLD_BAND_K, BATCH_HOLD_S, BATCH_MARGIN_ADD_K, BATCH_MARGIN_MAX_K,
     BATCH_MARGIN_MIN_K, BATCH_MARGIN_SCATTER_X, BATCH_MARGIN_UP_ADD_K,
     BATCH_MARGIN_UP_BAR, BATCH_MAX_FAILS, BATCH_MIN_TESTS, BATCH_ONSET_DEC,
@@ -59,14 +57,14 @@ from .config import (
     BATCH_SCOUT2_TRIES, BATCH_SETTLE_MAX_FALL_DEC_MIN, BATCH_SETTLE_MAX_RISE_DEC_MIN,
     BATCH_SETTLE_MAX_S, BATCH_SETTLE_WINDOW_S, BATCH_SLOPE_MAX_SE,
     BATCH_SLOPE_MIN_TESTS, BATCH_START_BAND_K, BATCH_UP_FIT_MIN_SPREAD_BAR,
-    BATCH_UP_MAX_AGE_S, LABJACK_SAMPLE_HZ, PRESSURE_BAD_READS_TO_TRIP,
+    BATCH_UP_MAX_AGE_S, BATCH_REFILL_RISE_BAR, LABJACK_SAMPLE_HZ, PRESSURE_BAD_READS_TO_TRIP,
     PRESSURE_BASE_GUARD_S, PRESSURE_BASE_MIN_S, PRESSURE_BASE_WINDOW_S,
     PRESSURE_FILTER_S, PRESSURE_TRIP_MBAR, PRESSURE_UP_K_PER_BAR, VAC_HIGH_STATES,
     heater_power_w,
 )
 from .controller import AUTO_T, opening_point
 
-COOLDOWN, HOLD, APPROACH, CREEP, TOPUP = 'cooldown', 'hold', 'approach', 'creep', 'top-up'
+COOLDOWN, HOLD, APPROACH, CREEP = 'cooldown', 'hold', 'approach', 'creep'
 HEATING = (HOLD, APPROACH, CREEP)
 RUNNING, COMPLETE, STOPPED, ABORTED = 'running', 'complete', 'stopped', 'aborted'
 OPENED, NO_OPENING, RUN_ABORTED = 'opened', 'no opening', 'aborted'
@@ -103,16 +101,15 @@ def _onset_dec(base):
 
 
 def run_name(index, attempt=0):
-    """0 → scout1, 1 → scout2 (repeats: scout2b, scout2c …), 2 → testrun01, …"""
-    if index < 2:
-        name = ('scout1', 'scout2')[index]
-        if attempt == 0:
-            return name
-        return name + ('abcdefgh'[attempt] if attempt < 8 else f"_{attempt + 1}")
-    return f"testrun{index - 1:02d}"
+    """0 → scout1, 1 → scout2, 2 → testrun01, …; repeats: scout2b, scout2c,
+    testrun01b …"""
+    name = ('scout1', 'scout2')[index] if index < 2 else f"testrun{index - 1:02d}"
+    if attempt == 0:
+        return name
+    return name + ('abcdefgh'[attempt] if attempt < 8 else f"_{attempt + 1}")
 
 
-def new_batch(n_tests, torque_nm, now, topup_drop_bar=None, history=(), known=None,
+def new_batch(n_tests, torque_nm, now, history=(), known=None,
               old=None, retorqued=None):
     """history: [(time, mbar)] of recent chamber readings (e.g. the driver's
     last few minutes), so an already settled chamber needs no waiting.
@@ -123,11 +120,10 @@ def new_batch(n_tests, torque_nm, now, topup_drop_bar=None, history=(), known=No
         raise ValueError("a batch needs the seat screw torque")
     b = dict(
         n_tests=int(n_tests), torque=torque_nm, started=now, ended=None,
-        topup_drop=topup_drop_bar, up=None, up_start=None, top_ups=0, trend=None,
+        up=None, up_low=None, trend=None,
         state=RUNNING, note="", phase=COOLDOWN, phase_t0=now, begun=False,
         run=None, runs=[], fails_in_row=0, tests_started=0, scout2_tries=0,
         ref_from=0, finds=0, known=known, old=old, retorqued=retorqued,
-        settle_from=None, fill_t=None, up_min=None, up_prev=None,
         hist=deque(maxlen=int((max(PRESSURE_BASE_WINDOW_S, BATCH_SETTLE_WINDOW_S) + 10)
                               * LABJACK_SAMPLE_HZ * 2)),
         y_filt=None, last_t=None, base=None, bad_vac=0,
@@ -165,7 +161,7 @@ def _new_run(b, index, now, start_c, attempt=0):
         t_detect=None, T_detect=None, y_detect=None,
         closed_t=None, closed_T=None, t_fail=None, cool_end_t=None, efold=None,
         why="", ref_c=None, margin=None, hold_c=None, held_s=None, cool_end=None,
-        guess=None, fast=False,
+        guess=None, fast=False, refilled=False,
     )
 
 
@@ -355,10 +351,8 @@ def step(b, now, temp, vac, vac_status, heater, p_up=None, p_up_t=None):
     run = b['run']
     fresh = p_up is not None and (p_up_t is None or now - p_up_t <= BATCH_UP_MAX_AGE_S)
     b['up'] = p_up if fresh else None
-    if b['up_start'] is None and b['up'] is not None:
-        b['up_start'] = b['up']
-    if b['phase'] == TOPUP and b['up'] is not None:
-        _watch_fill(b, now)
+    if b['up'] is not None and b['phase'] in HEATING:
+        b['up_low'] = b['up'] if b['up_low'] is None else min(b['up_low'], b['up'])
     y = math.log10(vac) if (vac is not None and vac > 0) else None
     dt = 0.0 if b['last_t'] is None else max(0.0, now - b['last_t'])
     b['last_t'] = now
@@ -401,6 +395,9 @@ def step(b, now, temp, vac, vac_status, heater, p_up=None, p_up_t=None):
                   and b['y_filt'] - b['base'] > open_threshold_dec(b['base']))
         if phase == HOLD:
             _hold(b, now, temp, cmds, msgs, events)
+        elif (b['up'] is not None and b['up_low'] is not None
+              and b['up'] - b['up_low'] >= BATCH_REFILL_RISE_BAR):
+            _refilled(b, now, cmds, msgs)
         elif opened:
             _detected(b, now, temp, cmds, msgs, events)
         elif temp is not None and _at_ceiling(b, now, temp):
@@ -462,12 +459,13 @@ def _enter_hold(b, now, cmds, msgs):
     run['cool_end'] = b['cool_end']
     # Was the chamber already rising before the heater came on? Then a rise
     # during the hold is the chamber's own (outgassing, a fill): just wait
-    # for it. Unknown (no readings yet, or only just after a fill) counts
+    # for it. Unknown (no readings yet) counts
     # as rising.
-    trend = chamber_trend(b['hist'], now, since=b['settle_from'])
+    trend = chamber_trend(b['hist'], now)
     b.update(hold_since=None, base=None, cold_base=None, bad_vac=0,
              hold_check=trend is not None and trend <= BATCH_SETTLE_MAX_RISE_DEC_MIN)
     cmds += [dict(mode=AUTO_T, setpoint_C=round(hold_c, 3)), dict(armed=True)]
+    b['up_low'] = b['up']                        # the refill watch starts here
     _enter(b, HOLD, now)
     msgs.append(f"Batch: {run['name']} — heater armed, holding {hold_c:.1f} °C for "
                 f"{BATCH_HOLD_S / 60:g} min")
@@ -485,17 +483,26 @@ def _hold(b, now, temp, cmds, msgs, events):
     temperature: its opening point is below it. Only checked if the chamber
     wasn't already rising when the hold began (hold_check): a rise that was
     under way before the heater came on is the chamber's own, and is waited
-    out. A fill's jump can't trip it either — it only falls."""
+    out; so is a rise after upstream was refilled during the hold (the
+    Keller shows it)."""
     run = b['run']
+    if (b['hold_check'] and b['up'] is not None and b['up_low'] is not None
+            and b['up'] - b['up_low'] >= BATCH_REFILL_RISE_BAR):
+        # refilled during the hold: a chamber rise now is the fill's, not the
+        # valve's — wait for it to settle, don't take it for an opening
+        b['hold_check'] = False
+        msgs.append(f"Batch: {run['name']} — upstream refilled during the hold "
+                    f"({b['up_low']:.3f} → {b['up']:.3f} bar): waiting for the chamber "
+                    f"to settle")
     if b['base'] is not None:
-        b['cold_base'] = b['base'] if b['cold_base'] is None else min(b['cold_base'],
+        b['cold_base'] =b['base'] if b['cold_base'] is None else min(b['cold_base'],
                                                                         b['base'])
     if temp is not None and abs(temp - b['hold_c']) <= BATCH_HOLD_BAND_K:
         if b['hold_since'] is None:
             b['hold_since'] = now
     held = now - b['hold_since'] if b['hold_since'] is not None else 0.0
     need = BATCH_HOLD_S if run['counts'] else BATCH_SCOUT_HOLD_S
-    b['trend'] = trend = chamber_trend(b['hist'], now, since=b['settle_from'])
+    b['trend'] = trend = chamber_trend(b['hist'], now)
     if held >= need and _settled(trend) and b['base'] is not None \
             and temp is not None:
         cold = b['cold_base']
@@ -503,7 +510,6 @@ def _hold(b, now, temp, cmds, msgs, events):
             return _opened_while_holding(b, now, temp, cold, cmds, msgs, events)
         b['base'] = min(b['base'], b['y_filt']) if b['y_filt'] is not None else b['base']
         run['held_s'] = held
-        b['settle_from'] = None
         if run['index'] == 0:
             guess, how = table_guess(b)
             run['guess'] = guess
@@ -526,6 +532,7 @@ def _hold(b, now, temp, cmds, msgs, events):
             msgs.append(f"Batch: {run['name']} — held {held:.0f} s, chamber settled "
                         f"({trend:+.3f} dec/min); heating to {run['start_c']:.1f} °C "
                         f"({run['why']}), then creep")
+        b['up_low'] = b['up']            # a refill during the hold was waited out
         _enter(b, APPROACH, now)
     elif now - b['phase_t0'] > BATCH_HOLD_S + BATCH_SETTLE_MAX_S:
         why = (f"chamber not settled ({trend:+.3f} dec/min)" if trend is not None
@@ -571,19 +578,16 @@ def _update_baseline(b, now):
     """The chamber baseline as it stands now, log10(p), from the window
     PRESSURE_BASE_WINDOW_S … PRESSURE_BASE_GUARD_S ago.
 
-    Its median: measured fresh while holding (after a top-up only from after
-    the fill), so the run starts from the level the chamber is at; while
+    Its median: measured fresh while holding, so the run starts from the level the chamber is at; while
     heating towards the opening it may fall but never rise, so a gradual
     opening can't drag it up. Frozen once the valve opens. The median lags a
     falling chamber by ~17 s, which is why the hold also waits until the
     chamber isn't falling fast (BATCH_SETTLE_MAX_FALL_DEC_MIN). A trend line
     extrapolated to now was tried instead: its noise, with the never-rise
     rule, walked the baseline down and gave false openings in simulation."""
-    if b['phase'] in (COOLDOWN, TOPUP) or b['run']['T_detect'] is not None:
+    if b['phase'] == COOLDOWN or b['run']['T_detect'] is not None:
         return
     lo = now - PRESSURE_BASE_WINDOW_S
-    if b['phase'] == HOLD and b['settle_from'] is not None:
-        lo = max(lo, b['settle_from'])
     pts = [(t, y) for t, y in b['hist'] if lo <= t <= now - PRESSURE_BASE_GUARD_S]
     if len(pts) < PRESSURE_BASE_MIN_S * LABJACK_SAMPLE_HZ:
         return
@@ -746,6 +750,23 @@ def _failed(b, now, why, cmds, msgs, events):
     _enter(b, COOLDOWN, now)
 
 
+def _refilled(b, now, cmds, msgs):
+    """Upstream refilled by hand while heating: the fill's chamber jump would
+    read as an opening, and the run no longer started from one upstream
+    pressure. Discard it (not averaged); after the cooldown it is repeated."""
+    run = b['run']
+    rise = b['up'] - b['up_low']
+    run.update(status=RUN_ABORTED, refilled=True, t_fail=now, base=b['base'],
+               note=f"upstream refilled while heating ({b['up_low']:.3f} → "
+                    f"{b['up']:.3f} bar): discarded, repeated")
+    cmds.append(dict(armed=False))
+    b['ceiling_since'] = None
+    msgs.append(f"Batch: {run['name']} — upstream rose {rise:.2f} bar while heating (a "
+                f"refill): run discarded, heater disarmed; it is repeated after the "
+                f"cooldown")
+    _enter(b, COOLDOWN, now)
+
+
 def _cooldown(b, now, temp, cmds, msgs, events):
     """Heater off: to the hold temperature, and (after an opening) until the
     chamber is back at the run's baseline. Then the hold (the same run, if
@@ -822,6 +843,11 @@ def _after_run(b, now, temp, cmds, msgs, events):
     """Choose the next run once one has cooled down."""
     run = b['run']
     below = BATCH_SCOUT2_BELOW_K
+    if run['refilled']:
+        return _next_run(b, now, temp, cmds, msgs, events, run['index'],
+                         run['start_c'] if run['index'] == 1 else None,
+                         f"repeating {run['name']} (refilled while heating)" if
+                         run['index'] == 1 else "")
     if run['index'] == 0 and _reliable_scout(run):
         # it crept onto the opening point: as good as a scout 2
         return _next_run(b, now, temp, cmds, msgs, events, None, None, "")
@@ -859,13 +885,14 @@ def _after_run(b, now, temp, cmds, msgs, events):
 
 
 def _next_run(b, now, temp, cmds, msgs, events, index, start, why):
-    """index None: the next test run (its start is set after the hold)."""
+    """index None: the next test run (its start is set after the hold).
+    Another index: that run again (scout 2 lower, or a repeat)."""
     attempt = 0
     if index is None:
         b['tests_started'] += 1
         index = b['tests_started'] + 1
-    elif index == 1:
-        attempt = sum(1 for r in b['runs'] if r['index'] == 1)
+    else:
+        attempt = sum(1 for r in b['runs'] if r['index'] == index)
     if start is not None:
         start = min(BATCH_CEILING_C - _CEILING_BAND_K, start)
     run = _new_run(b, index, now, start, attempt)
@@ -875,44 +902,8 @@ def _next_run(b, now, temp, cmds, msgs, events, index, start, why):
              hold_since=None)
     run['samples'].append((now, temp, b['hist'][-1][1] if b['hist'] else None, None))
     events.append(('run_start', run))
-    up, drop = b['up'], b['topup_drop']
-    if (drop is not None and up is not None and b['up_start'] is not None
-            and up < b['up_start'] - drop):
-        b.update(fill_t=None, up_min=None, up_prev=None)
-        _enter(b, TOPUP, now)
-        msgs.append(f"Batch: PAUSED for a top-up — upstream {up:.3f} bar, "
-                    f"{b['up_start'] - up:.2f} bar below the batch's start "
-                    f"({b['up_start']:.3f} bar). Top up, then press 'continue'")
-    else:
-        _enter_hold(b, now, cmds, msgs)
+    _enter_hold(b, now, cmds, msgs)
     return cmds, msgs, events
-
-
-def _watch_fill(b, now):
-    """During the top-up pause: note when the upstream pressure last rose,
-    once it has risen BATCH_FILL_RISE_BAR above its lowest (the fill)."""
-    up = b['up']
-    b['up_min'] = up if b['up_min'] is None else min(b['up_min'], up)
-    if (b['up_prev'] is not None and up > b['up_prev'] + 0.002
-            and up >= b['up_min'] + BATCH_FILL_RISE_BAR):
-        b['fill_t'] = now
-    b['up_prev'] = up
-
-
-def resume(b, now):
-    """After a top-up: cool and hold as usual (the chamber jumps when
-    upstream is filled: the hold only counts it from after the fill)."""
-    if b['state'] != RUNNING or b['phase'] != TOPUP:
-        return []
-    b['top_ups'] += 1
-    b['base'] = None
-    # judge the chamber only from after the fill: when upstream stopped
-    # rising, if the Keller saw it; else from now
-    b['settle_from'] = b['fill_t'] if b['fill_t'] is not None else now
-    _enter(b, COOLDOWN, now)
-    up = f"{b['up']:.3f} bar" if b['up'] is not None else "not read"
-    return [f"Batch: top-up done (upstream {up}) — {b['run']['name']} holds, then "
-            f"waits for the chamber to settle"]
 
 
 def _end_run(b, now, events):
@@ -1172,7 +1163,7 @@ def batch_summary(b, summaries, batch_name="", folder="", remembered=False):
         't_open_vs_upstream_K_per_bar': _rnd(fit[0], 2) if fit else '',
         't_open_vs_upstream_se_K_per_bar': _rnd(fit[1], 2) if fit else '',
         't_open_resid_std_K': _rnd(fit[2], 2) if fit else '',
-        'top_ups': b['top_ups'],
+        'top_ups': '',                                   # pauses removed (history 33)
         'free_cooling_closed_mean_degC': _rnd(_stats(col('free_cooling_closed_degC'))[0], 2),
         'folder': folder,
         'started_from': ('remembered opening point' + (f" ({b['known']['batch']})"
@@ -1210,10 +1201,6 @@ def status_text(b):
     where = (f"{run['name']} (of up to {b['n_tests']})" if run['counts']
              else run['name'])
     extra = ""
-    if b['phase'] == TOPUP:
-        up = f"{b['up']:.3f}" if b['up'] is not None else "?"
-        return (f"{head} · PAUSED for a top-up · upstream {up} bar, started at "
-                f"{b['up_start']:.3f} bar · top up, then press 'continue'")
     if b['phase'] == HOLD:
         if b['hold_since'] is None:
             extra = f" · heating to {b['hold_c']:.1f} °C"

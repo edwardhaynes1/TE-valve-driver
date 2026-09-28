@@ -97,7 +97,7 @@ class Rig:
         return self.open_c + self.jitter + self.k_up * (self.upstream - 3.0)
 
     def fill(self):
-        """Top up upstream: the chamber jumps, then decays over TAU_FILL."""
+        """Refill upstream by hand: the chamber jumps, then decays over TAU_FILL."""
         self.upstream = self.up_full
         self.extra = self.fill_jump * self.base
         self.tau_extra = TAU_FILL
@@ -126,28 +126,18 @@ class Rig:
         return hist
 
     def run_batch(self, n_tests=3, torque=0.3, max_s=6 * 3600, dt=0.25, hook=None,
-                  topup_drop=None, topup_after_s=20.0, continue_after_s=None, history=(),
-                  known=None, old=None, retorqued=None):
-        """Run a whole batch; returns (b, all messages). With topup_drop, the
-        'operator' tops up topup_after_s after a pause, and presses continue
-        at once — so the chamber is still jumping when the run resumes — or
-        continue_after_s after the pause began. history: readings from before."""
-        b = batch.new_batch(n_tests, torque, self.now, topup_drop, history, known=known,
+                  history=(), known=None, old=None, retorqued=None, p_up=True):
+        """Run a whole batch; returns (b, all messages). history: readings
+        from before. A hand refill is rig.fill() from a hook. p_up=False: the
+        Keller isn't read."""
+        b = batch.new_batch(n_tests, torque, self.now, history, known=known,
                             old=old if old is not None else known, retorqued=retorqued)
-        cont = topup_after_s if continue_after_s is None else continue_after_s
-        paused_at = None
         msgs_all, self.events = [], []
         while b['state'] == batch.RUNNING and self.now - b['started'] < max_s:
             vac, status = self.vac()
+            up = self.upstream if p_up else None
             cmds, msgs, events = batch.step(b, self.now, self.T, vac, status, self.heater(),
-                                            p_up=self.upstream, p_up_t=self.now)
-            if b['phase'] == batch.TOPUP:
-                paused_at = paused_at or self.now
-                if self.now - paused_at >= topup_after_s and self.upstream < self.up_full:
-                    self.fill()
-                if self.now - paused_at >= cont and self.upstream >= self.up_full - 0.01:
-                    msgs += batch.resume(b, self.now)
-                    paused_at = None
+                                            p_up=up, p_up_t=self.now if p_up else None)
             for c in cmds:
                 self.command(c)
             msgs_all += msgs

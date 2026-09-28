@@ -48,8 +48,7 @@ would need that gets a warning and the minimum setpoint.
 To measure the valve's *opening point* (the valve temperature where flow
 starts) with a mean and spread, set the seat screw torque and the upstream
 pressure by hand, enter the torque, choose the most **test runs** it may do
-(default 5) and the **top-up** limit (default 0.3 bar; blank = never), and
-press **start batch**. It shows the measured upstream pressure and asks you
+(default 5), and press **start batch**. It shows the measured upstream pressure and asks you
 to confirm the torque, or, if an opening point is remembered for it, **has
 the seat screw been re-torqued (or the valve disturbed) since?** *No* skips
 the scouts. Then it runs by itself, and stops as soon as the mean T_open is
@@ -67,8 +66,10 @@ starts from the same state; then it heats to the
 run's start and **creeps** at 3 °C/min until the valve opens. The approach
 waits until the chamber is neither rising nor falling faster than ~2 %/min
 (a fill's jump or outgassing would look like an opening; a falling chamber
-hides it). If upstream has fallen by the top-up limit, it pauses before the
-next run: top up and press **continue**.
+hides it). There is no pause for the leak: refill upstream by hand when you
+like, best while it cools or holds (the approach waits for the chamber to
+settle). A refill while heating is seen on the Keller (upstream up
+≥ 0.05 bar): that run is discarded and repeated (`testrun02b`).
 
 | Run | What it does |
 |---|---|
@@ -91,8 +92,9 @@ after correcting for it. A batch stops by itself if a scout doesn't open by
 155 °C, if two test runs in a row don't, if the valve opens while warming to
 the hold temperature, if the opening point is less than 5 K above the hold
 temperature (too close to room temperature to start cold), or if a cooldown
-or the chamber settling takes over 30 min. Start is refused without a valve temperature or chamber reading
-(or, with top-ups on, an upstream reading). **abort batch**, DISARM, any
+or the chamber settling takes over 30 min. Start is refused without a valve temperature or chamber reading;
+without an upstream reading it starts, but can't correct for upstream or
+see a refill (the start dialog says so). **abort batch**, DISARM, any
 trip, the chamber gauge failing while heating, or closing the driver ends
 it at once. While it runs, the heater controls and the torque are locked.
 

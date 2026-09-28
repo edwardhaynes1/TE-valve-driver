@@ -443,14 +443,18 @@ def test_the_logger_labels_rows_and_copies_them(batch_dirs, monkeypatch):
     assert len(run) >= 3 and run[0]['batch_run'] == 'scout1'
 
 
-# ── the real rig: settling, top-ups, the leak, the ceiling ─────────────────
+# ── the real rig: settling, refills, the leak, the ceiling ─────────────────
 
 def approach_times(rig, **kw):
     """Run a batch; [(when the hold time was reached, when the approach
     began)] for every run."""
     seen, out = [], []
+    fill = kw.pop('fill', None)
+    kw.pop('hook', None)
 
     def hook(r, b):
+        if fill:
+            fill(r, b)
         seen.append((r.now, b['run']['counts'], b['phase'], b['hold_since']))
     b, msgs = rig.run_batch(hook=lambda r, b_: hook(r, b_), **kw)
     for i in range(1, len(seen)):
@@ -517,25 +521,68 @@ def test_a_chamber_that_never_settles_stops_it():
     assert not rig.h['armed']
 
 
-def test_top_up_pause_and_the_chamber_jump_after_filling():
-    # Leaks 0.07 bar/min; the operator tops up when asked; filling makes the
-    # chamber jump 70 % (as on 24 Sept) — the batch waits it out.
+def refill_once_in(phase):
+    """The operator refills upstream by hand once, during the given phase,
+    after it has leaked 0.3 bar."""
+    def hook(rig, b):
+        if (b['phase'] == phase and rig.fills == 0
+                and rig.upstream < rig.up_full - 0.3):
+            rig.fill()
+    return hook
+
+
+@pytest.mark.parametrize("phase", [batch.COOLDOWN, batch.HOLD])
+def test_a_refill_while_cooling_or_holding_is_waited_out(phase):
+    # Leaks 0.07 bar/min; filling makes the chamber jump 70 % (as on 24 Sept):
+    # the hold waits for the chamber to settle; no run is lost or misread.
     rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60, fill_jump=0.7)
-    phases = []
-    b, msgs = rig.run_batch(n_tests=4, topup_drop=0.3,
-                            hook=lambda r, b: phases.append((b['phase'], r.h['armed'])))
-    assert b['state'] == batch.COMPLETE and b['top_ups'] >= 1 and rig.fills == b['top_ups']
-    assert not any(armed for phase, armed in phases if phase in (batch.TOPUP, batch.COOLDOWN))
-    # no false openings from the jump: every test run opened while creeping, near 60 °C
+    fill = refill_once_in(phase)
+    armed = []
+    b, _ = rig.run_batch(n_tests=4, hook=lambda r, b_: (
+        fill(r, b_), armed.append((b_['phase'], r.h['armed']))))
+    assert rig.fills == 1 and b['state'] == batch.COMPLETE
+    assert not any(a for ph, a in armed if ph == batch.COOLDOWN)
+    assert all(r['status'] == batch.OPENED for r in b['runs'])
     tests = [r for r in b['runs'] if r['counts']]
-    assert all(r['opened_during'] == batch.CREEP and 60.0 <= r['T_onset'] <= 61.5 for r in tests)
-    assert any("PAUSED for a top-up" in m for m in msgs)
+    assert all(r['opened_during'] == batch.CREEP and r['T_onset'] >= 60.0 for r in tests)
 
 
-def test_no_top_up_pause_unless_asked():
+@pytest.mark.parametrize("phase", [batch.APPROACH, batch.CREEP])
+def test_a_refill_while_heating_discards_and_repeats_the_run(phase):
+    # The fill's jump would read as an opening: the run is discarded (not
+    # averaged), the heater disarmed, and the same run repeated.
+    rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60, fill_jump=0.7)
+    b, msgs = rig.run_batch(n_tests=4, hook=refill_once_in(phase))
+    assert rig.fills == 1 and b['state'] == batch.COMPLETE, b['note']
+    lost = [r for r in b['runs'] if r['refilled']]
+    assert len(lost) == 1 and lost[0]['status'] == batch.RUN_ABORTED
+    assert not lost[0]['averaged'] and lost[0]['T_onset'] is None
+    names = [r['name'] for r in b['runs']]
+    assert names[names.index(lost[0]['name']) + 1] == lost[0]['name'] + 'b'
+    assert any("a refill" in m for m in msgs)
+    # never read low from the jump
+    assert all(r['T_onset'] >= 60.0 for r in b['runs'] if r['status'] == batch.OPENED)
+    assert sum(1 for r in b['runs'] if r['counts'] and r['status'] == batch.OPENED) \
+        == b['tests_started']
+
+
+def test_repeat_names():
+    assert batch.run_name(1, 1) == 'scout2b' and batch.run_name(0, 1) == 'scout1b'
+    assert batch.run_name(3, 0) == 'testrun02' and batch.run_name(3, 1) == 'testrun02b'
+
+
+def test_a_leak_never_pauses_the_batch():
     rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60)
     b, _ = rig.run_batch(n_tests=3)
-    assert b['state'] == batch.COMPLETE and b['top_ups'] == 0
+    assert b['state'] == batch.COMPLETE
+    assert all(r['status'] == batch.OPENED for r in b['runs'])
+
+
+def test_without_the_keller_it_runs_uncorrected():
+    rig = Rig(open_c=60.0)
+    b, _ = rig.run_batch(n_tests=3, p_up=False)
+    assert b['state'] == batch.COMPLETE
+    assert all(r['up_open'] is None for r in b['runs'])
 
 
 def test_the_leak_becomes_a_fit_against_upstream():
@@ -579,13 +626,12 @@ def test_start_is_refused_without_the_sensors(batch_dirs, missing):
     assert not ok and ("thermocouple" in msg if missing == "tc" else "chamber" in msg)
 
 
-def test_top_up_needs_the_keller(batch_dirs):
+def test_a_batch_starts_without_the_keller(batch_dirs):
     shared.set_seat_screw_torque(0.3)
     shared.store_valve_temp(25.0, 0)
     shared.store_vacuum(1e-6, None, 1.7)
-    ok, msg = batchrun.start(3, topup_drop_bar=0.3, start_thread=False)
-    assert not ok and "Keller" in msg
-    ok, _ = batchrun.start(3, start_thread=False)          # without top-up: fine
+    assert batchrun.start_problem(3) is None
+    ok, _ = batchrun.start(3, start_thread=False)
     assert ok
 
 
@@ -600,21 +646,14 @@ def test_a_settled_chamber_approaches_as_soon_as_the_hold_is_done():
         assert all(0 <= began - done < 1.0 for done, began in times)
 
 
-def test_continue_long_after_the_fill_needs_no_extra_wait():
-    # topped up 20 s into the pause, continue pressed 5 min later: settled by then
-    rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60, fill_jump=0.7)
-    b, times, _ = approach_times(rig, n_tests=4, topup_drop=0.3, continue_after_s=300)
-    assert b['top_ups'] >= 1 and b['state'] == batch.COMPLETE
-    assert all(0 <= began - done < 1.0 for done, began in times)
-
-
 def test_a_fill_that_outlasts_the_hold_delays_the_approach(monkeypatch):
     # A slow fill tail (τ 400 s, falling faster than the settle limit when
     # the hold ends): the approach waits for it; the jump isn't an opening.
     monkeypatch.setattr(batch_sim, "TAU_FILL", 400.0)
     rig = Rig(open_c=60.0, upstream_leak_bar_s=0.07 / 60, fill_jump=3.0)
-    b, times, msgs = approach_times(rig, n_tests=4, topup_drop=0.3)
-    assert b['top_ups'] >= 1 and b['state'] == batch.COMPLETE, b['note']
+    fill = refill_once_in(batch.HOLD)
+    b, times, msgs = approach_times(rig, n_tests=4, hook=None, fill=fill)
+    assert rig.fills == 1 and b['state'] == batch.COMPLETE, b['note']
     assert max(began - done for done, began in times) > 30
     # the fill's jump is never taken for an opening: nothing reads below 60 °C
     assert all(r['T_onset'] >= 60.0 for r in b['runs'] if r['status'] == batch.OPENED)
@@ -1000,3 +1039,15 @@ def test_a_guess_far_too_low_heats_fast_after_20_K():
     assert s2['start_c'] == pytest.approx(s1['T_onset'] - 10.0)
     assert b['state'] == batch.COMPLETE
     assert batch.run_summary(b, s1, [])['creep_degC_per_min'] == ''
+
+
+def test_a_refill_during_scout_1_repeats_it_as_scout1b():
+    rig = Rig(open_c=60.0)
+
+    def hook(r, b):
+        if b['run']['index'] == 0 and b['phase'] == batch.APPROACH and r.fills == 0:
+            r.up_full = r.upstream + 0.2
+            r.fill()
+    b, _ = rig.run_batch(n_tests=3, hook=hook)
+    assert [r['name'] for r in b['runs']][:2] == ['scout1', 'scout1b']
+    assert b['runs'][0]['refilled'] and b['state'] == batch.COMPLETE

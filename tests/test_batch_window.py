@@ -50,7 +50,7 @@ def state(w):
 def readings():
     shared.store_valve_temp(25.0, 0)
     shared.store_vacuum(1e-6, None, 1.7)
-    shared.store_keller(3.0, None, control.clock())      # top-up is on by default
+    shared.store_keller(3.0, None, control.clock())
 
 
 def enter_torque(g, nm="0.3"):
@@ -87,7 +87,17 @@ def test_the_confirmation_shows_torque_and_measured_upstream(gui):
     seen = []
     gui._confirm = lambda title, text: seen.append(text) or False
     gui._start_batch()
-    assert "0.45 N·m" in seen[0] and "3.210 bar (measured)" in seen[0]
+    assert "0.45 N·m" in seen[0] and "3.210 bar (measured;" in seen[0]
+    assert "Refill upstream by hand" in seen[0]
+
+
+def test_the_confirmation_warns_when_the_keller_is_not_read(gui):
+    enter_torque(gui, "0.45")
+    shared.clear_keller()
+    seen = []
+    gui._confirm = lambda title, text: seen.append(text) or False
+    gui._start_batch()
+    assert "NOT READ" in seen[0]
 
 
 def test_a_running_batch_locks_the_heater_and_torque(gui):

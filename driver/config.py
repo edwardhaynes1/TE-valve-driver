@@ -398,7 +398,7 @@ BATCH_CEILING_C         = 155.0    # no opening by here → the run failed. 5 K 
 BATCH_CEILING_HOLD_S    = 60.0     # …after holding at the ceiling this long
 BATCH_START_BAND_K      = 0.5      # creep starts once the TC is within this of the start
 # Settle — before every run, heater off: wait until the chamber pressure is
-# neither rising (a top-up, or outgassing, would look like an opening) nor
+# neither rising (a refill, or outgassing, would look like an opening) nor
 # falling fast (the baseline would lag it and make detection late). 24 Sept 2026: after filling upstream the chamber jumped
 # 1.4 → 2.35e-6 mbar with the valve cold, then fell back over ~4 min.
 BATCH_SETTLE_WINDOW_S   = 60.0     # trend = straight-line fit of log10(p) over this long
@@ -411,13 +411,10 @@ BATCH_SETTLE_MAX_FALL_DEC_MIN = 0.01   # …and falling slower than this (≈ �
                                    # simulation (history 30); at 0.01, < 1 K. 24 Sept 2026:
                                    # the pump-down tail fell 1.5 %/min, so it passes
 BATCH_SETTLE_MAX_S      = 1800.0   # still rising after this long: the batch stops
-# Top-up — optional (set when starting): if upstream has fallen this far below
-# its value at the start of the batch, pause before the next run and ask for
-# a top-up. The rig leaked 0.05-0.07 bar/min on 24 Sept 2026.
-BATCH_TOPUP_DROP_DEFAULT_BAR = 0.3
 BATCH_UP_MAX_AGE_S      = 5.0      # upstream readings older than this are ignored
-BATCH_FILL_RISE_BAR     = 0.05     # a rise this big during the top-up pause is the fill: the
-                                   # chamber is judged from when upstream stopped rising
+BATCH_REFILL_RISE_BAR   = 0.05     # upstream up this much while heating = refilled by hand:
+                                   # the fill's chamber jump would read as an opening, so
+                                   # the run is discarded and repeated (history 33)
 BATCH_UP_FIT_MIN_SPREAD_BAR = 0.05 # fit T_open against upstream only over at least this range
 BATCH_ONSET_DEC         = 0.015    # onset = last sample within this of the baseline (best guess)
 # Cold start — every run starts from the hold temperature, so every T_open is
