@@ -1078,6 +1078,111 @@ def plot_batch(folder, output=None, show=True):
     return out
 
 
+# ── the opening map: every opening, one fit (driver/openmap.py; history 34) ──
+
+def make_map_figure(rows, torque=None):
+    """Three panels from the openings table: T_open against upstream for
+    one torque (each setting in its colour, with its fitted line; hollow =
+    deep cycle), the map (each setting's T_open at MAP_REF_BAR against
+    torque, ± 95 %), and the residuals over time. torque: which one the
+    first panel shows (default: the newest opening's)."""
+    from driver import config, openmap
+    f = openmap.fit(rows)
+    newest = openmap.latest(rows)
+    tk = (f"{torque:.2f}" if torque is not None else f.torque_of.get(newest))
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(19, 6),
+                                        gridspec_kw={"width_ratios": [1.2, 1.0, 1.2]})
+    settings = sorted(f.offsets, key=lambda s: min((p["t"] or 0) for p in f.points
+                                                   if p["setting"] == s))
+    cyc = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    colour = {s: cyc[i % len(cyc)] for i, s in enumerate(settings)}
+    ref = config.MAP_REF_BAR
+
+    # 1: T_open against upstream, this torque
+    if tk is not None:
+        k = f.slope(tk)
+        lo, hi = f.ranges.get(tk, (ref, ref))
+        for s in settings:
+            if f.torque_of.get(s) != tk:
+                continue
+            pts = [p for p in f.points if p["setting"] == s]
+            b = np.array([p["bar"] for p in pts])
+            t = np.array([p["T"] for p in pts])
+            deep = np.array([bool(p["deep"]) for p in pts])
+            off, oh = f.offsets[s]
+            lab = f"{s}: {off:.1f}" + (f" ± {oh:.1f}" if oh is not None else "") \
+                + f" °C at {ref:g} bar, n = {len(pts)}"
+            ax1.scatter(b[~deep], t[~deep], color=colour[s], s=30, zorder=3)
+            ax1.scatter(b[deep], t[deep], facecolors="none", edgecolors=colour[s], s=40,
+                        zorder=3)
+            xs = np.linspace(min(lo, ref), max(hi, ref), 2)
+            ax1.plot(xs, off + k * (xs - ref), color=colour[s], lw=1.3, label=lab)
+        kk = f.slopes.get(tk)
+        if kk:
+            ax1.set_title(f"{float(tk):.2f} N·m: slope {kk[0]:+.1f}"
+                          + (f" ± {kk[1]:.1f}" if kk[1] is not None else "")
+                          + " K/bar" + (" (assumed)" if kk[2] == "assumed" else ""))
+        ax1.axvline(ref, color="0.6", ls=":", lw=1)
+    ax1.set_xlabel("upstream pressure at the onset (bar abs)   hollow = deep cycle")
+    ax1.set_ylabel("T_open (°C)")
+    ax1.grid(True, alpha=0.3)
+    if ax1.get_legend_handles_labels()[0]:
+        ax1.legend(fontsize=7, loc="best")
+
+    # 2: the map — each setting's T_open at the reference pressure
+    for s in settings:
+        off, oh = f.offsets[s]
+        x = float(f.torque_of[s])
+        ax2.errorbar([x], [off], yerr=[[oh or 0]], fmt="o", color=colour[s], capsize=3)
+    ax2.set_xlabel("seat screw torque (N·m)")
+    ax2.set_ylabel(f"T_open at {ref:g} bar (°C)")
+    ax2.set_title("the map: each setting, ± 95 %")
+    ax2.grid(True, alpha=0.3)
+
+    # 3: residuals over time
+    for s in settings:
+        pts = [p for p in f.points if p["setting"] == s and p["t"] is not None]
+        if not pts:
+            continue
+        when = pd.to_datetime([p["when"] for p in pts])          # local time, as logged
+        r = np.array([p["residual"] for p in pts])
+        deep = np.array([bool(p["deep"]) for p in pts])
+        ax3.scatter(when[~deep], r[~deep], color=colour[s], s=22)
+        ax3.scatter(when[deep], r[deep], facecolors="none", edgecolors=colour[s], s=30)
+    ax3.axhline(0, color="black", lw=1)
+    if f.sd:
+        ax3.axhspan(-f.sd, f.sd, color=AVERAGE_BLUE, alpha=0.08)
+    ax3.set_ylabel("residual: measured − fit (K)")
+    ax3.set_xlabel("time   band = ±1 scatter   hollow = deep cycle")
+    ax3.set_title("residuals: a trend here is something the fit misses")
+    ax3.grid(True, alpha=0.3)
+    fig.autofmt_xdate()
+
+    top = f.status_text(newest) if newest else "no openings yet"
+    terms = f.terms_text()
+    import textwrap
+    fig.suptitle("\n".join(textwrap.wrap(top, 170) + textwrap.wrap(terms, 170)), fontsize=9)
+    fig.tight_layout()
+    return fig
+
+
+def plot_map(path, output=None, show=True, torque=None):
+    from driver import openmap
+    rows = openmap.load(path)
+    if not rows:
+        fail(f"{path} has no openings yet")
+    fig = make_map_figure(rows, torque)
+    out = output or str(path).rsplit(".", 1)[0] + ".png"
+    fig.savefig(out, dpi=130)
+    print(f"figure written to {out}")
+    if show:
+        try:
+            plt.show()
+        except Exception:
+            pass
+    return out
+
+
 def main():
     global INTERACTIVE
     INTERACTIVE = len(sys.argv) == 1
@@ -1090,7 +1195,19 @@ def main():
                     help="output image path (.png/.pdf)")
     ap.add_argument("--no-show", action="store_true",
                     help="save only, don't open a window")
+    ap.add_argument("--map", action="store_true",
+                    help="the opening map: give logs/openings.csv (the default)")
+    ap.add_argument("--torque", type=float, default=None,
+                    help="with --map: the torque the first panel shows")
     args = ap.parse_args()
+
+    if args.map:
+        if args.no_show:
+            matplotlib.use("Agg")
+        from driver import config
+        plot_map(args.logfile or config.OPENINGS_CSV, args.output, show=not args.no_show,
+                 torque=args.torque)
+        return
 
     if args.logfile is None:
         args.logfile = pick_logfile()

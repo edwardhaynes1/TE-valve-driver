@@ -106,6 +106,33 @@ time. Settings: `BATCH_*` in `driver/config.py` (hold depth and time, margin,
 precision, detection). Terms: [context.md](prog-documentation/context.md),
 "Batches".
 
+### The opening map: every opening, one fit
+
+Every opening that crept onto the valve goes into one table,
+`logs/openings.csv` (copied to the *Openings* sheet of the opening map), and
+one fit over all of it is redone after every opening:
+
+    T_open = offset (per setting) + slope (per torque) × (upstream − 3 bar)
+
+A *setting* is one tightening of the seat screw (a batch, until cycling
+replaces batches), so a re-torque to the same value may sit higher or lower;
+all settings at one torque share the pressure slope. A torque whose openings
+span under 0.3 bar of upstream uses −12 K/bar (*assumed*). The fit also
+tries a warm-start term (deep against shallow cycles), drift in time and the
+chamber background, keeps each only if significant at 95 %, and says when
+two can't be told apart (28 Sept: time and a background pumping down moved
+together). After each opening the event log gets the setting's status line —
+T_open ± at 3 bar, the slope ±, the pressure range, and **DONE** (±1 K, ±2
+K/bar) or where to take the pressure next — and `logs/opening-map.png` is
+redrawn: T_open against upstream per setting, the map against torque, and
+the residuals over time. Old batch folders are imported at start-up, once
+each. Draw it by hand with `py TE_PLOTTER.py --map`. Settings: `MAP_*` in
+`driver/config.py`.
+
+Detection is on a fixed flow: the chamber 0.5 × 10⁻⁷ mbar above its
+baseline (at least 4.7 %), so a background still pumping down doesn't move
+what counts as open.
+
 ### Heater voltage, current and power
 
 By default these are *calculated* from the gate state, the 24 V rail and the

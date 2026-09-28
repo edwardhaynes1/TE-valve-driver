@@ -15,7 +15,9 @@ Files, in logs/batches/<date>_<time>_<torque>Nm_<upstream>bar/:
     summary.csv                                a row per run (schema.RUN_SUMMARY)
     batch.json                                 settings at the start; results at the end
     batch.png                                  drawn by TE_PLOTTER at the end
-and a row per run and per batch in the opening map (config.BATCH_WORKBOOK).
+and a row per run and per batch in the opening map (config.BATCH_WORKBOOK);
+each creeping opening also goes into the openings table (openmap.py), whose
+fit is logged and drawn (config.MAP_FIGURE) after every one.
 At the end the result may become the remembered opening point for the
 torque (openings.py; batch.remembered_entry decides).
 """
@@ -29,7 +31,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from . import batch, config, control, openings, schema, shared, workbook
+from . import batch, config, control, openings, openmap, schema, shared, workbook
 from .shared import log_event
 
 PLOT = True                    # draw batch.png at the end (tests switch it off)
@@ -265,6 +267,44 @@ def _end_run(run):
     ok, message = workbook.append(config.BATCH_WORKBOOK, 'Runs', schema.RUN_SUMMARY, summary)
     if message:
         log_event(("" if ok else "WARNING: ") + message)
+    _to_map(summary)
+
+
+def _to_map(summary):
+    """A creeping opening goes into the openings table (history 34): the
+    fit is redone, its status line logged, and the live figure redrawn."""
+    row = openmap.row_from_run(summary, _name, openmap.current_rule(), note="batch")
+    if row is None:
+        return
+    ok, message = openmap.append(row)
+    if message:
+        log_event(("" if ok else "WARNING: ") + message)
+    if not ok:
+        return
+    try:
+        rows = openmap.load()
+        f = openmap.fit(rows)
+        log_event(f.status_text(row['setting']))
+        terms = f.terms_text()
+        if terms:
+            log_event(f"Opening map terms: {terms}")
+    except Exception as e:                         # the map must not stop the batch
+        log_event(f"Opening map not fitted — {type(e).__name__}: {e}")
+        return
+    if PLOT:
+        _plot_map()
+
+
+def _plot_map():
+    """logs/opening-map.png, drawn by TE_PLOTTER in its own process."""
+    try:
+        subprocess.Popen([sys.executable, str(_PLOTTER), "--map", config.OPENINGS_CSV,
+                          "-o", config.MAP_FIGURE, "--no-show"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         cwd=str(_PLOTTER.parent),
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception as e:
+        log_event(f"Opening map figure not drawn — {type(e).__name__}: {e}")
 
 
 def _end_batch():

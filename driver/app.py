@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import logfile
-from . import openings
+from . import openings, openmap
 from . import shared
 from .config import LOG_INTERVAL_S
 from .keller import detect_keller_bus, keller_thread
@@ -94,6 +94,14 @@ def main():
     logfile.init_paths()
     remembered = openings.load()
     print(remembered)
+    try:                               # old batch folders into the openings table
+        imported = openmap.import_batches()
+        map_line = openmap.summary()
+    except Exception as e:             # the map must never stop the driver
+        imported, map_line = f"Openings: import failed — {type(e).__name__}: {e}", ""
+    for line in (imported, map_line):
+        if line:
+            print(line)
 
     print("Scanning for Keller sensor...")
     keller_port, keller_bus = detect_keller_bus()
@@ -122,6 +130,9 @@ def main():
 
     log_event("System started")
     log_event(remembered)
+    for line in (imported, map_line):
+        if line:
+            log_event(line)
     if keller_ok:
         log_event(f"Keller online · {keller_port}")
 

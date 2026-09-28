@@ -131,8 +131,30 @@ BATCH_SUMMARY_COLUMNS = (
     ("hold_gap_min_K",               "the smallest T_open − hold temperature of the averaged test runs"),
 )
 
+# The openings table: logs/openings.csv and the opening map's Openings sheet,
+# a row per opening (history 34). openmap.py fits over it.
+OPENINGS_COLUMNS = (
+    ("time",                  "ISO local time of the onset"),
+    ("setting",               "one tightening of the seat screw: <date>_<time>_<torque>Nm, or the batch name for an imported batch"),
+    ("torque_Nm",             "N·m, as entered"),
+    ("upstream_bar",          "upstream pressure at the onset (measured)"),
+    ("t_open_degC",           "valve temperature at the onset: the opening point"),
+    ("t_detect_degC",         "valve temperature at detection"),
+    ("baseline_mbar",         "chamber background before it opened"),
+    ("closed_degC",           "valve temperature where the chamber fell back after it (the valve closed)"),
+    ("bottom_degC",           "the temperature the cycle cooled to (held at) before its creep"),
+    ("bottom_s",              "s it was held there"),
+    ("deep",                  "1 = a deep (cold) cycle, 0 = shallow"),
+    ("refills",               "refills while heating before it opened"),
+    ("detect_rule",           "the detection rule that found it"),
+    ("creep_degC_per_min",    "creep rate"),
+    ("source",                "where it came from: the cycle's file, or 'batch <folder>/<run>'"),
+    ("note",                  ""),
+)
+
 MAIN = tuple(name for name, _ in MAIN_COLUMNS)
 PWM = tuple(name for name, _ in PWM_COLUMNS)
 RUN_SUMMARY = tuple(name for name, _ in RUN_SUMMARY_COLUMNS)
 BATCH_SUMMARY = tuple(name for name, _ in BATCH_SUMMARY_COLUMNS)
+OPENINGS = tuple(name for name, _ in OPENINGS_COLUMNS)
 PWM_SUFFIX = "_pwm.csv"

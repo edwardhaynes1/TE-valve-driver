@@ -461,6 +461,23 @@ BATCH_WORKBOOK          = str(Path(__file__).resolve().parent.parent / "logs"
 OPENINGS_FILE           = str(Path(__file__).resolve().parent.parent / "logs"
                               / "opening-points.json")   # remembered opening points
 
+# ─── The opening map — every opening, one fit (openmap.py; history 34) ───
+OPENINGS_CSV            = str(Path(__file__).resolve().parent.parent / "logs" / "openings.csv")
+MAP_FIGURE              = str(Path(__file__).resolve().parent.parent / "logs"
+                              / "opening-map.png")      # redrawn after every opening
+MAP_REF_BAR             = 3.0      # offsets (a setting's T_open) are given at this upstream
+MAP_MIN_SPREAD_BAR      = 0.3      # a torque's slope is fitted once its openings span this
+                                   # much upstream; below, −PRESSURE_UP_K_PER_BAR (assumed)
+MAP_DEEP_GAP_K          = 15.0     # an imported batch run that started this far below where
+                                   # it opened counts as a deep (cold) start
+MAP_DONE_OFFSET_K       = 1.0      # a setting is "done" at offset ± this (95 %)…
+MAP_DONE_SLOPE_K_BAR    = 2.0      # …and its torque's slope ± this, K/bar (95 %)
+MAP_P_MIN_BAR           = 1.0      # pressure hints stay within these
+MAP_P_MAX_BAR           = 5.0
+MAP_HINT_STEP_BAR       = 1.0      # …and suggest this far beyond the range covered
+MAP_CONFOUND_R          = 0.8      # two optional terms correlated this much (within the
+                                   # settings) are reported as not separable
+
 # LabJack combined sample rate (both vacuum + thermocouple read here)
 LABJACK_SAMPLE_HZ     = 4          # Hz — reads vacuum and TC each cycle
 

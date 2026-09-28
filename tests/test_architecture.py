@@ -21,11 +21,14 @@ ALLOWED = {
     "labjack": {"config", "shared", "control", "thermocouple"},
     "batch": {"config", "controller"},
     "workbook": set(),
-    "batchrun": {"config", "shared", "control", "schema", "batch", "workbook", "openings"},
+    "openmap": {"config", "schema", "workbook"},
+    "batchrun": {"config", "shared", "control", "schema", "batch", "workbook", "openings",
+                 "openmap"},
     "logfile": {"config", "shared", "control", "schema", "batchrun"},
     "gui": {"config", "shared", "control", "labjack", "logfile", "palette",
             "charts", "readout", "batchrun", "openings"},
-    "app": {"config", "shared", "control", "keller", "labjack", "logfile", "gui", "openings"},
+    "app": {"config", "shared", "control", "keller", "labjack", "logfile", "gui", "openings",
+            "openmap"},
 }
 HARDWARE_OR_GUI = {"serial", "u3", "keller_protocol", "tkinter"}
 

@@ -99,6 +99,11 @@ class FakeClock:
 def fresh_state(monkeypatch, capsys, tmp_path):
     # never read or write the real logs/opening-points.json
     monkeypatch.setattr(config, "OPENINGS_FILE", str(tmp_path / "opening-points.json"))
+    # …nor the openings table, its figure, the workbook or the batch folders
+    monkeypatch.setattr(config, "OPENINGS_CSV", str(tmp_path / "openings.csv"))
+    monkeypatch.setattr(config, "MAP_FIGURE", str(tmp_path / "opening-map.png"))
+    monkeypatch.setattr(config, "BATCH_WORKBOOK", str(tmp_path / "map.xlsx"))
+    monkeypatch.setattr(config, "BATCH_DIR", str(tmp_path / "batches"))
     reset_shared()
     clock = FakeClock()
     monkeypatch.setattr(control, "clock", clock)
