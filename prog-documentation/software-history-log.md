@@ -4,6 +4,30 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 33. Top-up pause removed — 28 Sept 2026
+Entry 28 added an optional pause before a run once upstream had fallen a
+set amount (default 0.3 bar), and a "continue" button. Edward didn't want
+the setting: the batch should just account for the changing upstream
+pressure, which it already does (each run's upstream is logged; starts are
+shifted for it; the stopping rule corrects to the mean; T_open is fitted
+against it and stored at the mean). The pre-filled 0.3 also read as unclear
+("blank or 0.3 s?"). Removed: the box, the button, the pause, the fill
+detection behind it, and the Keller requirement it put on starting (a
+batch now starts without an upstream reading, and says so in the start
+dialog: no upstream correction then). The Batches sheet keeps its
+`top_ups` column (append-only), now blank.
+
+A refill by hand (any time, no button) is seen on the Keller as upstream
+rising ≥ 0.05 bar (`BATCH_REFILL_RISE_BAR`); the leak only lowers it.
+Simulated with the 24 Sept fill jump (+70 %): while cooling or holding, the
+approach just waits for the chamber to settle; but during the hold a slow
+fill tail also looked like the valve opening while warming, and stopped
+the batch — a refill seen during the hold now turns that check off for the
+run. While heating, the jump read as an opening at 35 °C and sent the
+batch back to scouting: now the run is discarded (not averaged, heater
+disarmed) and repeated after the cooldown with a letter (`testrun02b`).
+The start dialog says so. Without the Keller a refill can't be seen.
+
 ## 32. Scouts don't hold, and scout 1 starts from the table guess — 25 Sept 2026
 First 0.45 N·m batch after entry 31: nothing remembered, so scout 1 held
 the cold valve at 29.5 °C for 4 min before heating fast towards 155 °C —
