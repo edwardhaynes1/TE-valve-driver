@@ -33,7 +33,7 @@ MAIN_COLUMNS = (
     ("heater_P_mean_meas",      "W, mean of per-tick V x I, blank unless sensing is wired"),
     ("heater_on_s",             "s, gate ON time since the previous row (from edge times)"),
     ("seat_screw_torque_Nm",    "N·m, TE-Valve seat screw torque as entered; blank = not recorded"),
-    ("batch_run",               "scout1 / scout2 / testrun01…, blank outside a batch"),
+    ("batch_run",               "cycle001… while cycling (from history 34); scout1 / scout2 / testrun01… in a batch; blank otherwise"),
     ("batch_phase",             "cooldown / hold / approach / creep (top-up: until history 33; settle: 24 Sept 2026 only), blank outside a batch"),
 )
 

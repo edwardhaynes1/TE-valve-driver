@@ -1,11 +1,13 @@
-"""The batch controls in the window: start needs a torque and a disarmed
-heater and asks for confirmation; while a batch runs it owns the heater
-(the heater controls and the torque are locked); abort and DISARM end it."""
+"""The cycling controls in the window (history 34; they replaced the batch
+controls): start needs a torque and a disarmed heater and asks for
+confirmation — and, if the torque has a setting already, whether the
+screw was re-torqued; while cycling runs it owns the heater (the heater
+controls and the torque are locked); stop and DISARM end it."""
 import time
 
 import pytest
 
-from driver import batchrun, config, control, shared
+from driver import config, control, cyclerun, openmap, shared
 
 
 @pytest.fixture(scope="module")
@@ -30,11 +32,10 @@ def tk_root():
 def gui(tk_root, tmp_path, monkeypatch):
     import tkinter as tk
     from driver.gui import TEGui
-    monkeypatch.setattr(config, "BATCH_DIR", str(tmp_path / "batches"))
-    monkeypatch.setattr(config, "BATCH_WORKBOOK", str(tmp_path / "map.xlsx"))
-    monkeypatch.setattr(batchrun, "PLOT", False)
-    real_start = batchrun.start
-    monkeypatch.setattr(batchrun, "start",
+    monkeypatch.setattr(config, "CYCLE_DIR", str(tmp_path / "cycles"))
+    monkeypatch.setattr(cyclerun, "PLOT", False)
+    real_start = cyclerun.start
+    monkeypatch.setattr(cyclerun, "start",
                         lambda *a, **k: real_start(*a, **{**k, 'start_thread': False}))
     g = TEGui(root=tk.Toplevel(tk_root))
     g._confirm = lambda *a: True
@@ -58,7 +59,7 @@ def enter_torque(g, nm="0.3"):
     g.seat_entry.delete(0, "end")
     g.seat_entry.insert(0, nm)
     g._set_seat_screw()
-    g.mode_var.set("batch")
+    g.mode_var.set("cycle")
     g._on_mode()
     g._poll()
 
@@ -80,7 +81,7 @@ def test_cancel_does_not_start(gui):
     enter_torque(gui)
     gui._confirm = lambda *a: False
     gui._start_batch()
-    assert not batchrun.running()
+    assert not cyclerun.running()
 
 
 def test_the_confirmation_shows_torque_and_measured_upstream(gui):
@@ -90,7 +91,8 @@ def test_the_confirmation_shows_torque_and_measured_upstream(gui):
     gui._confirm = lambda title, text: seen.append(text) or False
     gui._start_batch()
     assert "0.45 N·m" in seen[0] and "3.210 bar (measured;" in seen[0]
-    assert "Refill upstream by hand" in seen[0]
+    assert "refill by hand" in seen[0] and "Every 5 cycles, one deep" in seen[0]
+    assert "first cycle scouts" in seen[0]
 
 
 def test_the_confirmation_warns_when_the_keller_is_not_read(gui):
@@ -102,83 +104,90 @@ def test_the_confirmation_warns_when_the_keller_is_not_read(gui):
     assert "NOT READ" in seen[0]
 
 
-def test_a_running_batch_locks_the_heater_and_torque(gui):
+def test_deep_every_must_be_a_whole_number(gui):
     enter_torque(gui)
+    gui._set_entry(gui.runs_entry, "x")
+    gui._start_batch()
+    assert not cyclerun.running() and "not a whole number" in shared.recent_events()[-1][1]
+
+
+def test_running_locks_the_heater_and_torque(gui):
+    enter_torque(gui)
+    gui._set_entry(gui.runs_entry, "3")
     gui._start_batch()
     gui._poll()
-    assert batchrun.running()
+    assert cyclerun.running() and cyclerun._c['deep_every'] == 3
     for w in (*gui.mode_buttons, gui.update_btn, gui.sp_entry, gui.seat_entry,
               gui.seat_btn, gui.runs_entry, gui.batch_btn):
         assert state(w) == "disabled"
     assert state(gui.abort_btn) == "normal" and state(gui.arm_btn) == "normal"
-    assert "scout1" in gui.batch_status.cget("text")
+    assert "cycle001 (deep)" in gui.batch_status.cget("text")
     gui._abort_batch()
     gui._poll()
-    assert not batchrun.running() and state(gui.seat_entry) == "normal"
+    assert not cyclerun.running() and state(gui.seat_entry) == "normal"
     assert state(gui.batch_btn) == "normal"
-    assert "aborted" in gui.batch_status.cget("text")
+    assert "stopped" in gui.batch_status.cget("text")
 
 
-def test_disarm_aborts_and_arm_is_refused_during_a_batch(gui):
+def test_disarm_stops_and_arm_is_refused_while_cycling(gui):
     enter_torque(gui)
     gui._start_batch()
     gui._toggle_arm()                              # heater disarmed: ARM refused
-    assert not control.snapshot()['armed'] and batchrun.running()
-    control.heater_command(armed=True)             # as the batch does
+    assert not control.snapshot()['armed'] and cyclerun.running()
+    control.heater_command(armed=True)             # as cycling does
     gui._toggle_arm()                              # DISARM
-    assert not control.snapshot()['armed'] and not batchrun.running()
+    assert not control.snapshot()['armed'] and not cyclerun.running()
 
 
-# ── the re-torque question (a remembered opening point exists) ─────────────
+# ── the re-torque question (the torque has a setting already) ──────────────
 
-REMEMBERED = dict(torque_Nm=0.30, t_open_C=61.2, upstream_bar=3.0, k_per_bar=-12.0,
-                  scatter_K=0.2, n=4, ci95_K=0.3, creep_C_min=config.BATCH_CREEP_C_MIN,
-                  batch='20260924_1612', date='24 Sep 2026')
+OLD = "20260928_130630_0.30Nm"
 
 
 def asked(gui, answer):
     """Start with the re-torque dialog answering `answer`; returns its text."""
-    from driver import openings
-    openings.remember(dict(REMEMBERED))
+    openmap.append(dict(time="2026-09-28T13:10:49", setting=OLD, torque_Nm=0.30,
+                        upstream_bar=3.0, t_open_degC=61.2, deep=1), sheet=False)
     enter_torque(gui)
     seen = []
     gui._ask = lambda title, text: seen.append(text) or answer
     gui._confirm = lambda *a: pytest.fail("the plain confirmation shouldn't be shown")
     gui._start_batch()
-    batchrun.tick()
     return seen[0] if seen else ""
 
 
-def test_not_retorqued_starts_from_the_remembered_point(gui):
+def test_not_retorqued_continues_the_setting(gui):
     text = asked(gui, False)
-    assert "Has the seat screw been re-torqued" in text and "61.2 °C at 3.00 bar" in text
-    assert batchrun.running() and batchrun.labels()[0] == 'testrun01'
+    assert "Has the seat screw been re-torqued" in text and OLD in text
+    assert cyclerun.running() and cyclerun.setting() == OLD
 
 
-def test_retorqued_scouts(gui):
+def test_retorqued_starts_a_new_setting(gui):
     asked(gui, True)
-    assert batchrun.running() and batchrun.labels()[0] == 'scout1'
+    assert cyclerun.running() and cyclerun.setting() != OLD
+    assert cyclerun.setting().endswith("_0.30Nm")
 
 
 def test_cancel_at_the_question_starts_nothing(gui):
     asked(gui, None)
-    assert not batchrun.running()
+    assert not cyclerun.running()
 
 
-def test_no_question_without_a_remembered_point(gui):
+def test_no_question_without_a_setting_at_that_torque(gui):
     enter_torque(gui)
     seen = []
-    gui._ask = lambda *a: pytest.fail("no re-torque question without a remembered point")
+    gui._ask = lambda *a: pytest.fail("no re-torque question without a setting")
     gui._confirm = lambda title, text: seen.append(text) or True
     gui._start_batch()
-    assert "No remembered opening point" in seen[0] and batchrun.running()
+    assert "Nothing measured at this torque yet" in seen[0] and cyclerun.running()
 
 
-# ── batch is the fourth mode (28 Sept 2026) ─────────────────────────────────
-# The test runs row is greyed out unless batch is selected; in batch mode the
-# duty / setpoint / target boxes and "update" are, and ARM is left to the batch.
+# ── cycle is the fourth mode ────────────────────────────────────────────────
+# Its input (deep every) is greyed out unless cycle is selected; in cycle
+# mode the duty / setpoint / target boxes and "update" are, and ARM is left
+# to cycling.
 
-def test_the_batch_row_is_greyed_out_in_the_other_modes(gui):
+def test_the_cycle_row_is_greyed_out_in_the_other_modes(gui):
     readings()
     gui._set_entry(gui.seat_entry, "0.3")
     gui._set_seat_screw()
@@ -188,26 +197,27 @@ def test_the_batch_row_is_greyed_out_in_the_other_modes(gui):
     assert state(gui.duty_entry) == "normal"
 
 
-def test_batch_mode_enables_only_the_batch_row(gui):
+def test_cycle_mode_enables_only_its_row(gui):
     enter_torque(gui)
     assert state(gui.runs_entry) == "normal" and state(gui.batch_btn) == "normal"
+    assert gui.batch_btn.cget("text") == "start cycling"
     for w in (gui.duty_entry, gui.sp_entry, gui.p_entry, gui.update_btn):
         assert state(w) == "disabled"
 
 
-def test_selecting_batch_sends_nothing_to_the_heater(gui):
+def test_selecting_cycle_sends_nothing_to_the_heater(gui):
     enter_torque(gui)
     assert control.snapshot()['mode'] == "manual"
 
 
-def test_arm_is_left_to_the_batch_in_batch_mode(gui):
+def test_arm_is_left_to_cycling_in_cycle_mode(gui):
     enter_torque(gui)
     gui._toggle_arm()
     assert not control.snapshot()['armed']
-    assert "start batch' arms the heater itself" in shared.recent_events()[-1][1]
+    assert "start cycling' arms the heater itself" in shared.recent_events()[-1][1]
 
 
-def test_back_to_a_heater_mode_greys_the_batch_row_again(gui):
+def test_back_to_a_heater_mode_greys_the_cycle_row_again(gui):
     enter_torque(gui)
     gui.mode_var.set("auto-t")
     gui._on_mode()
@@ -216,9 +226,9 @@ def test_back_to_a_heater_mode_greys_the_batch_row_again(gui):
     assert control.snapshot()['mode'] == "auto-t"
 
 
-def test_the_test_runs_input_sits_with_the_other_modes_inputs(gui):
-    # right of "target mbar"; in batch mode start / abort replace "update"
+def test_the_deep_every_input_sits_with_the_other_modes_inputs(gui):
     assert gui.runs_entry.master is gui.p_entry.master
+    assert gui.runs_entry.label.cget("text") == "deep every"
     packed = lambda w: w.winfo_manager() == "pack"
     assert packed(gui.update_btn) and not packed(gui.batch_btn) and not packed(gui.abort_btn)
     enter_torque(gui)

@@ -43,7 +43,41 @@ with the 1 W flight budget dashed) and a scrolling event log.
 The heater can only add heat: auto-p can't cool the valve, so a target that
 would need that gets a warning and the minimum setpoint.
 
-### Batches: repeated opening-point runs
+### Cycling: mapping the opening point
+
+To map the valve's *opening point* (the valve temperature where flow
+starts) against seat screw torque and upstream pressure: set the torque,
+enter it, choose **cycle** (the fourth mode), set **deep every** (default 5)
+and press **start cycling**. If the torque has been measured before it asks
+**has the seat screw been re-torqued (or the valve disturbed) since?** *No*
+continues that setting; *yes* starts a new one (its own offset in the fit).
+Then it cycles until you press **stop cycling** (or DISARM):
+
+1. creep at 3 °C/min from a margin (2-5 K, from the scatter) below the
+   fit's prediction at the upstream pressure now;
+2. the opening is detected — heater off;
+3. cool until the valve has closed (the chamber back at its baseline) and is
+   the margin + 2 K below the prediction, whichever is later, and hold
+   there only until the chamber is settled;
+4. again.
+
+Every *deep every*-th cycle (the first included) cools to 35 °C (or T_open
+− 20 K) and holds 4 min, so the fit measures the warm-start effect. On a
+torque with nothing measured, the first cycle scouts from the torque table.
+Every creeping opening goes into the openings table and the fit (below),
+and the window shows two lines: the cycle, and the setting's status. Hold
+the upstream pressure where you like and refill by hand any time: while
+heating, detection pauses until the chamber is back, then the cycle carries
+on. An opening during the hold or the approach (the valve has moved down)
+isn't a reading: the next cycle starts 5 K lower. Two cycles in a row
+without an opening stop it. Files: `logs/cycles/<setting>/<session>/`
+(each cycle's trace and `session.json`). Settings: `CYCLE_*` in
+`driver/config.py`.
+
+### Batches (until history 34)
+
+Replaced by cycling; `driver/batch.py` and `batchrun.py` remain, and their
+folders are imported into the openings table. What they did:
 
 To measure the valve's *opening point* (the valve temperature where flow
 starts) with a mean and spread, set the seat screw torque and the upstream

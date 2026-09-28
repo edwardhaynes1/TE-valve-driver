@@ -20,13 +20,15 @@ ALLOWED = {
     "keller": {"config", "shared"},
     "labjack": {"config", "shared", "control", "thermocouple"},
     "batch": {"config", "controller"},
+    "cycle": {"config", "controller", "batch"},
     "workbook": set(),
     "openmap": {"config", "schema", "workbook"},
     "batchrun": {"config", "shared", "control", "schema", "batch", "workbook", "openings",
                  "openmap"},
-    "logfile": {"config", "shared", "control", "schema", "batchrun"},
+    "logfile": {"config", "shared", "control", "schema", "batchrun", "cyclerun"},
+    "cyclerun": {"config", "shared", "control", "schema", "cycle", "openmap"},
     "gui": {"config", "shared", "control", "labjack", "logfile", "palette",
-            "charts", "readout", "batchrun", "openings"},
+            "charts", "readout", "batchrun", "cyclerun", "openings"},
     "app": {"config", "shared", "control", "keller", "labjack", "logfile", "gui", "openings",
             "openmap"},
 }
@@ -72,9 +74,15 @@ def test_batch_logic_has_no_clock_threads_or_io():
     assert external <= {"math", "collections", "datetime", "statistics"}, external
 
 
+def test_cycle_logic_has_no_clock_threads_or_io():
+    _, external = imports_of("cycle")
+    assert external <= {"math", "collections", "datetime"}, external
+
+
 def test_control_and_logs_need_no_hardware_or_gui():
     for module in ("config", "controller", "shared", "control", "schema", "logfile",
-                   "batch", "batchrun", "workbook", "openings"):
+                   "batch", "batchrun", "workbook", "openings", "openmap", "cycle",
+                   "cyclerun"):
         _, external = imports_of(module)
         assert not external & HARDWARE_OR_GUI, f"{module} imports {external & HARDWARE_OR_GUI}"
 

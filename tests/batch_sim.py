@@ -24,7 +24,7 @@ Same steady state (G K/W); ambient is settable (a warmer lab).
 import math
 import random
 
-from driver import batch, config, controller
+from driver import batch, config, controller, cycle, openmap
 
 G_K_PER_W = 33.0
 TAU_TC = 80.0
@@ -163,3 +163,41 @@ class Rig:
 
     def rows_of(self, run_name):
         return [(t, r) for t, r in self.rows if r['batch_run'] == run_name]
+
+    def run_cycling(self, torque=0.45, setting="s1", max_s=3600, rows=None, hook=None,
+                    deep_every=5, dt=0.25, stop_after=None, idle_s=60):
+        """Cycle until max_s (or stop_after openings); the fit is redone
+        after every opening, as cyclerun does. Returns (c, rows, fit, msgs).
+        rows: openings already in the table (they are appended to)."""
+        rows = [] if rows is None else rows
+        c = cycle.new_cycling(torque, setting, self.now, self.idle(idle_s),
+                              deep_every=deep_every)
+        fit = [openmap.fit(rows)]
+
+        def predict(bar, deep):
+            p = fit[0].predict(setting, torque, bar, deep)
+            return None if p is None else (p[0], p[1], fit[0].sd)
+        msgs, self.events = [], []
+        while c['state'] == cycle.RUNNING and self.now - c['started'] < max_s:
+            vac, st = self.vac()
+            cmds, m, ev = cycle.step(c, self.now, self.T, vac, st, self.heater(),
+                                     self.upstream, self.now, predict)
+            for x in cmds:
+                self.command(x)
+            msgs += m
+            self.events += ev
+            for kind, obj in ev:
+                if kind == 'opening':
+                    rows.append(cycle.opening_row(c, obj, "sim", obj['name']))
+                    fit[0] = openmap.fit(rows)
+            if hook:
+                hook(self, c)
+            if stop_after is not None and c['openings'] >= stop_after:
+                for x in cycle.stop(c, self.now, "enough")[0]:
+                    self.command(x)
+                break
+            self.duty, _ = controller.step(self.h, self.now, dt, self.T, True, vac=vac,
+                                           vac_status=st, p_up=self.upstream,
+                                           p_up_t=self.now, seat_nm=torque)
+            self.advance(dt)
+        return c, rows, fit[0], msgs

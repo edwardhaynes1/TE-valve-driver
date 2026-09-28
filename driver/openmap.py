@@ -269,6 +269,11 @@ def _tkey(torque):
     return f"{torque:.2f}"
 
 
+def parse_time(s):
+    """Epoch seconds of an ISO local time, or None."""
+    return _time(s)
+
+
 def _time(s):
     try:
         return datetime.fromisoformat(str(s)).timestamp()

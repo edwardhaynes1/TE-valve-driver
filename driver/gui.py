@@ -8,12 +8,12 @@ import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import messagebox
 
-from . import batchrun
+from . import cyclerun
 from . import logfile
 from . import readout
 from . import shared
 from .config import (
-    BATCH_MIN_TESTS, BATCH_PRECISION_K, BATCH_TEST_RUNS_DEFAULT, BATCH_TEST_RUNS_MAX,
+    CYCLE_DEEP_EVERY,
     FLIGHT_POWER_BUDGET_W, HEATER_I_AIN, HEATER_MAX_DUTY, HEATER_PWM_PERIOD_S,
     HEATER_R_OHM, HEATER_V_AIN, PID_SETPOINT_DEFAULT, PRESSURE_TARGET_DEFAULT,
     PRESSURE_TARGET_MIN, PRESSURE_TRIP_MBAR, TEMP_TRIP_C, heater_current_a,
@@ -22,7 +22,6 @@ from .config import (
 from .control import AUTO_P, AUTO_T, MANUAL, MODES, heater_command, snapshot
 from .charts import draw_chart, make_chart
 from .labjack import LABJACK_AVAILABLE
-from .openings import describe as openings_text
 from .palette import (
     BG, BORDER, BRIGHT, DIM, FIELD, FIELD_HOT, PROMPT, PWR_LINE, TEMP_LINE, TEXT, UP_LINE,
     VAC_LINE, WARN,
@@ -33,10 +32,11 @@ TAG_COLOUR = {'bright': BRIGHT, 'dim': DIM, 'warn': WARN, 'err': WARN, 'ok': BRI
               'prompt': PROMPT}
 from .shared import log_event
 
-# The window's fourth mode. Not a heater mode (control.MODES): a batch drives
-# the heater itself, in auto-t, run by run (batchrun), so selecting it sends
-# nothing to the heater.
-BATCH = "batch"
+# The window's fourth mode. Not a heater mode (control.MODES): cycling drives
+# the heater itself, in auto-t, cycle by cycle (cyclerun), so selecting it
+# sends nothing to the heater. It replaced batches (history 34); the widget
+# and method names below still say batch.
+BATCH = "cycle"
 GUI_MODES = (*MODES, BATCH)
 
 
@@ -170,8 +170,8 @@ class TEGui:
             self.seat_value.pack(side="left")
 
     def _edit_seat_screw(self):
-        if batchrun.running():
-            log_event("A batch is running — the seat screw torque is locked until it ends")
+        if cyclerun.running():
+            log_event("Cycling is running — the seat screw torque is locked until it stops")
             return
         nm = shared.seat_screw_torque()
         self._seat_editing = True
@@ -203,7 +203,7 @@ class TEGui:
         self._update_inputs()
         self._apply_batch_lock()
         if self.mode_var.get() == BATCH:
-            log_event("Mode batch — set the test runs, then 'start batch' "
+            log_event("Mode cycle — set how often a cycle goes deep, then 'start cycling' "
                       "(it arms the heater itself)"
                       + (" · DISARM first" if snapshot()['armed'] else ""))
         else:
@@ -211,7 +211,7 @@ class TEGui:
 
     def _update_inputs(self):
         """Enable only the input that belongs to the selected mode: duty,
-        setpoint, target, or (batch) the number of test runs. In batch mode
+        setpoint, target, or (cycle) how often a cycle is deep. In cycle mode
         "update" has nothing to send, so it is greyed out too."""
         mode = self.mode_var.get()
         active = {MANUAL: self.duty_entry,
@@ -228,8 +228,8 @@ class TEGui:
         self._show_action_buttons()
 
     def _show_action_buttons(self):
-        """"update" in manual / auto-t / auto-p; "start batch" and "abort
-        batch" in its place in batch mode. Re-packs only on a change."""
+        """"update" in manual / auto-t / auto-p; "start cycling" and "stop
+        cycling" in its place in cycle mode. Re-packs only on a change."""
         batch = self.mode_var.get() == BATCH
         if batch == self._actions_shown:
             return
@@ -267,17 +267,17 @@ class TEGui:
         self.duty_entry = self._entry(row2, "duty %", "0", width=6)
         self.sp_entry   = self._entry(row2, "setpoint °C", f"{PID_SETPOINT_DEFAULT:g}", width=6)
         self.p_entry    = self._entry(row2, "target mbar", f"{PRESSURE_TARGET_DEFAULT:.1e}", width=9)
-        # Batch of opening-point runs (context.md, "Batches"), the fourth
-        # mode: its input sits with the other modes' inputs and is greyed out
-        # unless batch is selected. In batch mode "start batch" / "abort batch"
-        # take the place of "update" (_show_action_buttons). While a batch
-        # runs it owns the heater: the heater controls and the torque are
-        # locked, and DISARM aborts it.
-        self.runs_entry = self._entry(row2, "test runs", f"{BATCH_TEST_RUNS_DEFAULT}", width=4)
+        # Cycling (context.md, "Cycling"), the fourth mode: its input (how
+        # often a cycle is deep) sits with the other modes' inputs and is
+        # greyed out unless cycle is selected. In cycle mode "start cycling" /
+        # "stop cycling" take the place of "update" (_show_action_buttons).
+        # While it runs it owns the heater: the heater controls and the
+        # torque are locked, and DISARM stops it.
+        self.runs_entry = self._entry(row2, "deep every", f"{CYCLE_DEEP_EVERY}", width=4)
         self.runs_entry.unbind("<Return>")
         self.update_btn = tk.Button(row2, text="update", command=self._send_update, **btn)
-        self.batch_btn = tk.Button(row2, text="start batch", command=self._start_batch, **btn)
-        self.abort_btn = tk.Button(row2, text="abort batch", command=self._abort_batch, **btn)
+        self.batch_btn = tk.Button(row2, text="start cycling", command=self._start_batch, **btn)
+        self.abort_btn = tk.Button(row2, text="stop cycling", command=self._abort_batch, **btn)
         self._actions_shown = None
         self._show_action_buttons()
         # The three one-line status labels below the controls live in their
@@ -350,11 +350,11 @@ class TEGui:
             self._update_inputs()          # the selected mode's box only, as before
 
     def _apply_batch_lock(self):
-        """While a batch runs it owns the heater: mode, duty, setpoint,
+        """While cycling runs it owns the heater: mode, duty, setpoint,
         target, update and the torque are locked; ARM stays (as DISARM,
-        which aborts the batch). Start batch needs a torque, no batch
-        running and the heater disarmed; abort only works during one."""
-        busy = batchrun.running()
+        which stops it). Start needs a torque, nothing running and the
+        heater disarmed; stop only works while it runs."""
+        busy = cyclerun.running()
         self._batch_running = busy
         heater = [*self.mode_buttons, self.update_btn, self.duty_entry, self.sp_entry,
                   self.p_entry, self.seat_entry, self.seat_btn, self.runs_entry]
@@ -382,70 +382,69 @@ class TEGui:
                                  fg=WARN if busy else TEXT, disabledforeground=DIM)
 
     def _start_batch(self):
-        """Confirm the torque (and show the measured upstream pressure),
-        then start. The batch arms the heater itself, run by run."""
+        """Start cycling: ask whether the screw was re-torqued if the torque
+        has a setting already (no: continue it; yes: a new setting), show
+        the measured upstream pressure, and start. It arms the heater
+        itself, cycle by cycle."""
         if self.mode_var.get() != BATCH:
-            log_event("Batch not started — select batch mode first")
+            log_event("Cycling not started — select cycle mode first")
             return
         torque = shared.seat_screw_torque()
         try:
-            n = int(self.runs_entry.get().strip())
+            every = int(self.runs_entry.get().strip())
         except ValueError:
-            log_event(f"Batch: test runs '{self.runs_entry.get()}' is not a whole number")
+            log_event(f"Cycling: deep every '{self.runs_entry.get()}' is not a whole number")
             return
-        if not 1 <= n <= BATCH_TEST_RUNS_MAX:
-            log_event(f"Batch: test runs must be 1 to {BATCH_TEST_RUNS_MAX}")
+        if not 1 <= every <= 100:
+            log_event("Cycling: deep every must be 1 to 100 (1: every cycle deep)")
             return
         if torque is None:
-            log_event("Batch not started — enter the seat screw torque first")
+            log_event("Cycling not started — enter the seat screw torque first")
             return
-        problem = batchrun.start_problem(n)
+        problem = cyclerun.start_problem()
         if problem:
-            log_event(f"Batch not started — {problem}")
+            log_event(f"Cycling not started — {problem}")
             return
         up, _ = shared.upstream()
-        up_txt = (f"{up:.3f} bar (measured; the batch corrects for it as it changes)"
+        up_txt = (f"{up:.3f} bar (measured; the fit corrects for it as it changes)"
                   if up is not None else
-                  "NOT READ — the batch can't correct for upstream changes; check the Keller")
-        entry, usable, why_not = batchrun.remembered(torque)
+                  "NOT READ — openings without upstream can't be fitted; check the Keller")
         common = (f"Upstream pressure: {up_txt}\n"
-                  "Refill upstream by hand any time; best while it cools or holds "
-                  "(a refill while heating discards that run and repeats it)\n"
-                  f"Test runs: up to {n}; it stops once the mean T_open is known "
-                  f"to ±{BATCH_PRECISION_K:g} K (at least {BATCH_MIN_TESTS})\n"
-                  "\nThe batch arms the heater itself for each run. "
-                  "SW171 must be on. DISARM or 'abort batch' stops it.")
+                  "Hold it where you like and refill by hand any time (while heating, "
+                  "detection pauses until the chamber is back)\n"
+                  f"Every {every} cycle{'s' * (every > 1)}, one deep (35 °C and a 4 min hold)\n"
+                  "It runs until stopped; the status line says when this setting is done.\n"
+                  "\nCycling arms the heater itself for each cycle. "
+                  "SW171 must be on. DISARM or 'stop cycling' stops it.")
+        old = cyclerun.last_setting(torque)
         retorqued = None
-        if usable:
+        if old is not None:
             answer = self._ask(
-                "Start batch",
+                "Start cycling",
                 f"Seat screw torque: {torque:.2f} N·m\n"
-                f"Remembered opening point: {openings_text(entry)}\n\n"
-                f"Has the seat screw been re-torqued (or the valve disturbed) since "
-                f"the last batch at {torque:.2f} N·m?\n\n"
-                f"No: start from the remembered opening point (no scouts).\n"
-                f"Yes: find it again with scout 1 and scout 2.\n\n" + common)
+                f"Latest setting at this torque: {old}\n\n"
+                f"Has the seat screw been re-torqued (or the valve disturbed) since?\n\n"
+                f"No: continue that setting.\n"
+                f"Yes: start a new setting (its own offset in the fit).\n\n" + common)
             if answer is None:
-                log_event("Batch not started (cancelled)")
+                log_event("Cycling not started (cancelled)")
                 return
             retorqued = bool(answer)
-        else:
-            note = (f"Remembered opening point not used ({why_not}): scout 1 and "
-                    f"scout 2 first.\n" if entry is not None else
-                    "No remembered opening point: scout 1 and scout 2 first.\n")
-            if not self._confirm(
-                    "Start batch",
-                    f"Seat screw torque: {torque:.2f} N·m\n"
-                    f"Is that the torque on the valve now?\n\n" + note + common):
-                log_event("Batch not started (cancelled)")
-                return
-        ok, msg = batchrun.start(n, logfile.LOG_FILE, retorqued=retorqued)
+        elif not self._confirm(
+                "Start cycling",
+                f"Seat screw torque: {torque:.2f} N·m\n"
+                f"Is that the torque on the valve now?\n\n"
+                "Nothing measured at this torque yet: a new setting; the first cycle "
+                "scouts from the torque table.\n" + common):
+            log_event("Cycling not started (cancelled)")
+            return
+        ok, msg = cyclerun.start(logfile.LOG_FILE, retorqued=retorqued, deep_every=every)
         if not ok:
             log_event(msg)
         self._apply_gate()
 
     def _abort_batch(self):
-        batchrun.abort("aborted by the operator")
+        cyclerun.stop("stopped by the operator")
         self._apply_gate()
 
     def _set_seat_screw(self):
@@ -471,13 +470,13 @@ class TEGui:
         if snapshot()['armed']:
             heater_command(armed=False)
             log_event("Heater DISARMED by operator")
-            if batchrun.running():
-                batchrun.abort("heater disarmed by the operator")
-        elif batchrun.running():
-            log_event("A batch is running and arms the heater itself — "
-                      "'abort batch' to stop it")
+            if cyclerun.running():
+                cyclerun.stop("heater disarmed by the operator")
+        elif cyclerun.running():
+            log_event("Cycling is running and arms the heater itself — "
+                      "'stop cycling' to stop it")
         elif self.mode_var.get() == BATCH:
-            log_event("Batch mode: 'start batch' arms the heater itself — "
+            log_event("Cycle mode: 'start cycling' arms the heater itself — "
                       "choose manual, auto-t or auto-p to ARM by hand")
         else:
             self._send_update(quiet_if_unchanged=True)   # picks up un-sent edits to the active value, logged
@@ -537,7 +536,7 @@ class TEGui:
         self._input_noted = False
         mode = self.mode_var.get()
         if mode == BATCH:
-            # Nothing of its own to send: keep (or, after a batch, restore)
+            # Nothing of its own to send: keep (or, after cycling, restore)
             # the heater mode last sent from the window.
             mode = a['mode'] or MANUAL
 
@@ -647,13 +646,13 @@ class TEGui:
         self.heater_status.configure(text=text, fg=TAG_COLOUR[tag])
         text, tag = readout.loop_status(h)
         self.loop_status.configure(text=text, fg=TAG_COLOUR[tag])
-        busy = batchrun.running()
-        line = batchrun.status()
+        busy = cyclerun.running()
+        line = cyclerun.status()
         self.batch_status.configure(text=line or "", fg=BRIGHT if busy else DIM)
         self._show_lines()
         if busy != self._batch_running:
             if not busy:
-                # The batch drove the heater in auto-t; back to the window's settings.
+                # Cycling drove the heater in auto-t; back to the window's settings.
                 self._send_update(quiet_if_unchanged=True)
             self._apply_gate()
         else:
@@ -691,7 +690,7 @@ class TEGui:
             self._poll_job = self.root.after(150, self._poll)
 
     def shutdown(self):
-        batchrun.abort("driver closed")          # writes the batch's files first
+        cyclerun.stop("driver closed")           # closes the cycle's files first
         heater_command(armed=False)
         log_event("Shutdown — heater disarmed")
         shared.stop.set()

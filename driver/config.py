@@ -461,6 +461,25 @@ BATCH_WORKBOOK          = str(Path(__file__).resolve().parent.parent / "logs"
 OPENINGS_FILE           = str(Path(__file__).resolve().parent.parent / "logs"
                               / "opening-points.json")   # remembered opening points
 
+# ─── Cycling — openings one after another (cycle.py; history 34) ───
+CYCLE_DEEP_EVERY        = 5        # every 5th cycle (the first included) is deep: cooled to
+                                   # the batch hold target and held BATCH_HOLD_S, so the fit
+                                   # measures the warm-start effect. Set in the window
+CYCLE_BELOW_START_K     = 2.0      # a shallow cooldown ends this far below the creep start
+                                   # (and not before the valve has closed)
+CYCLE_APPROACH_EXTRA_K  = 5.0      # opened while still approaching: the next start is this
+                                   # much further below (until one creeps onto it)
+CYCLE_MAX_FAILS         = 2        # this many cycles in a row without an opening stop it
+CYCLE_CREEP_GUARD_S     = 10.0     # an onset before the creep began, or this soon after it,
+                                   # opened during the approach: the chamber lags the valve by
+                                   # a few s, and a burst heats 2-3 °C/s, so detection can land
+                                   # just after the creep starts and read several K high
+CYCLE_REFILL_MAX_S      = 600.0    # a refill while heating pauses detection (seen as upstream
+                                   # up BATCH_REFILL_RISE_BAR); not back at its level before
+                                   # in this long, the valve opened or the background rose:
+                                   # the cycle is dropped
+CYCLE_DIR               = str(Path(__file__).resolve().parent.parent / "logs" / "cycles")
+
 # ─── The opening map — every opening, one fit (openmap.py; history 34) ───
 OPENINGS_CSV            = str(Path(__file__).resolve().parent.parent / "logs" / "openings.csv")
 MAP_FIGURE              = str(Path(__file__).resolve().parent.parent / "logs"

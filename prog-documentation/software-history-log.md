@@ -53,6 +53,37 @@ this before being applied):
 * Built in stages: detection and the table with its import and fit first,
   checked against the 28 Sept data, then the cycling itself.
 
+Found while building (simulation, tests/batch_sim.py `run_cycling`):
+* On the 28 Sept data the fit tried both drift and background, and the
+  background term came out just significant (−31 ± 29 K/decade) — but the
+  two moved together exactly (r = −1.00): the background fell steadily with
+  time. Picking one would be arbitrary, so terms that move together
+  (|r| ≥ 0.8) are reported as not separable and neither corrects the fit.
+  Judged within the settings that carry most of the variation: pooled with
+  simulated sessions whose background was steady, the 28 Sept confound fell
+  below 0.8 and the background term slipped back in. In simulation the
+  warm-start term was confounded with the background too (a deep cycle's
+  hold at 35 °C sits at another background than a shallow one near the
+  opening point), so it may take cycles at deliberately different
+  backgrounds to separate them on the rig.
+* A drift term measured from the first opening of a setting shifted its
+  offset to that moment; it is centred per setting, so the offset stays
+  the setting's average.
+* A valve that closes slowly (flows until well below the target) made the
+  cooldown reach the target, wait for the chamber, then warm back up to
+  the target: now it holds where the cooldown ended if that is lower.
+* A valve that moved down opened in the fast heat-up (a burst, 2-3 °C/s)
+  while the chamber, lagging a few seconds, only showed it once the creep
+  had begun: a "creep" reading 3-8 K high. The onset decides now: one
+  before the creep began or within 10 s of it counts as approaching. (Batch
+  test runs had the same weakness.) One that opens during the hold is
+  caught there too (the chamber rising above its lowest level in the hold,
+  unless a refill was seen).
+* 1.5 simulated hours at 0.45 N·m: 21 openings (batches: 7 in the same
+  time). DONE after 20 openings (79 min), held back by the slope: only a
+  slow leak (0.01 bar/min) widened the pressure range. Changing the
+  pressure on purpose, as the status line suggests, is what pins it.
+
 ## 33. Top-up pause removed — 28 Sept 2026
 Entry 28 added an optional pause before a run once upstream had fallen a
 set amount (default 0.3 bar), and a "continue" button. Edward didn't want

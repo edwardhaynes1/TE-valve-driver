@@ -446,6 +446,9 @@ def _settled(trend):
             and -BATCH_SETTLE_MAX_FALL_DEC_MIN <= trend <= BATCH_SETTLE_MAX_RISE_DEC_MIN)
 
 
+settled = _settled          # for cycle.py (history 34)
+
+
 def _enter_hold(b, now, cmds, msgs):
     """Arm the heater in auto-t at the hold temperature: where the cooldown
     ended (next_hold). The first test run's fixes it for the batch."""
@@ -652,6 +655,9 @@ def _median3(samples, i):
     ys = [samples[j][2] for j in (i - 1, i, i + 1)
           if 0 <= j < len(samples) and samples[j][2] is not None]
     return statistics.median(ys) if ys else None
+
+
+median3 = _median3          # for cycle.py (history 34)
 
 
 def find_onset(samples, base, i_detect):
