@@ -59,7 +59,7 @@ class TEGui:
         self.root.title("TE Valve — Live Log")
         self.root.configure(bg=BG)
         screen_h = self.root.winfo_screenheight()
-        self.root.geometry(f"800x{max(600, min(1100, screen_h - 90))}+20+10")
+        self.root.geometry(f"920x{max(600, min(1100, screen_h - 90))}+20+10")
         self.root.minsize(700, 600)
         self.root.protocol("WM_DELETE_WINDOW", self.shutdown)
 
@@ -95,7 +95,7 @@ class TEGui:
         tk.Label(outer, text=f"─── log: {logfile.LOG_FILE}",
                  font=self.f, fg=DIM, bg=BG, anchor="w").pack(side="bottom", fill="x")
         self.logtext = tk.Text(outer, bg=BG, fg=TEXT, font=self.f,
-                               height=7, bd=0, highlightthickness=0,
+                               height=4, bd=0, highlightthickness=0,
                                state="disabled", wrap="word", cursor="arrow")
         self.logtext.pack(side="bottom", fill="x")
         tk.Label(outer, text="─── event log",
@@ -225,11 +225,24 @@ class TEGui:
             e.label.configure(fg=TEXT if on else DIM)
         self.update_btn.configure(state="disabled" if mode == BATCH else "normal",
                                   disabledforeground=DIM)
+        self._show_action_buttons()
+
+    def _show_action_buttons(self):
+        """"update" in manual / auto-t / auto-p; "start batch" and "abort
+        batch" in its place in batch mode. Re-packs only on a change."""
+        batch = self.mode_var.get() == BATCH
+        if batch == self._actions_shown:
+            return
+        self._actions_shown = batch
+        for b in (self.update_btn, self.batch_btn, self.abort_btn):
+            b.pack_forget()
+        if batch:
+            self.batch_btn.pack(side="left", padx=(0, 6))
+            self.abort_btn.pack(side="left")
+        else:
+            self.update_btn.pack(side="left")
 
     def _build_heater_panel(self, parent):
-        tk.Label(parent, text="─── heater  (FIO0 → Q171)   SW171 must be enabled",
-                 font=self.f, fg=DIM, bg=BG, anchor="w").pack(fill="x")
-
         btn = self._btn
 
         row1 = tk.Frame(parent, bg=BG)
@@ -254,21 +267,19 @@ class TEGui:
         self.duty_entry = self._entry(row2, "duty %", "0", width=6)
         self.sp_entry   = self._entry(row2, "setpoint °C", f"{PID_SETPOINT_DEFAULT:g}", width=6)
         self.p_entry    = self._entry(row2, "target mbar", f"{PRESSURE_TARGET_DEFAULT:.1e}", width=9)
-        self.update_btn = tk.Button(row2, text="update", command=self._send_update, **btn)
-        self.update_btn.pack(side="left")
-
         # Batch of opening-point runs (context.md, "Batches"), the fourth
-        # mode: this row is greyed out unless batch is selected. While a batch
+        # mode: its input sits with the other modes' inputs and is greyed out
+        # unless batch is selected. In batch mode "start batch" / "abort batch"
+        # take the place of "update" (_show_action_buttons). While a batch
         # runs it owns the heater: the heater controls and the torque are
         # locked, and DISARM aborts it.
-        row4 = tk.Frame(parent, bg=BG)
-        row4.pack(fill="x", pady=(0, 4))
-        self.runs_entry = self._entry(row4, "test runs (max)", f"{BATCH_TEST_RUNS_DEFAULT}", width=4)
+        self.runs_entry = self._entry(row2, "test runs", f"{BATCH_TEST_RUNS_DEFAULT}", width=4)
         self.runs_entry.unbind("<Return>")
-        self.batch_btn = tk.Button(row4, text="start batch", command=self._start_batch, **btn)
-        self.batch_btn.pack(side="left", padx=(0, 6))
-        self.abort_btn = tk.Button(row4, text="abort batch", command=self._abort_batch, **btn)
-        self.abort_btn.pack(side="left")
+        self.update_btn = tk.Button(row2, text="update", command=self._send_update, **btn)
+        self.batch_btn = tk.Button(row2, text="start batch", command=self._start_batch, **btn)
+        self.abort_btn = tk.Button(row2, text="abort batch", command=self._abort_batch, **btn)
+        self._actions_shown = None
+        self._show_action_buttons()
         # The three one-line status labels below the controls live in their
         # own frame and take up a row only while they have something to say
         # (_show_lines), so empty ones don't eat into the charts.

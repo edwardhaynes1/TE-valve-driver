@@ -214,3 +214,15 @@ def test_back_to_a_heater_mode_greys_the_batch_row_again(gui):
     assert state(gui.runs_entry) == "disabled" and state(gui.batch_btn) == "disabled"
     assert state(gui.sp_entry) == "normal" and state(gui.update_btn) == "normal"
     assert control.snapshot()['mode'] == "auto-t"
+
+
+def test_the_test_runs_input_sits_with_the_other_modes_inputs(gui):
+    # right of "target mbar"; in batch mode start / abort replace "update"
+    assert gui.runs_entry.master is gui.p_entry.master
+    packed = lambda w: w.winfo_manager() == "pack"
+    assert packed(gui.update_btn) and not packed(gui.batch_btn) and not packed(gui.abort_btn)
+    enter_torque(gui)
+    assert not packed(gui.update_btn) and packed(gui.batch_btn) and packed(gui.abort_btn)
+    gui.mode_var.set("manual")
+    gui._on_mode()
+    assert packed(gui.update_btn) and not packed(gui.batch_btn)
