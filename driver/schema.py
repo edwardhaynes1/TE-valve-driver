@@ -126,7 +126,7 @@ BATCH_SUMMARY_COLUMNS = (
     ("hold_degC",                    "hold temperature of the averaged test runs"),
     ("hold_s",                       "BATCH_HOLD_S"),
     ("detect_abs_mbar",              "BATCH_DETECT_ABS_MBAR (blank = off)"),
-    ("detect_rel_dec",               "BATCH_DETECT_REL_DEC"),
+    ("detect_rel_dec",               "BATCH_DETECT_REL_DEC (blank = off, from history 34)"),
     ("remembered_after",             "yes = this result is now the remembered opening point"),
     ("hold_gap_min_K",               "the smallest T_open − hold temperature of the averaged test runs"),
 )

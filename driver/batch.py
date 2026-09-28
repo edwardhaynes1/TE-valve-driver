@@ -88,12 +88,15 @@ def t975(dof):
 
 def open_threshold_dec(base):
     """Rise above the baseline (decades) that counts as open, for a baseline
-    of log10(p) = base: BATCH_DETECT_ABS_MBAR or BATCH_DETECT_REL_DEC,
-    whichever is smaller (comes first), but at least BATCH_DETECT_FLOOR_DEC."""
-    thr = BATCH_DETECT_REL_DEC
+    of log10(p) = base: BATCH_DETECT_ABS_MBAR (a fixed flow), or
+    BATCH_DETECT_REL_DEC if that is set and smaller (comes first), but at
+    least BATCH_DETECT_FLOOR_DEC (the gauge noise). history 34."""
+    cands = []
     if BATCH_DETECT_ABS_MBAR:
-        thr = min(thr, math.log10(1.0 + BATCH_DETECT_ABS_MBAR / 10 ** base))
-    return max(BATCH_DETECT_FLOOR_DEC, thr)
+        cands.append(math.log10(1.0 + BATCH_DETECT_ABS_MBAR / 10 ** base))
+    if BATCH_DETECT_REL_DEC:
+        cands.append(BATCH_DETECT_REL_DEC)
+    return max(BATCH_DETECT_FLOOR_DEC, min(cands) if cands else 0.0)
 
 
 def _onset_dec(base):
@@ -1180,7 +1183,7 @@ def batch_summary(b, summaries, batch_name="", folder="", remembered=False):
                                    default=None), 2),
         'hold_s': BATCH_HOLD_S,
         'detect_abs_mbar': BATCH_DETECT_ABS_MBAR if BATCH_DETECT_ABS_MBAR else '',
-        'detect_rel_dec': BATCH_DETECT_REL_DEC,
+        'detect_rel_dec': BATCH_DETECT_REL_DEC if BATCH_DETECT_REL_DEC else '',
         'remembered_after': 'yes' if remembered else 'no',
     }
 

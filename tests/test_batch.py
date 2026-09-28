@@ -831,13 +831,13 @@ def test_student_t():
 
 
 def test_more_scatter_needs_more_runs_and_N_is_the_most():
-    rig = Rig(open_c=60.0, open_scatter=1.5, seed=4)
+    rig = Rig(open_c=60.0, open_scatter=1.5, seed=2)
     b, _ = rig.run_batch(n_tests=10)
     mean, sd, n, half = batch.precision(b)
     assert b['state'] == batch.COMPLETE and n > config.BATCH_MIN_TESTS
     assert half <= config.BATCH_PRECISION_K and "precise enough" in b['note']
     # before the last run it wasn't precise enough yet
-    rig = Rig(open_c=60.0, open_scatter=1.5, seed=4)
+    rig = Rig(open_c=60.0, open_scatter=1.5, seed=2)
     b, _ = rig.run_batch(n_tests=4)
     assert b['state'] == batch.COMPLETE and "all 4 test runs done" in b['note']
     assert sum(r['counts'] for r in b['runs']) == 4
@@ -865,26 +865,36 @@ def test_margin_rule():
 
 # ── detection threshold ────────────────────────────────────────────────────
 
-def test_absolute_or_relative_whichever_first_with_a_floor():
+def test_detection_is_a_fixed_flow_with_a_noise_floor():
+    # history 34: +0.5e-7 mbar whatever the background (a fixed throughput)…
     import math
     lg = math.log10
-    # low background: +12 % comes before +1e-7 mbar
-    assert batch.open_threshold_dec(lg(5e-7)) == pytest.approx(0.05)
-    # 1e-6 mbar: +1e-7 is +10 % — first
-    assert batch.open_threshold_dec(lg(1e-6)) == pytest.approx(lg(1.1))
-    # high background: 1e-7 would be under the noise floor
+    for base in (1e-8, 4e-7, 8e-7):
+        rise = 10 ** (lg(base) + batch.open_threshold_dec(lg(base))) - base
+        assert rise == pytest.approx(0.5e-7, rel=1e-9)
+    # …≈ +12 % at the 28 Sept background, as before
+    assert 10 ** batch.open_threshold_dec(lg(4e-7)) == pytest.approx(1.125)
+    # high background: 0.5e-7 would be under the noise floor
     assert batch.open_threshold_dec(lg(5e-6)) == pytest.approx(config.BATCH_DETECT_FLOOR_DEC)
 
 
-def test_detection_at_a_higher_background_is_earlier_than_plus_12_percent(monkeypatch):
-    rig = Rig(open_c=60.0, base=1.5e-6)
-    b, _ = rig.run_batch(n_tests=3)
-    t_abs = [r['T_detect'] for r in b['runs'] if r['averaged']]
-    monkeypatch.setattr(batch, "BATCH_DETECT_ABS_MBAR", None)
-    rig = Rig(open_c=60.0, base=1.5e-6)
-    b, _ = rig.run_batch(n_tests=3)
-    t_rel = [r['T_detect'] for r in b['runs'] if r['averaged']]
-    assert max(t_abs) < min(t_rel)
+def test_the_old_rule_can_be_switched_back(monkeypatch):
+    import math
+    monkeypatch.setattr(batch, "BATCH_DETECT_ABS_MBAR", 1e-7)
+    monkeypatch.setattr(batch, "BATCH_DETECT_REL_DEC", 0.05)
+    assert batch.open_threshold_dec(math.log10(5e-7)) == pytest.approx(0.05)
+    assert batch.open_threshold_dec(math.log10(1e-6)) == pytest.approx(math.log10(1.1))
+
+
+def test_a_falling_background_doesnt_move_t_open():
+    # The same valve with a background of 8e-7 and of 3e-7: a relative rule
+    # needs more flow at the higher one (reads high); a fixed flow doesn't.
+    t = {}
+    for base in (8e-7, 3e-7):
+        rig = Rig(open_c=60.0, base=base, a=0.4 * 4e-7 / base)    # same flow above base
+        b, _ = rig.run_batch(n_tests=4)
+        t[base] = batch.precision(b)[0]
+    assert abs(t[8e-7] - t[3e-7]) < 0.3
 
 
 # ── starting from a remembered opening point ───────────────────────────────

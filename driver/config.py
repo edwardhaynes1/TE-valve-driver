@@ -440,8 +440,13 @@ BATCH_HOLD_S            = 240.0    # auto-t holds it this long (the body lags th
 BATCH_HOLD_BAND_K       = 1.0      # the hold time counts once the TC is within this of it
 # Detection — open when the chamber rises above its baseline by the absolute
 # rise or the relative one, whichever comes first, but not less than the floor.
-BATCH_DETECT_REL_DEC    = 0.05     # +12 % (the auto-p rule)
-BATCH_DETECT_ABS_MBAR   = 1e-7     # a throughput: flow ≈ pumping speed × rise. None = off
+BATCH_DETECT_ABS_MBAR   = 0.5e-7   # a fixed throughput (flow ≈ pumping speed × rise), so a
+                                   # background still pumping down doesn't move what counts
+                                   # as open (history 34). ≈ +12 % at the 28 Sept 2026
+                                   # background (3.5-4.1e-7), ~15 × the gauge noise; the
+                                   # openings jumped ~1e-7 in 2-3 s. Was 1e-7 (or +12 %)
+BATCH_DETECT_REL_DEC    = None     # a relative rise too, whichever comes first (was 0.05,
+                                   # +12 %, the auto-p rule). None = off
 BATCH_DETECT_FLOOR_DEC  = 0.02     # +4.7 %: the gauge noise is ~0.003 decades (24 Sept 2026)
 BATCH_RECOVER_FRACTION  = 0.5      # cooldown: chamber back within this × the threshold. Below
                                    # 1, or the next run would start "already open" (found in

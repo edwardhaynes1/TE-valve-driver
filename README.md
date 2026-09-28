@@ -77,8 +77,8 @@ settle). A refill while heating is seen on the Keller (upstream up
 | **scout 2** | Only if scout 1 opened while approaching or after heating fast: creeps from 10 K below scout 1's reading. If it opens before it could creep, it repeats 10 K lower (`scout2b`, …). |
 | **test runs 1 … N** | Creep from a margin below the best estimate so far (3 × the scatter + 0.5 K, 2-5 K). Only these are averaged. One that opens while still approaching means the valve moved: it isn't averaged, and a scout 2 finds the opening point again. |
 
-The opening is detected when the chamber rises 1 × 10⁻⁷ mbar or 12 % above
-its baseline, whichever comes first, and **T_open** is backdated to where the
+The opening is detected when the chamber rises 0.5 × 10⁻⁷ mbar above its
+baseline (a fixed flow, at least 4.7 %), and **T_open** is backdated to where the
 rise began; the valve temperature at detection is logged too, with the
 heater energy since the approach started and the upstream pressure. The
 heater is **disarmed at detection**. At the end the result becomes the
