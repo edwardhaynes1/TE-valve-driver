@@ -132,3 +132,38 @@ def test_an_invalid_entry_stays_locked_and_orange(gui):
     assert shared.seat_screw_torque() is None
     assert str(gui.arm_btn.cget("state")) == "disabled"
     assert gui.seat_entry.cget("fg") == palette.PROMPT
+
+
+# ── where the torque input lives (28 Sept 2026) ─────────────────────────────
+# On the SEAT SCREW line of the status panel: only the box (and "set") until
+# a torque is entered, then only the torque; clicking it opens the box again.
+
+def shown(w):
+    return w.winfo_manager() == "pack"
+
+
+def test_at_start_the_seat_screw_line_holds_only_the_box(gui):
+    assert shown(gui.seat_entry) and shown(gui.seat_btn)
+    assert not shown(gui.seat_value)
+    assert gui.seat_entry.master is gui.seat_row
+
+
+def test_once_entered_the_line_shows_only_the_torque(gui):
+    gui._set_entry(gui.seat_entry, "0.4")
+    gui._set_seat_screw()
+    assert not shown(gui.seat_entry) and not shown(gui.seat_btn)
+    assert shown(gui.seat_value) and gui.seat_value.cget("text") == "0.40 N·m"
+
+
+def test_clicking_the_torque_opens_the_box_to_change_it(gui):
+    gui._set_entry(gui.seat_entry, "0.4")
+    gui._set_seat_screw()
+    gui._edit_seat_screw()
+    assert shown(gui.seat_entry) and not shown(gui.seat_value)
+    assert gui.seat_entry.get() == "0.4"
+    gui._set_entry(gui.seat_entry, "0.3")
+    gui._set_seat_screw()
+    assert shared.seat_screw_torque() == 0.3 and shown(gui.seat_value)
+    gui._edit_seat_screw()
+    gui._cancel_seat_edit()                     # Escape: back to the torque
+    assert shared.seat_screw_torque() == 0.3 and shown(gui.seat_value)

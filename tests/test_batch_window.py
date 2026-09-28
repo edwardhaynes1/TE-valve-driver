@@ -58,6 +58,8 @@ def enter_torque(g, nm="0.3"):
     g.seat_entry.delete(0, "end")
     g.seat_entry.insert(0, nm)
     g._set_seat_screw()
+    g.mode_var.set("batch")
+    g._on_mode()
     g._poll()
 
 
@@ -170,3 +172,45 @@ def test_no_question_without_a_remembered_point(gui):
     gui._confirm = lambda title, text: seen.append(text) or True
     gui._start_batch()
     assert "No remembered opening point" in seen[0] and batchrun.running()
+
+
+# ── batch is the fourth mode (28 Sept 2026) ─────────────────────────────────
+# The test runs row is greyed out unless batch is selected; in batch mode the
+# duty / setpoint / target boxes and "update" are, and ARM is left to the batch.
+
+def test_the_batch_row_is_greyed_out_in_the_other_modes(gui):
+    readings()
+    gui._set_entry(gui.seat_entry, "0.3")
+    gui._set_seat_screw()
+    gui._poll()
+    assert gui.mode_var.get() == "manual"
+    assert state(gui.runs_entry) == "disabled" and state(gui.batch_btn) == "disabled"
+    assert state(gui.duty_entry) == "normal"
+
+
+def test_batch_mode_enables_only_the_batch_row(gui):
+    enter_torque(gui)
+    assert state(gui.runs_entry) == "normal" and state(gui.batch_btn) == "normal"
+    for w in (gui.duty_entry, gui.sp_entry, gui.p_entry, gui.update_btn):
+        assert state(w) == "disabled"
+
+
+def test_selecting_batch_sends_nothing_to_the_heater(gui):
+    enter_torque(gui)
+    assert control.snapshot()['mode'] == "manual"
+
+
+def test_arm_is_left_to_the_batch_in_batch_mode(gui):
+    enter_torque(gui)
+    gui._toggle_arm()
+    assert not control.snapshot()['armed']
+    assert "start batch' arms the heater itself" in shared.recent_events()[-1][1]
+
+
+def test_back_to_a_heater_mode_greys_the_batch_row_again(gui):
+    enter_torque(gui)
+    gui.mode_var.set("auto-t")
+    gui._on_mode()
+    assert state(gui.runs_entry) == "disabled" and state(gui.batch_btn) == "disabled"
+    assert state(gui.sp_entry) == "normal" and state(gui.update_btn) == "normal"
+    assert control.snapshot()['mode'] == "auto-t"

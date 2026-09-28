@@ -33,6 +33,12 @@ TAG_COLOUR = {'bright': BRIGHT, 'dim': DIM, 'warn': WARN, 'err': WARN, 'ok': BRI
               'prompt': PROMPT}
 from .shared import log_event
 
+# The window's fourth mode. Not a heater mode (control.MODES): a batch drives
+# the heater itself, in auto-t, run by run (batchrun), so selecting it sends
+# nothing to the heater.
+BATCH = "batch"
+GUI_MODES = (*MODES, BATCH)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # GUI
@@ -72,15 +78,16 @@ class TEGui:
         outer = tk.Frame(self.root, bg=BG)
         outer.pack(fill="both", expand=True, padx=8, pady=8)
 
-        self.status_text = tk.Text(outer, bg=BG, fg=TEXT, font=self.f,
-                                   height=12, bd=0, highlightthickness=0,
-                                   state="disabled", wrap="none", cursor="arrow")
-        self.status_text.pack(fill="x")
-        self.status_text.tag_config("bright", foreground=BRIGHT)
-        self.status_text.tag_config("dim",    foreground=DIM)
-        self.status_text.tag_config("ok",     foreground=BRIGHT)
-        self.status_text.tag_config("err",    foreground=WARN)
-        self.status_text.tag_config("prompt", foreground=PROMPT)
+        self._btn = dict(bg=FIELD, fg=TEXT, activebackground=FIELD_HOT,
+                         activeforeground=BRIGHT, font=self.f, bd=0,
+                         highlightthickness=1, highlightbackground=BORDER,
+                         padx=8, pady=2)
+
+        # The status panel in three parts: the sensor lines, the SEAT SCREW
+        # line (which holds the torque input), and the heater V / I / P lines.
+        self.status_text = self._status_block(outer, height=8)
+        self._build_seat_row(outer)
+        self.heater_text = self._status_block(outer, height=3)
 
         self._build_heater_panel(outer)
 
@@ -106,6 +113,78 @@ class TEGui:
             charts, f"heater power (W, {p_src}, {HEATER_PWM_PERIOD_S:g} s mean)   "
                     f"dashed = {FLIGHT_POWER_BUDGET_W:g} W flight budget")
 
+    def _status_block(self, parent, height):
+        t = tk.Text(parent, bg=BG, fg=TEXT, font=self.f,
+                    height=height, bd=0, highlightthickness=0,
+                    state="disabled", wrap="none", cursor="arrow")
+        t.pack(fill="x")
+        for tag in ("bright", "dim", "ok", "err", "prompt"):
+            t.tag_config(tag, foreground=TAG_COLOUR[tag])
+        return t
+
+    @staticmethod
+    def _fill(text, segments):
+        text.configure(state="normal")
+        text.delete("1.0", "end")
+        for chunk, tag in segments:
+            text.insert("end", chunk, tag)
+        text.configure(state="disabled")
+
+    # ── seat screw torque ─────────────────────────────────────────────────
+    def _build_seat_row(self, parent):
+        """The SEAT SCREW line of the status panel. Until a torque is entered
+        it holds only the input box and "set" (and nothing else works,
+        _apply_gate); once entered, only the torque. Clicking the torque
+        opens the box again to change it (not while a batch runs)."""
+        self.seat_row = tk.Frame(parent, bg=BG)
+        self.seat_row.pack(fill="x")
+        self.seat_entry = self._entry(self.seat_row, "SEAT SCREW   ", "", width=6)
+        self.seat_entry.label.configure(padx=1, pady=0, bd=0)
+        self.seat_entry.bind("<Return>", lambda _ev: self._set_seat_screw())
+        self.seat_entry.bind("<Escape>", lambda _ev: self._cancel_seat_edit())
+        self.seat_btn = tk.Button(self.seat_row, text="set",
+                                  command=self._set_seat_screw, **self._btn)
+        self.seat_btn.pack(side="left")
+        self.seat_value = tk.Label(self.seat_row, text="", font=self.f, fg=BRIGHT,
+                                   bg=BG, bd=0, padx=0, pady=0, cursor="hand2")
+        self.seat_value.bind("<Button-1>", lambda _ev: self._edit_seat_screw())
+        self._seat_editing = False
+        self._seat_shown = None
+
+    def _show_seat_row(self):
+        """Box and "set" while the torque is missing or being changed;
+        otherwise just the torque. Re-packs only when that changes."""
+        nm = shared.seat_screw_torque()
+        editing = nm is None or self._seat_editing
+        if nm is not None:
+            self.seat_value.configure(text=f"{nm:.2f} N·m")
+        if editing == self._seat_shown:
+            return
+        self._seat_shown = editing
+        for w in (self.seat_entry, self.seat_btn, self.seat_value):
+            w.pack_forget()
+        if editing:
+            self.seat_entry.pack(side="left", padx=(2, 12))
+            self.seat_btn.pack(side="left")
+        else:
+            self.seat_value.pack(side="left")
+
+    def _edit_seat_screw(self):
+        if batchrun.running():
+            log_event("A batch is running — the seat screw torque is locked until it ends")
+            return
+        nm = shared.seat_screw_torque()
+        self._seat_editing = True
+        self._set_entry(self.seat_entry, "" if nm is None else f"{nm:g}")
+        self._show_seat_row()
+        self.seat_entry.focus_set()
+        self.seat_entry.select_range(0, "end")
+
+    def _cancel_seat_edit(self):
+        if shared.seat_screw_torque() is not None:
+            self._seat_editing = False
+            self._show_seat_row()
+
     # ── heater panel ──────────────────────────────────────────────────────
     def _entry(self, parent, label, initial, width=8):
         lbl = tk.Label(parent, text=label, font=self.f, fg=DIM, bg=BG)
@@ -122,27 +201,36 @@ class TEGui:
 
     def _on_mode(self):
         self._update_inputs()
-        self._send_update()
+        self._apply_batch_lock()
+        if self.mode_var.get() == BATCH:
+            log_event("Mode batch — set the test runs, then 'start batch' "
+                      "(it arms the heater itself)"
+                      + (" · DISARM first" if snapshot()['armed'] else ""))
+        else:
+            self._send_update()
 
     def _update_inputs(self):
-        """Enable only the input that belongs to the selected mode."""
+        """Enable only the input that belongs to the selected mode: duty,
+        setpoint, target, or (batch) the number of test runs. In batch mode
+        "update" has nothing to send, so it is greyed out too."""
+        mode = self.mode_var.get()
         active = {MANUAL: self.duty_entry,
                   AUTO_T: self.sp_entry,
-                  AUTO_P: self.p_entry}[self.mode_var.get()]
-        for e in (self.duty_entry, self.sp_entry, self.p_entry):
+                  AUTO_P: self.p_entry,
+                  BATCH:  self.runs_entry}[mode]
+        for e in (self.duty_entry, self.sp_entry, self.p_entry, self.runs_entry):
             on = e is active
             e.configure(state="normal" if on else "disabled",
                         highlightbackground=BRIGHT if on else BORDER)
             e.label.configure(fg=TEXT if on else DIM)
+        self.update_btn.configure(state="disabled" if mode == BATCH else "normal",
+                                  disabledforeground=DIM)
 
     def _build_heater_panel(self, parent):
         tk.Label(parent, text="─── heater  (FIO0 → Q171)   SW171 must be enabled",
                  font=self.f, fg=DIM, bg=BG, anchor="w").pack(fill="x")
 
-        btn = dict(bg=FIELD, fg=TEXT, activebackground=FIELD_HOT,
-                   activeforeground=BRIGHT, font=self.f, bd=0,
-                   highlightthickness=1, highlightbackground=BORDER,
-                   padx=8, pady=2)
+        btn = self._btn
 
         row1 = tk.Frame(parent, bg=BG)
         row1.pack(fill="x", pady=(2, 2))
@@ -152,7 +240,7 @@ class TEGui:
 
         self.mode_var = tk.StringVar(value=MANUAL)
         self.mode_buttons = []
-        for mode in MODES:
+        for mode in GUI_MODES:
             rb = tk.Radiobutton(row1, text=mode, value=mode, variable=self.mode_var,
                                 command=self._on_mode, font=self.f, fg=TEXT, bg=BG,
                                 selectcolor=BG, activebackground=BG,
@@ -169,19 +257,10 @@ class TEGui:
         self.update_btn = tk.Button(row2, text="update", command=self._send_update, **btn)
         self.update_btn.pack(side="left")
 
-        # Seat screw torque: a TE-Valve setting, not a heater setting, so it
-        # has its own row and "set" button. Blank until the operator enters it,
-        # and until then it is the only control that works (_apply_gate).
-        row3 = tk.Frame(parent, bg=BG)
-        row3.pack(fill="x", pady=(0, 4))
-        self.seat_entry = self._entry(row3, "seat screw N·m", "", width=6)
-        self.seat_entry.bind("<Return>", lambda _ev: self._set_seat_screw())
-        self.seat_btn = tk.Button(row3, text="set", command=self._set_seat_screw, **btn)
-        self.seat_btn.pack(side="left")
-
-        # Batch of opening-point runs (context.md, "Batches"). While one runs
-        # it owns the heater: the heater controls and the torque are locked,
-        # and DISARM aborts it.
+        # Batch of opening-point runs (context.md, "Batches"), the fourth
+        # mode: this row is greyed out unless batch is selected. While a batch
+        # runs it owns the heater: the heater controls and the torque are
+        # locked, and DISARM aborts it.
         row4 = tk.Frame(parent, bg=BG)
         row4.pack(fill="x", pady=(0, 4))
         self.runs_entry = self._entry(row4, "test runs (max)", f"{BATCH_TEST_RUNS_DEFAULT}", width=4)
@@ -209,6 +288,7 @@ class TEGui:
         self._update_inputs()
         self._send_update()
         self._apply_gate()
+        self._show_seat_row()
 
     def _show_lines(self):
         """Pack the batch / heater / loop status labels that have text, in
@@ -242,7 +322,7 @@ class TEGui:
         self.seat_btn.configure(fg=colour,
                                 highlightbackground=PROMPT if locked else BORDER)
         buttons = [self.arm_btn, *self.mode_buttons, self.update_btn]
-        entries = [self.duty_entry, self.sp_entry, self.p_entry]
+        entries = [self.duty_entry, self.sp_entry, self.p_entry, self.runs_entry]
         self._apply_batch_lock()
         if locked:
             for w in buttons + entries:
@@ -278,24 +358,24 @@ class TEGui:
         elif not getattr(self, "_locked", True):
             for w in (*self.mode_buttons, self.update_btn, self.seat_btn):
                 w.configure(state="normal")
-            for e in (self.seat_entry, self.runs_entry):
-                e.configure(state="normal")
+            self.seat_entry.configure(state="normal")
             self._update_inputs()
         else:
-            for e in (self.seat_entry, self.runs_entry):
-                e.configure(state="normal")
+            self.seat_entry.configure(state="normal")
             self.seat_btn.configure(state="normal")
         can_start = (not busy and shared.seat_screw_torque() is not None
-                     and not snapshot()['armed'])
+                     and not snapshot()['armed'] and self.mode_var.get() == BATCH)
         self.batch_btn.configure(state="normal" if can_start else "disabled",
                                  disabledforeground=DIM)
-        self.runs_entry.label.configure(fg=DIM if busy else TEXT)
         self.abort_btn.configure(state="normal" if busy else "disabled",
                                  fg=WARN if busy else TEXT, disabledforeground=DIM)
 
     def _start_batch(self):
         """Confirm the torque (and show the measured upstream pressure),
         then start. The batch arms the heater itself, run by run."""
+        if self.mode_var.get() != BATCH:
+            log_event("Batch not started — select batch mode first")
+            return
         torque = shared.seat_screw_torque()
         try:
             n = int(self.runs_entry.get().strip())
@@ -369,7 +449,9 @@ class TEGui:
             return
         shared.set_seat_screw_torque(nm)
         self._set_entry(self.seat_entry, f"{nm:g}")
+        self._seat_editing = False
         self._apply_gate()
+        self._show_seat_row()
 
     def _toggle_arm(self):
         if self._locked and not snapshot()['armed']:
@@ -383,6 +465,9 @@ class TEGui:
         elif batchrun.running():
             log_event("A batch is running and arms the heater itself — "
                       "'abort batch' to stop it")
+        elif self.mode_var.get() == BATCH:
+            log_event("Batch mode: 'start batch' arms the heater itself — "
+                      "choose manual, auto-t or auto-p to ARM by hand")
         else:
             self._send_update(quiet_if_unchanged=True)   # picks up un-sent edits to the active value, logged
             heater_command(armed=True)
@@ -390,7 +475,7 @@ class TEGui:
 
     def _active_summary(self):
         a = self._applied
-        return readout.mode_summary(self.mode_var.get(), a['duty'], a['sp'], a['tgt'])
+        return readout.mode_summary(a['mode'], a['duty'], a['sp'], a['tgt'])
 
     @staticmethod
     def _set_entry(entry, text):
@@ -440,6 +525,10 @@ class TEGui:
                                      tgt=PRESSURE_TARGET_DEFAULT)
         self._input_noted = False
         mode = self.mode_var.get()
+        if mode == BATCH:
+            # Nothing of its own to send: keep (or, after a batch, restore)
+            # the heater mode last sent from the window.
+            mode = a['mode'] or MANUAL
 
         if mode == 'manual':
             key = 'duty'
@@ -528,14 +617,12 @@ class TEGui:
         h = snapshot()
         mode = h['mode']
 
-        st = self.status_text
-        st.configure(state="normal")
-        st.delete("1.0", "end")
-        for text, tag in readout.status_segments(
-                r, shared.health(), h, shared.heater_output(), LABJACK_AVAILABLE,
-                shared.seat_screw_torque()):
-            st.insert("end", text, tag)
-        st.configure(state="disabled")
+        health = shared.health()
+        self._fill(self.status_text,
+                   readout.sensor_segments(r, health, LABJACK_AVAILABLE))
+        self._fill(self.heater_text,
+                   readout.heater_segments(h, shared.heater_output(), health['labjack']))
+        self._show_seat_row()
 
         self.arm_btn.configure(text="DISARM" if h['armed'] else "ARM",
                                fg=WARN if h['armed'] else TEXT)

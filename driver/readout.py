@@ -2,7 +2,8 @@
 and heater state to strings. No Tk and no shared state, so every line can be
 checked directly (tests/test_readout.py).
 
-    status_segments(...)      -> [(text, tag)] for the status panel
+    status_segments(...)      -> [(text, tag)] for the status panel, made of
+      sensor_segments / seat_screw_segments / heater_segments
     parse_seat_screw_torque(text) -> N·m, or ValueError with the reason
     torque_gate(seat_screw_nm) -> (locked, tag)   controls locked until entered
     heater_vi_lines(...)      -> [(label, value, note, tag)] for V / I / P
@@ -34,8 +35,35 @@ def _mean(values):
 def status_segments(readings, health, heater, output, labjack_available,
                     seat_screw_nm=None):
     """The status panel, top to bottom: title, health flags, sensor readings,
-    the seat screw torque, and the heater's voltage / current / power lines."""
-    r, ok, h = readings, health, heater
+    the seat screw torque, and the heater's voltage / current / power lines.
+    The window draws the three parts separately (the seat screw line holds
+    the torque input), but this is the whole panel as text."""
+    return (sensor_segments(readings, health, labjack_available)
+            + seat_screw_segments(seat_screw_nm)
+            + heater_segments(heater, output, health['labjack']))
+
+
+def seat_screw_segments(seat_screw_nm):
+    """The SEAT SCREW line: the torque, or that it hasn't been entered."""
+    seg = [("SEAT SCREW   ", "dim")]
+    if seat_screw_nm is None:
+        seg += [("---", "dim"), ("  (not entered)\n", "prompt")]
+    else:
+        seg += [(f"{seat_screw_nm:.2f} N·m\n", "bright")]
+    return seg
+
+
+def heater_segments(heater, output, labjack_ok):
+    """The heater's voltage / current / power lines."""
+    seg = []
+    for label, value, note, tag in heater_vi_lines(heater, output, labjack_ok):
+        seg += [(label, "dim"), (value, tag), (note + "\n", "dim")]
+    return seg
+
+
+def sensor_segments(readings, health, labjack_available):
+    """Title, health flags and the sensor readings, down to VALVE T."""
+    r, ok = readings, health
     p = _mean(r['keller_pressure_samples'])
     t = _mean(r['keller_temperature_samples'])
     vac, vac_st, vac_u = (r['vacuum_chamber_mbar'], r['vacuum_status'],
@@ -75,16 +103,7 @@ def status_segments(readings, health, heater, output, labjack_available,
             ("VACUUM       ", "dim"), (v_s, "bright" if vac is not None else "dim"),
             (vac_note, "err"), (vac_volt + "\n", "dim"),
             ("VALVE T      ", "dim"), (te_s, "bright" if te_temp is not None else "dim"),
-            (fault_note + "\n", "err" if fault_note else "dim"),
-            ("SEAT SCREW   ", "dim")]
-    if seat_screw_nm is None:
-        seg += [("---", "dim"), ("  (not entered)\n", "prompt")]
-    else:
-        seg += [(f"{seat_screw_nm:.2f} N·m\n", "bright")]
-    # No blank line before the heater lines: every row given to the status
-    # panel is a row taken from the charts.
-    for label, value, note, tag in heater_vi_lines(h, output, ok['labjack']):
-        seg += [(label, "dim"), (value, tag), (note + "\n", "dim")]
+            (fault_note + "\n", "err" if fault_note else "dim")]
     return seg
 
 
