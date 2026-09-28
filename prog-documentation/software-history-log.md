@@ -4,6 +4,55 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 34. Map the opening point by cycling, not by batches — 28 Sept 2026
+Edward: waiting for cooldowns and discarding runs slowed testing down, and
+the upstream pressure can't be controlled — testing should go on regardless
+and the analysis deal with it. Then: the aim is to capture as much data as
+efficiently as possible, to tie down seat screw torque, upstream pressure
+and T_open; batches as they were aren't a constraint. Agreed one question
+at a time (a first answer — one cold run per batch, warm test runs after
+it, a refill no longer discarding the run — was built, then superseded by
+this before being applied):
+* **The goal is the map T_open(torque, upstream), not one T_open per
+  batch.** Every opening is a data point in one table (`logs/openings.csv`);
+  a single fit over all of it is recomputed after every opening. Upstream
+  is held by hand but will drift: the fit accounts for it rather than the
+  runs trying to avoid it. The 28 Sept 0.45 N·m batch shows why this works:
+  corrected for upstream, T_open = 128.0 ± 1.1 K at 2.5 bar, slope −12.0 ±
+  3.5 K/bar, scatter 1.1 K; the batch's own "± 4.3 K" was the leak's spread.
+* **Slope per torque, offset per setting.** Re-torquing to the same value
+  may not give the same valve, so every tightening (a *setting*) gets its
+  own offset, while all settings at one torque share the pressure slope —
+  which also measures how well re-torquing reproduces. A per-batch slope
+  over a few tenths of a bar is mostly noise; pooled, it improves with every
+  pressure visited.
+* **Cycling replaces batches:** creep from just below the prediction at the
+  upstream pressure now, detect, cool only until the valve has closed and is
+  margin + 2 K below the prediction, repeat. The valve closes 17-27 K below
+  T_open within ~30 s (28 Sept), so a cycle should take 3-4 min instead of
+  ~16. No scouts once a torque has data, no stopping rule: a status line
+  says when a setting is *done* (offset ±1 K, slope ±2 K/bar) and suggests
+  where to take the pressure next. Every 5th cycle is deep (35 °C and the
+  4 min hold) so the warm-start effect is measured rather than assumed.
+* **The fit checks for drift and for the chamber background**, each added
+  only if significant. 28 Sept: the residuals rose ~2 K over 1.5 h while the
+  background fell 15 %; pump-down should make T_open read high early (a
+  higher background needs more flow to count), the opposite of what was
+  seen, so time drift (the valve body warming?) is likelier — the fit will
+  say.
+* **Detection on a fixed flow:** 0.5 × 10⁻⁷ mbar above the baseline (with
+  the 4.7 % noise floor), not "+12 % or 1 × 10⁻⁷ mbar, whichever first", so a
+  falling background can't move what counts as open. 0.5 × 10⁻⁷ is about
+  +12 % at the 28 Sept background (comparable with older data, whose rows
+  say which rule found them) and ~15 × the gauge noise; the 28 Sept
+  openings jumped ~1 × 10⁻⁷ within 2-3 s, so 0.2-0.8 × 10⁻⁷ would all give
+  nearly the same backdated T_open. To be re-derived from the traces.
+* **Old batch folders are imported** into the table, one setting each (it
+  can't be known whether the screw was touched between them), so the fit
+  starts from today's data.
+* Built in stages: detection and the table with its import and fit first,
+  checked against the 28 Sept data, then the cycling itself.
+
 ## 33. Top-up pause removed — 28 Sept 2026
 Entry 28 added an optional pause before a run once upstream had fallen a
 set amount (default 0.3 bar), and a "continue" button. Edward didn't want
