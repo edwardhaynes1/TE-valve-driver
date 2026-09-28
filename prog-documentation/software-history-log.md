@@ -79,6 +79,18 @@ Found while building (simulation, tests/batch_sim.py `run_cycling`):
   test runs had the same weakness.) One that opens during the hold is
   caught there too (the chamber rising above its lowest level in the hold,
   unless a refill was seen).
+* With an offset per setting, the pressure slope can only be learned from
+  pressure changes *within* a setting — between settings the offsets absorb
+  them. Two settings at one torque, each held at its own pressure, made the
+  fit unsolvable: a slope is now fitted only once one setting spans 0.3 bar
+  (else −12 K/bar, assumed), and the status line's hint says to change the
+  pressure without re-torquing. In practice: sweep the pressure, then
+  re-torque.
+* Asked for: the map in 3D. `logs/opening-map-3d.png` is drawn next to the
+  2D figure after every opening (torque, upstream, T_open; each setting's
+  fitted line; a surface between the torques' mean lines, linear between
+  torques — a guide, not a model); `TE_PLOTTER.py --map --3d` shows it
+  rotatable.
 * 1.5 simulated hours at 0.45 N·m: 21 openings (batches: 7 in the same
   time). DONE after 20 openings (79 min), held back by the slope: only a
   slow leak (0.01 bar/min) widened the pressure range. Changing the

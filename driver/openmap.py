@@ -299,6 +299,7 @@ class Fit:
         self.torque_of, self.ranges, self.counts = {}, {}, {}
         self.points, self.excluded = [], 0
         self.confounded = []             # (term, term, correlation) that move together
+        self.spread = {}                 # torque key: the widest upstream span of one setting
 
     # prediction ---------------------------------------------------------
     def slope(self, tkey):
@@ -340,7 +341,8 @@ class Fit:
         if not done:
             if not (slope and slope[2] == 'fit' and slope[1] is not None
                     and slope[1] <= config.MAP_DONE_SLOPE_K_BAR):
-                hint = _pressure_hint(rng)
+                own = [p['bar'] for p in self.points if p['setting'] == setting]
+                hint = _pressure_hint((min(own), max(own)) if own else rng)
             else:
                 hint = "more openings at any pressure"
         return dict(setting=setting, torque=tk, n=self.counts.get(setting, 0),
@@ -384,7 +386,9 @@ class Fit:
 
 def _pressure_hint(rng):
     """Where to take the upstream pressure next to pin the slope: beyond
-    the end of the range with more room, within MAP_P_MIN/MAX_BAR."""
+    the end of this setting's range with more room, within
+    MAP_P_MIN/MAX_BAR. Within the setting: the offsets absorb pressure
+    changes between settings."""
     lo_lim, hi_lim, step = config.MAP_P_MIN_BAR, config.MAP_P_MAX_BAR, config.MAP_HINT_STEP_BAR
     if rng is None:
         return "take upstream pressure readings (Keller)"
@@ -394,7 +398,7 @@ def _pressure_hint(rng):
     if max(gain_down, gain_up) < 0.1:
         return "more openings (the pressure range is already wide)"
     target = down if gain_down > gain_up else up
-    return f"slope needs a wider range: try ~{target:.1f} bar"
+    return f"slope needs a wider range: try ~{target:.1f} bar (without re-torquing)"
 
 
 def _design(pts, settings, torques_fit, extra):
@@ -443,8 +447,17 @@ def fit(rows):
     for tk in torques:
         bars = [q['bar'] for q in pts if q['tk'] == tk]
         f.ranges[tk] = (min(bars), max(bars))
-    torques_fit = [tk for tk in torques
-                   if f.ranges[tk][1] - f.ranges[tk][0] >= config.MAP_MIN_SPREAD_BAR]
+    # Each setting has its own offset, so a slope can only be learned from
+    # pressure changes WITHIN a setting (between settings the offsets absorb
+    # it): a torque's slope is fitted once one of its settings spans
+    # MAP_MIN_SPREAD_BAR, else assumed.
+    spread = {}
+    for s in settings:
+        bars = [q['bar'] for q in pts if q['setting'] == s]
+        tk = f.torque_of[s]
+        spread[tk] = max(spread.get(tk, 0.0), max(bars) - min(bars))
+    torques_fit = [tk for tk in torques if spread.get(tk, 0.0) >= config.MAP_MIN_SPREAD_BAR]
+    f.spread = spread
     # the assumed slope moves to the left-hand side
     for q in pts:
         q['y'] = q['T'] - (0.0 if q['tk'] in torques_fit else
@@ -504,6 +517,11 @@ def fit(rows):
     out = run(kept)
     if out is None:                                 # shouldn't happen: fall back
         kept, out = [], run([])
+    if out is None:                                 # still singular: assume every slope
+        for q in pts:
+            q['y'] = q['T'] + config.PRESSURE_UP_K_PER_BAR * (q['bar'] - config.MAP_REF_BAR)
+        torques_fit = []
+        out = run([])
         if out is None:
             return f
     beta, cov, res, sd, dof = out

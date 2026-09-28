@@ -1166,16 +1166,88 @@ def make_map_figure(rows, torque=None):
     return fig
 
 
-def plot_map(path, output=None, show=True, torque=None):
+def make_map3d_figure(rows):
+    """The map in 3D: every opening at (torque, upstream, T_open), each
+    setting's fitted line across the upstream range at its torque (the fit
+    has a slope per torque and an offset per setting), and, where two or
+    more torques are fitted, a surface through their lines at the mean
+    offset of each torque (linear between torques: a guide, not a model)."""
+    from driver import config, openmap
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers the 3d projection)
+    f = openmap.fit(rows)
+    fig = plt.figure(figsize=(11, 8))
+    ax = fig.add_subplot(111, projection="3d")
+    settings = sorted(f.offsets, key=lambda s: min((p["t"] or 0) for p in f.points
+                                                   if p["setting"] == s))
+    cyc = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    colour = {s: cyc[i % len(cyc)] for i, s in enumerate(settings)}
+    ref = config.MAP_REF_BAR
+    all_bars = [p["bar"] for p in f.points] or [ref]
+    b_lo, b_hi = min(min(all_bars), ref), max(max(all_bars), ref)
+    for s in settings:
+        pts = [p for p in f.points if p["setting"] == s]
+        tq = float(f.torque_of[s])
+        b = np.array([p["bar"] for p in pts])
+        t = np.array([p["T"] for p in pts])
+        deep = np.array([bool(p["deep"]) for p in pts])
+        ax.scatter(np.full(b.shape, tq)[~deep], b[~deep], t[~deep], color=colour[s], s=22,
+                   depthshade=False)
+        ax.scatter(np.full(b.shape, tq)[deep], b[deep], t[deep], facecolors="none",
+                   edgecolors=colour[s], s=30, depthshade=False)
+        k = f.slope(f.torque_of[s])
+        xs = np.linspace(b_lo, b_hi, 2)
+        ax.plot([tq, tq], xs, f.offsets[s][0] + k * (xs - ref), color=colour[s], lw=1.6,
+                label=f"{s} ({f.counts.get(s, 0)})")
+    torques = sorted({float(tk) for tk in f.slopes})
+    if len(torques) >= 2:
+        mean_off = {}
+        for tk in f.slopes:
+            offs = [o for s_, (o, _) in f.offsets.items() if f.torque_of.get(s_) == tk]
+            mean_off[float(tk)] = (np.mean(offs), f.slope(tk))
+        tq_grid = np.array(torques)
+        bars = np.linspace(b_lo, b_hi, 12)
+        T = np.array([[mean_off[q][0] + mean_off[q][1] * (bb - ref) for bb in bars]
+                      for q in tq_grid])
+        TQ, BB = np.meshgrid(tq_grid, bars, indexing="ij")
+        ax.plot_surface(TQ, BB, T, color=AVERAGE_BLUE, alpha=0.15, linewidth=0)
+    ax.set_xlabel("seat screw torque (N·m)")
+    ax.set_ylabel("upstream (bar abs)")
+    ax.set_zlabel("T_open (°C)")
+    # limits from the data (matplotlib's 3D autoscale counts empty point sets as 0)
+    if torques:
+        pad = max(0.02, 0.08 * (max(torques) - min(torques)))
+        ax.set_xlim(min(torques) - pad, max(torques) + pad)
+    ax.set_ylim(b_lo - 0.1, b_hi + 0.1)
+    zs = [p["T"] for p in f.points] + [o + f.slope(f.torque_of[s]) * (bb - ref)
+                                       for s, (o, _) in f.offsets.items() for bb in (b_lo, b_hi)]
+    if zs:
+        ax.set_zlim(min(zs) - 3.0, max(zs) + 3.0)
+    ax.view_init(elev=22, azim=-128)
+    ax.set_title(f"opening map: {f.n} openings, {len(settings)} setting"
+                 f"{'s' * (len(settings) != 1)}, {len(torques)} torque"
+                 f"{'s' * (len(torques) != 1)}   (hollow = deep cycle; lines: each "
+                 f"setting's fit)", fontsize=10)
+    ax.legend(fontsize=7, loc="upper left")
+    fig.tight_layout()
+    return fig
+
+
+def plot_map(path, output=None, show=True, torque=None, three_d=False):
+    """The 2D figure (output) and the 3D one next to it (<output>-3d.png).
+    three_d: show the 3D one (rotatable) instead of the 2D one."""
     from driver import openmap
     rows = openmap.load(path)
     if not rows:
         fail(f"{path} has no openings yet")
-    fig = make_map_figure(rows, torque)
     out = output or str(path).rsplit(".", 1)[0] + ".png"
+    fig = make_map_figure(rows, torque)
     fig.savefig(out, dpi=130)
-    print(f"figure written to {out}")
+    fig3 = make_map3d_figure(rows)
+    out3 = out.rsplit(".", 1)[0] + "-3d." + out.rsplit(".", 1)[1]
+    fig3.savefig(out3, dpi=130)
+    print(f"figures written to {out} and {out3}")
     if show:
+        plt.close(fig3 if not three_d else fig)
         try:
             plt.show()
         except Exception:
@@ -1199,6 +1271,8 @@ def main():
                     help="the opening map: give logs/openings.csv (the default)")
     ap.add_argument("--torque", type=float, default=None,
                     help="with --map: the torque the first panel shows")
+    ap.add_argument("--3d", dest="three_d", action="store_true",
+                    help="with --map: show the 3D map (rotatable) instead of the 2D one")
     args = ap.parse_args()
 
     if args.map:
@@ -1206,7 +1280,7 @@ def main():
             matplotlib.use("Agg")
         from driver import config
         plot_map(args.logfile or config.OPENINGS_CSV, args.output, show=not args.no_show,
-                 torque=args.torque)
+                 torque=args.torque, three_d=args.three_d)
         return
 
     if args.logfile is None:

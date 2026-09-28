@@ -173,6 +173,21 @@ def test_too_little_pressure_spread_assumes_the_slope():
     assert not st['done'] and "try ~" in st['hint'] and "(assumed)" in f.status_text('a1')
 
 
+def test_the_slope_is_learned_only_within_a_setting():
+    # Two settings at 0.40 N·m, each held at one pressure (2 and 4 bar): the
+    # offsets absorb the difference, so there's nothing to fit a slope from
+    # (it was unsolvable before) — assumed, and the hint says: don't re-torque.
+    rows = (synthetic([("a", 0.40, 90.0, -8.0)], bars=(2.0, 2.0), seed=1)
+            + synthetic([("b", 0.40, 90.0, -8.0)], bars=(4.0, 4.0), seed=2))
+    f = openmap.fit(rows)
+    assert f.n == len(rows) and f.slopes['0.40'][2] == 'assumed'
+    assert "without re-torquing" in f.status('a')['hint']
+    # one of them swept 1 bar: now it's fitted, from that setting
+    rows += synthetic([("a", 0.40, 90.0, -8.0)], bars=(2.0, 3.0), seed=3)
+    k, kh, how = openmap.fit(rows).slopes['0.40']
+    assert how == 'fit' and k == pytest.approx(-8.0, abs=1.0)
+
+
 def test_the_warm_start_effect_is_measured_from_deep_cycles():
     f = openmap.fit(synthetic([("a1", 0.45, 128.0, -12.0)], n=30, deep_every=5, warm=2.0))
     v, half, kept = f.terms['warm-start']
@@ -249,7 +264,7 @@ def test_a_batch_feeds_the_openings_table(clock, monkeypatch):
     assert openmap.import_batches() == ""
 
 
-def test_the_map_figure_draws(tmp_path):
+def test_the_map_figures_draw_2d_and_3d(tmp_path):
     pytest.importorskip("matplotlib")
     import matplotlib
     matplotlib.use("Agg")
@@ -263,3 +278,4 @@ def test_the_map_figure_draws(tmp_path):
     spec.loader.exec_module(plotter)
     out = plotter.plot_map(path, str(tmp_path / "map.png"), show=False)
     assert Path(out).stat().st_size > 20_000
+    assert (tmp_path / "map-3d.png").stat().st_size > 20_000
