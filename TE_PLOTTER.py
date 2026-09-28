@@ -35,11 +35,12 @@ to loose matching (COLUMN_ALIASES). Whatever it matched is printed at the
 top of every run; anything it cannot match is skipped rather than fatal.
 
 Batches: give a batch folder (or pick its summary.csv) for the batch view:
-every run's chamber pressure against valve temperature and against time
-since its onset, test runs coloured and scouts grey, the average of the
-test runs in black, and the mean T_open with a ±1σ band; and T_open against
-the measured upstream pressure, with a straight-line fit (the rig leaks, so
-each run opens at a different upstream pressure). The driver draws
+every run's chamber pressure against valve temperature (heating) and against
+time since its onset, each run light grey (dashed: scouts and runs not
+averaged) and their average in blue; and T_open against the measured
+upstream pressure, with a straight-line fit (the rig leaks, so each run
+opens at a different upstream pressure). The batch's T_open is given with
+its 95 % interval after correcting for upstream pressure. The driver draws
 this into the folder as batch.png when a batch ends.
 
 Usage:
@@ -840,7 +841,9 @@ def batch_average_vs_temperature(summary, traces):
     if len(per_run) < 2:
         return np.array([]), np.array([])
     table = pd.concat(per_run, axis=1).sort_index()   # bins in temperature order
-    table = table[table.notna().sum(axis=1) >= 2]
+    # only where most runs have data: where runs join or leave, the average
+    # would jump by the difference in their baselines
+    table = table[table.notna().sum(axis=1) >= max(2, -(-len(per_run) // 2))]
     return table.index.to_numpy(), 10 ** table.mean(axis=1).to_numpy()
 
 
@@ -882,56 +885,145 @@ def upstream_fit(up, t_open):
     return slope, intercept
 
 
+def _t975(dof):
+    try:
+        from driver.batch import t975
+        return t975(dof)
+    except Exception:                                   # the driver isn't importable
+        return 2.0 if dof > 30 else None
+
+
+def batch_result(summary):
+    """The batch's T_open, corrected for upstream pressure, from the
+    averaged test runs: dict(mean, up, half, sd, n, slope, slope_half), or
+    None. With a fit (n ≥ 3, ≥ 0.05 bar spread) the ± is the 95 % interval
+    of the fit at the runs' mean upstream pressure (t × residual scatter ÷
+    √n), so the spread the leak causes isn't counted as scatter; the mean
+    itself is the plain mean (a straight-line fit passes through it). Else
+    the plain mean ± t × sd ÷ √n."""
+    avg = summary[summary["in_average"] == 1]
+    up = pd.to_numeric(avg["upstream_at_open_bar"], errors="coerce")
+    to = pd.to_numeric(avg["t_open_degC"], errors="coerce")
+    ok = to.notna()
+    n = int(ok.sum())
+    if not n:
+        return None
+    t = to[ok].to_numpy(float)
+    res = dict(mean=float(t.mean()), up=None, half=None, sd=None, n=n, slope=None,
+               slope_half=None)
+    u = up[ok]
+    if u.notna().all():
+        res["up"] = float(u.mean())
+    fit = upstream_fit(up, to)
+    if fit and u.notna().all():
+        uu = u.to_numpy(float)
+        r = t - (fit[1] + fit[0] * uu)
+        dof = n - 2
+        sd = float(np.sqrt((r @ r) / dof)) if dof > 0 else None
+        tq = _t975(dof) if dof > 0 else None
+        res.update(sd=sd, slope=float(fit[0]))
+        if sd is not None and tq is not None:
+            res["half"] = tq * sd / np.sqrt(n)
+            sxx = float(((uu - uu.mean()) ** 2).sum())
+            res["slope_half"] = tq * sd / np.sqrt(sxx) if sxx > 0 else None
+    elif n > 1:
+        res["sd"] = float(t.std(ddof=1))
+        tq = _t975(n - 1)
+        res["half"] = tq * res["sd"] / np.sqrt(n) if tq is not None else None
+    return res
+
+
+def _result_text(res):
+    txt = f"T_open {res['mean']:.2f} °C"
+    if res["half"] is not None:
+        txt += f" ± {res['half']:.2f} K"
+    if res["up"] is not None:
+        txt += f" at {res['up']:.2f} bar"
+    return txt
+
+
+def _fit_y_to_x(ax):
+    """Scale the y axis to the data inside the current x limits."""
+    x0, x1 = ax.get_xlim()
+    ys = []
+    for line in ax.get_lines():
+        x, y = np.asarray(line.get_xdata(), float), np.asarray(line.get_ydata(), float)
+        if x.size != y.size or x.size < 3:          # (axvline: 2 points, axes coords)
+            continue
+        m = (x >= x0) & (x <= x1) & np.isfinite(y) & (y > 0)
+        ys.append(y[m])
+    ys = np.concatenate(ys) if ys else np.array([])
+    if ys.size:
+        ax.set_ylim(ys.min() / 1.03, ys.max() * 1.03)
+
+
+TRACE_GREY = "0.72"          # individual runs
+SCOUT_GREY = "0.85"          # scouts and runs left out of the average
+AVERAGE_BLUE = "#1f5fbf"
+
+
 def make_batch_figure(summary, traces, title):
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(19, 6),
                                         gridspec_kw={"width_ratios": [1.2, 1.2, 0.8]})
-    avg = summary[summary["in_average"] == 1]
-    t_open = pd.to_numeric(avg["t_open_degC"], errors="coerce").dropna()
-    colours = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-    k = 0
+    res = batch_result(summary)
+    shown = set()
     for _, r in summary.iterrows():
         d = traces.get(r["run"])
         if d is None:
             continue
-        scout = str(r["run"]).startswith("scout")
-        colour = "0.6" if scout else colours[k % len(colours)]
-        k += 0 if scout else 1
-        lw, alpha = (1.0, 0.7) if scout else (1.3, 0.9)
-        label = f"{r['run']}" + ("" if r["status"] == "opened" else f" ({r['status']})")
+        averaged = r["in_average"] == 1
+        colour = TRACE_GREY if averaged else SCOUT_GREY
+        ls = "-" if averaged else "--"
+        key = "test runs (averaged)" if averaged else "scouts / not averaged"
+        label = None if key in shown else key
+        shown.add(key)
         heat = d[d["phase"].isin(["baseline", "settle", "hold", "approach", "creep"])]
-        cool = d[d["phase"] == "cooldown"]
-        ax1.plot(heat["T"], heat["p"], color=colour, lw=lw, alpha=alpha, label=label)
-        ax1.plot(cool["T"], cool["p"], color=colour, lw=0.8, alpha=0.4, ls=":")
+        ax1.plot(heat["T"], heat["p"], color=colour, lw=0.9, ls=ls, label=label, zorder=1)
         if pd.notna(r.get("onset_time")):
             s = (d["time"] - pd.to_datetime(r["onset_time"])).dt.total_seconds()
             w = s.between(*BATCH_ALIGN_S)
-            ax2.plot(s[w], d["p"][w], color=colour, lw=lw, alpha=alpha)
+            ax2.plot(s[w], d["p"][w], color=colour, lw=0.9, ls=ls, label=label, zorder=1)
     x, y = batch_average_vs_temperature(summary, traces)
     if len(x):
-        ax1.plot(x, y, color="black", lw=2.5, label="average (test runs)")
+        ax1.plot(x, y, color=AVERAGE_BLUE, lw=2.2, label="average (geometric mean)", zorder=3)
     x, y = batch_average_vs_time(summary, traces)
     if len(x):
-        ax2.plot(x, y, color="black", lw=2.5)
-    if len(t_open):
-        m = t_open.mean()
-        sd = t_open.std(ddof=1) if len(t_open) > 1 else 0.0
-        ax1.axvline(m, color="black", ls="--", lw=1.2,
-                    label=f"mean T_open {m:.2f} °C" + (f" ± {sd:.2f} K" if sd else ""))
-        if sd:
-            ax1.axvspan(m - sd, m + sd, color="black", alpha=0.08)
-    ax2.axvline(0, color="black", ls="--", lw=1.2)
+        ax2.plot(x, y, color=AVERAGE_BLUE, lw=2.2, label="average (geometric mean)", zorder=3)
+    if res is not None:
+        m, half = res["mean"], res["half"]
+        ax1.axvline(m, color=AVERAGE_BLUE, ls="--", lw=1.2, label=_result_text(res), zorder=2)
+        if half:
+            ax1.axvspan(m - half, m + half, color=AVERAGE_BLUE, alpha=0.10, zorder=0)
+    ax2.axvline(0, color="black", ls="--", lw=1.0, label="onset")
+    # Zoom on the creep towards the opening, where the runs say something;
+    # the fast approach from the hold temperature is off to the left.
+    avg = summary[summary["in_average"] == 1]
+    lo = pd.to_numeric(avg.get("start_degC"), errors="coerce").min()
+    hi = pd.to_numeric(avg.get("t_detect_degC"), errors="coerce").max()
+    if pd.notna(lo) and pd.notna(hi) and hi > lo:
+        ax1.set_xlim(lo - 3.0, hi + 3.0)
+        ax1.autoscale(axis="y")
+        _fit_y_to_x(ax1)
 
     # T_open against the measured upstream pressure
     up = pd.to_numeric(summary["upstream_at_open_bar"], errors="coerce")
     to = pd.to_numeric(summary["t_open_degC"], errors="coerce")
     test = summary["in_average"] == 1
-    ax3.scatter(up[~test], to[~test], color="0.6", s=25, label="scouts / not averaged")
-    ax3.scatter(up[test], to[test], color="black", s=30, zorder=3, label="test runs")
+    ax3.scatter(up[~test], to[~test], color=SCOUT_GREY, edgecolors="0.5", s=28,
+                label="scouts / not averaged")
+    ax3.scatter(up[test], to[test], color="0.35", s=32, zorder=3, label="test runs")
     fit = upstream_fit(up[test], to[test])
     if fit:
         xs = np.linspace(up[test].min(), up[test].max(), 2)
-        ax3.plot(xs, fit[1] + fit[0] * xs, color="black", lw=1.2,
-                 label=f"fit: {fit[0]:+.1f} K/bar")
+        sl = f"{fit[0]:+.1f}"
+        if res is not None and res["slope_half"] is not None:
+            sl += f" ± {res['slope_half']:.1f}"
+        ax3.plot(xs, fit[1] + fit[0] * xs, color=AVERAGE_BLUE, lw=1.6,
+                 label=f"fit: {sl} K/bar (95 %)")
+        if res is not None and res["up"] is not None:
+            ax3.errorbar([res["up"]], [res["mean"]], yerr=[[res["half"] or 0]],
+                         fmt="D", color=AVERAGE_BLUE, ms=6, capsize=4, zorder=4,
+                         label=_result_text(res))
     ax3.set_xlabel("upstream pressure at the onset (bar abs)")
     ax3.set_ylabel("T_open (°C)")
     ax3.set_title("opening point vs upstream")
@@ -941,11 +1033,11 @@ def make_batch_figure(summary, traces, title):
         ax.set_yscale("log")
         ax.set_ylabel("chamber pressure (mbar)")
         ax.grid(True, which="both", alpha=0.3)
-    ax1.set_xlabel("valve temperature (°C)   solid = heating, dotted = cooldown")
+        ax.legend(fontsize=8, loc="upper left")
+    ax1.set_xlabel("valve temperature (°C), creep towards the opening")
     ax2.set_xlabel("time since onset (s)")
     ax1.set_title("chamber pressure vs valve temperature")
     ax2.set_title("aligned at each run's onset")
-    ax1.legend(fontsize=8, loc="upper left")
     fig.suptitle(title, fontsize=11)
     fig.tight_layout()
     return fig
@@ -954,15 +1046,16 @@ def make_batch_figure(summary, traces, title):
 def batch_title(folder, summary):
     from pathlib import Path
     avg = summary[summary["in_average"] == 1]
-    t = pd.to_numeric(avg["t_open_degC"], errors="coerce").dropna()
     up = pd.to_numeric(avg["upstream_at_open_bar"], errors="coerce").dropna()
     torque = summary["seat_screw_torque_Nm"].iloc[0] if len(summary) else float("nan")
     parts = [Path(folder).name, f"{torque:g} N·m"]
     if len(up):
-        parts.append(f"upstream {up.mean():.2f} bar ({up.min():.2f}-{up.max():.2f})")
-    if len(t):
-        sd = f" ± {t.std(ddof=1):.2f} K" if len(t) > 1 else ""
-        parts.append(f"T_open {t.mean():.2f} °C{sd}, n = {len(t)}")
+        parts.append(f"upstream {up.min():.2f}-{up.max():.2f} bar")
+    res = batch_result(summary)
+    if res is not None:
+        parts.append(_result_text(res) + (" (95 %, corrected for upstream)"
+                                          if res["slope"] is not None else " (95 %)")
+                     + f", n = {res['n']}")
     return "   ·   ".join(parts)
 
 
