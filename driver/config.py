@@ -145,8 +145,18 @@ TC_RESPONSE_MIN_K     = 1.0        # …the TC must have risen at least this muc
 # The old gains showed no overshoot on comparable steps (10:03, 10:11).
 # Near the valve's cracking point (~40-40.5 °C) a 1 K overshoot can open
 # the valve by accident, so the ~10 s speed gain is not worth it.
-PID_KP                = 0.050      # duty per °C of error
-PID_KI                = 0.0010     # duty per °C·s of accumulated error (Ti = 50 s)
+#
+# RETUNED 30 Sept 2026 for t-min-tune (≤ 0.5 °C overshoot, faster): with the
+# D term raised and the burst aimed short of the setpoint (TEMP_BURST_SHORT_*),
+# the three 21 Sept models (tests/plant_21sept.py), settled starts and
+# ambient starts, 5-35 K steps and 1 K staircases: worst overshoot 0.24 K
+# (0.26 K with 0.05 K TC noise), slowest settling to ±0.2 K 118 s (was
+# 487 s at 0.05 / 0.001 / 0.10); 1 K steps settle in 10-12 s with ≤ 0.2 K.
+# The 16 Sept lesson above still stands — the models underpredicted the
+# rig's overshoot then — so check the first steps on the rig; the old
+# values are PID_KP 0.050, PID_KI 0.0010, PID_KD 0.10.
+PID_KP                = 0.20       # duty per °C of error
+PID_KI                = 0.0040     # duty per °C·s of accumulated error (Ti = 50 s)
 # Hold-power feedforward. auto-t (and auto-p's inner loop) applies
 #     duty = hold(T_sp) + PI(error)
 # so the PI only trims. Measured 21 Sept 2026 from 9 steady holds at
@@ -180,15 +190,20 @@ TEMP_BURST_TAU_S      = 2.5        # coast rise ÷ rate at the cut, s (starting 
 TEMP_BURST_TAU_MIN_S  = 0.5        # learning limits
 TEMP_BURST_TAU_MAX_S  = 6.0
 TEMP_BURST_LEARN      = 0.5        # weight of each new measurement in the tau estimate
+TEMP_BURST_SHORT_FRAC = 0.15       # aim the burst this share of the step short of the setpoint …
+TEMP_BURST_SHORT_MIN_K = 1.5       # … and at least this far short; the PID does the rest. The
+                                   # rig's coasts ran 0.6-2.5 K past the setpoint on 16-38 K
+                                   # steps (28-30 Sept: ≤ 10 % of the step), which the fitted
+                                   # models underpredict, so the burst is kept clear of it.
 TEMP_BURST_MAX_S      = 150.0      # never burst longer than this (21 Sept: 25 → 155 °C ≈ 95 s;
                                    # the response check catches a dead TC much sooner)
 TEMP_COAST_MAX_S      = 60.0
 TEMP_RATE_FILTER_S    = 1.0        # low-pass on the TC rate of change used for the cut, s
-PID_KD                = 0.10       # duty per °C/s, acts on the MEASUREMENT (no
-                                   # setpoint kick). 0 = PI, recommended here: in
-                                   # simulation D bought a few seconds of settling
-                                   # at the cost of amplified sensor noise. Try
-                                   # ≤ 0.2 if the thermocouple ever gets laggier.
+PID_KD                = 0.80       # duty per °C/s, acts on the MEASUREMENT (no
+                                   # setpoint kick), filtered over PID_D_FILTER_S. It
+                                   # damps the stronger P and I (30 Sept retune); with
+                                   # 0.05 K TC noise it moves the duty by ~2 % (sd),
+                                   # the held temperature by 0.02 K.
 PID_D_FILTER_S        = 5.0        # low-pass on the derivative, s
 PID_SETPOINT_DEFAULT  = 60.0       # °C
 

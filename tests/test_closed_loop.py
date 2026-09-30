@@ -49,15 +49,27 @@ def overshoot(out, t_from, setpoint):
     ("173217", 25.0, 155.0),     # real run: 159.5 °C for 155
 ])
 def test_a_burst_lands_without_overshoot(fit, t0, setpoint):
+    # 30 Sept 2026: at most 0.5 °C past the setpoint (t-min-tune steps 1 K)
     out, _, h = run_t(fit, t0, [(0, setpoint)], 400)
-    assert overshoot(out, 0, setpoint) < 1.0
+    assert overshoot(out, 0, setpoint) < 0.5
     assert abs(out[-1][1] - setpoint) < 0.5 and h['trip_reason'] is None
 
 
 def test_a_small_step_high_up_lands_without_overshoot():
     # real run 173217: 140 → 145 °C overshot to 152 °C
     out, _, _ = run_t("173217", 140.0, [(0, 140.0), (400, 145.0)], 700)
-    assert overshoot(out, 400, 145.0) < 1.0
+    assert overshoot(out, 400, 145.0) < 0.5
+
+
+@pytest.mark.parametrize("fit, start", [("150128", 35.0), ("152054", 80.0), ("173217", 115.0)])
+def test_1_K_steps_land_within_half_a_kelvin_and_quickly(fit, start):
+    # t-min-tune's staircase: +1 K every 300 s from a settled hold
+    sps = [(0, start)] + [(900 + 300 * i, start + 1 + i) for i in range(4)]
+    out, _, h = run_t(fit, start, sps, 900 + 300 * 4 + 300)
+    for t0, sp in sps[1:]:
+        seg = [(t, T) for t, T in out if t0 <= t < t0 + 300]
+        assert max(T for _, T in seg) - sp < 0.5
+        assert all(abs(T - sp) < 0.4 for t, T in seg if t >= t0 + 60)   # settled within 60 s
 
 
 def test_tau_is_learned_so_the_next_burst_lands_better():

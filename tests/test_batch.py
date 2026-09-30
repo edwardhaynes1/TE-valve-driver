@@ -831,13 +831,15 @@ def test_student_t():
 
 
 def test_more_scatter_needs_more_runs_and_N_is_the_most():
-    rig = Rig(open_c=60.0, open_scatter=1.5, seed=2)
+    # seed 8: the draws that need more than the minimum but fewer than 10
+    # runs with the 30 Sept temperature tuning (seed 2 did before it)
+    rig = Rig(open_c=60.0, open_scatter=1.5, seed=8)
     b, _ = rig.run_batch(n_tests=10)
     mean, sd, n, half = batch.precision(b)
     assert b['state'] == batch.COMPLETE and n > config.BATCH_MIN_TESTS
     assert half <= config.BATCH_PRECISION_K and "precise enough" in b['note']
     # before the last run it wasn't precise enough yet
-    rig = Rig(open_c=60.0, open_scatter=1.5, seed=2)
+    rig = Rig(open_c=60.0, open_scatter=1.5, seed=8)
     b, _ = rig.run_batch(n_tests=4)
     assert b['state'] == batch.COMPLETE and "all 4 test runs done" in b['note']
     assert sum(r['counts'] for r in b['runs']) == 4

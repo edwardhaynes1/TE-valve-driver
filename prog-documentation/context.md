@@ -61,7 +61,7 @@ differently from this page, fix one of them. Add terms as they appear.
 | **manual** | Fixed duty. |
 | **auto-t** | Holds a valve temperature setpoint: hold-power feedforward plus a PID trim. |
 | **auto-p** | Cascade: an outer loop on chamber pressure moves the auto-t setpoint. Avoid "pressure mode". |
-| **Burst** | Full power to reach a temperature fast, cut when the TC is predicted to coast onto the target: T + tau × rate of rise. *tau* (s) is learned from every coast. |
+| **Burst** | Full power to reach a temperature fast, cut when the TC is predicted to coast to *short of* the target: T + tau × rate of rise ≥ setpoint − max(1.5 K, 15 % of the step). The PID finishes the approach, so it lands within 0.5 °C (history 35). *tau* (s) is learned from every coast. |
 | **Coast** | Heater off after a burst until the valve temperature peaks; then hold feedforward + PID take over. |
 | **Seek** | auto-p phase with the valve shut: heat to the *goal*, then *creep* up (1 °C/min × gain scale) until the valve opens, at most 20 K above the opening point. |
 | **Goal** | Seek target temperature: the opening point (with the *upstream shift*), raised by at most 5 K by the feedforward for larger pressure targets. |

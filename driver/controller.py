@@ -47,7 +47,7 @@ from .config import (
     PRESSURE_UP_MAX_DOWN_K, PRESSURE_UP_MAX_SHIFT_K, PRESSURE_UP_REF_BAR,
     SEAT_SCREW_TOL_NM, SEAT_SCREW_VALVE, TC_MAX_RATE_K_S, TC_RESPONSE_DUTY,
     TC_RESPONSE_MIN_K, TC_RESPONSE_S, TEMP_BURST_ENABLE, TEMP_BURST_LEARN,
-    TEMP_BURST_MAX_S, TEMP_BURST_MIN_STEP_K, TEMP_BURST_TAU_MAX_S,
+    TEMP_BURST_MAX_S, TEMP_BURST_SHORT_FRAC, TEMP_BURST_SHORT_MIN_K, TEMP_BURST_MIN_STEP_K, TEMP_BURST_TAU_MAX_S,
     TEMP_BURST_TAU_MIN_S, TEMP_BURST_TAU_S, TEMP_COAST_MAX_S, TEMP_RATE_FILTER_S,
     TEMP_TRIP_C, VAC_HIGH_STATES, heater_power_w,
 )
@@ -139,6 +139,7 @@ def new_state():
         t_burst_t0      = None,
         t_burst_peak    = None,
         t_burst_cut     = None,    # (TC at the cut, rate at the cut)
+        t_burst_from    = None,    # TC where the burst began (the step it aims short of)
         t_tau           = TEMP_BURST_TAU_S,   # coast rise ÷ rate at the cut, s (learned)
         p_burst_t0      = None,    # when the current burst/coast stage began
         p_burst_peak    = None,    # coast: highest TC seen
@@ -375,6 +376,14 @@ def _cut_now(h, temp, aim):
     return temp + h['t_tau'] * max(0.0, h['rate']) >= aim
 
 
+def _burst_aim(h, setpoint):
+    """Where the burst aims: short of the setpoint by TEMP_BURST_SHORT_FRAC
+    of the step (at least TEMP_BURST_SHORT_MIN_K), so an underestimated
+    coast still lands below it; the PID finishes the approach."""
+    step = setpoint - (h['t_burst_from'] if h['t_burst_from'] is not None else setpoint)
+    return setpoint - max(TEMP_BURST_SHORT_MIN_K, TEMP_BURST_SHORT_FRAC * step)
+
+
 def _learn_tau(h, cut, peak):
     """Update tau from one coast: measured rise ÷ rate at the cut. Returns a
     note for the event log."""
@@ -394,7 +403,7 @@ def _temp_burst_step(h, temp, setpoint, now, msgs):
     if h['t_check']:
         h['t_check'] = False
         if TEMP_BURST_ENABLE and setpoint - temp >= TEMP_BURST_MIN_STEP_K:
-            h.update(t_burst='burst', t_burst_t0=now, t_burst_peak=None)
+            h.update(t_burst='burst', t_burst_t0=now, t_burst_peak=None, t_burst_from=temp)
             msgs.append(f"Temperature burst: full power from {temp:.1f} °C toward "
                         f"{setpoint:.1f} °C")
         elif h['t_burst']:
@@ -402,7 +411,7 @@ def _temp_burst_step(h, temp, setpoint, now, msgs):
     stage = h['t_burst']
     if stage == 'burst':
         el = now - h['t_burst_t0']
-        if _cut_now(h, temp, setpoint):
+        if _cut_now(h, temp, _burst_aim(h, setpoint)):
             msgs.append(f"Temperature burst: cut after {el:.1f} s at {temp:.1f} °C, "
                         f"rising {h['rate']:.2f} °C/s (tau {h['t_tau']:.1f} s) — coasting")
             h.update(t_burst='coast', t_burst_t0=now, t_burst_peak=temp,
