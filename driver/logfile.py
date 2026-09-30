@@ -8,7 +8,7 @@ import os
 import time
 from datetime import datetime
 
-from . import batchrun, control, cyclerun, schema, shared
+from . import batchrun, control, cyclerun, schema, shared, tminrun
 from .control import AUTO_P, AUTO_T, MANUAL
 from .config import (
     LOG_DIR, LOG_INTERVAL_S, heater_current_a, heater_power_w,
@@ -97,7 +97,9 @@ def logger_thread():
             h = control.snapshot()
             out = shared.heater_output()
             seat_nm = shared.seat_screw_torque()
-            batch_run, batch_phase = cyclerun.labels()
+            batch_run, batch_phase = tminrun.labels()
+            if not batch_run:                     # (cycling: history 34-35)
+                batch_run, batch_phase = cyclerun.labels()
             if not batch_run:                     # (batches: until history 34)
                 batch_run, batch_phase = batchrun.labels()
             on_s = round(control.take_on_time(), 3)
@@ -150,7 +152,8 @@ def logger_thread():
             if shared.health()['csv'] is False:
                 log_event("CSV logging resumed")
             shared.set_health(csv=True)
-            cyclerun.record_row(row)          # the cycle's own file, while cycling
+            tminrun.record_row(row)           # the test's own file, in t-min-tune
+            cyclerun.record_row(row)          # (a cycle's: history 34-35)
             batchrun.record_row(row)          # (a batch run's: until history 34)
 
         start = time.time()

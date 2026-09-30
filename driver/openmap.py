@@ -269,6 +269,9 @@ def _tkey(torque):
     return f"{torque:.2f}"
 
 
+torque_key = _tkey          # the fit's key for a torque (tminlog, history 36)
+
+
 def parse_time(s):
     """Epoch seconds of an ISO local time, or None."""
     return _time(s)

@@ -20,4 +20,6 @@ REF       = "#8a8a8a"   # dashed target / setpoint / budget lines
 TEMP_LINE = "#ff2a2a"   # valve temperature (red)
 VAC_LINE  = "#2f8cff"   # vacuum chamber pressure (blue)
 UP_LINE   = "#cfe6cf"   # upstream pressure (whitish green, secondary)
+UP_OUT    = "#ffb040"   # upstream outside its band (amber)
+UP_BAND   = "#8fbf8f"   # the band's edges around the upstream target
 PWR_LINE  = "#ffffff"   # heater power (white)

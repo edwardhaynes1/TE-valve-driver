@@ -37,42 +37,61 @@ with the 1 W flight budget dashed) and a scrolling event log.
 | Mode | What it does |
 |---|---|
 | **manual** | A fixed duty. |
-| **auto-t** | Holds a valve temperature setpoint: the measured hold power for that temperature (`HEATER_HOLD_*`), plus a PID that only trims. For a step up of `TEMP_BURST_MIN_STEP_K` or more it bursts at full power, cuts when the TC is predicted to coast onto the setpoint (T + tau × rate of rise, tau learned from every coast), and hands over at the peak. |
+| **auto-t** | Holds a valve temperature setpoint: the measured hold power for that temperature (`HEATER_HOLD_*`), plus a PID that only trims. For a step up of `TEMP_BURST_MIN_STEP_K` or more it bursts at full power, cuts when the TC is predicted to coast to just short of the setpoint (T + tau × rate of rise ≥ setpoint − max(1.5 K, 15 % of the step), tau learned from every coast), and hands over at the peak; the PID lands it within 0.5 °C (history 35). |
 | **auto-p** | A cascade holding a chamber pressure target, set relative to the valve's *opening point*: from the seat screw torque (`SEAT_SCREW_VALVE`), shifted for upstream pressure, and replaced by the point actually seen once the valve opens. It *seeks* first: burst (if well below), coast, then a setpoint creeping up with the valve shut, measuring the chamber baseline. When the pressure rises (the valve has opened) it *tracks* the target with a PI on log10(pressure), moving the auto-t setpoint; the gains and creep scale with the torque's e-fold, and upstream pressure changes are fed forward. The baseline also shows which targets the valve can't hold. |
 
 The heater can only add heat: auto-p can't cool the valve, so a target that
 would need that gets a warning and the minimum setpoint.
 
-### Cycling: mapping the opening point
+### t-min-tune: the lowest opening temperature
 
-To map the valve's *opening point* (the valve temperature where flow
-starts) against seat screw torque and upstream pressure: set the torque,
-enter it, choose **cycle** (the fourth mode), set **deep every** (default 5)
-and press **start cycling**. If the torque has been measured before it asks
-**has the seat screw been re-torqued (or the valve disturbed) since?** *No*
-continues that setting; *yes* starts a new one (its own offset in the fit).
-Then it cycles until you press **stop cycling** (or DISARM):
+To find the lowest valve temperature at which the valve opens (T_min) for a
+seat screw torque and an upstream pressure: set the torque, enter it,
+choose **t-min-tune** (the fourth mode), enter the **upstream target** (bar)
+and its **±** band (default 0.05 bar) and press **start t-min**. If the
+torque has been measured before it asks **has the seat screw been
+re-torqued (or the valve disturbed) since?** *No* continues that setting;
+*yes* starts a new one. Hold the upstream inside the band by topping up; the
+upstream chart is taller in this mode, with the band dotted and the trace
+amber outside it. Then, test after test:
 
-1. creep at 3 °C/min from a margin (2-5 K, from the scatter) below the
-   fit's prediction at the upstream pressure now;
-2. the opening is detected — heater off;
-3. cool until the valve has closed (the chamber back at its baseline) and is
-   the margin + 2 K below the prediction, whichever is later, and hold
-   there only until the chamber is settled;
-4. again.
+1. hold a start temperature below the estimate until the chamber is
+   settled — 10 K below while the setting has no result, 5 K with one, then
+   2 × the scatter of its latest results + 1 K (3-10 K);
+2. step the setpoint up 1 K every 5 min (from when the TC is within 0.5 K
+   of it) until the valve opens: that step is T_min (the TC at the onset);
+3. heater off; wait until the valve has closed — the chamber within +5 %
+   (0.02 decades) of its baseline before the opening and settled (< 0.01
+   decades/min); the TC then is T_close;
+4. again, from the new estimate.
 
-Every *deep every*-th cycle (the first included) cools to 35 °C (or T_open
-− 20 K) and holds 4 min, so the fit measures the warm-start effect. On a
-torque with nothing measured, the first cycle scouts from the torque table.
-Every creeping opening goes into the openings table and the fit (below),
-and the window shows two lines: the cycle, and the setting's status. Hold
-the upstream pressure where you like and refill by hand any time: while
-heating, detection pauses until the chamber is back, then the cycle carries
-on. An opening during the hold or the approach (the valve has moved down)
-isn't a reading: the next cycle starts 5 K lower. Two cycles in a row
-without an opening stop it. Files: `logs/cycles/<setting>/<session>/`
-(each cycle's trace and `session.json`). Settings: `CYCLE_*` in
-`driver/config.py`.
+The upstream leaving the band during the hold or a step cuts the heater and
+abandons the test; the next starts afresh once it is back inside. An
+opening during the hold (the start was too high) moves the next start 5 K
+lower. The estimate is this setting's latest results (corrected to the
+target along the opening map's pressure slope), else the other settings at
+this torque, else the opening map; with nothing at all, the first test
+scouts (3 °C/min from 10 K below the torque table). It stops when the last
+3 results lie within ±1 K of their mean, or when you press **stop t-min**
+(or DISARM).
+
+Every test is a row of **`logs/t-min.csv`**: time, setting, torque, target
+and band, outcome (t_min, opened at start, aborted: out of band, opened out
+of band, no opening, scout, stopped), start, step, T_min (and corrected to
+the target), T_detect, T_close, upstream at the opening, in band, baseline,
+the estimate and margin it started from, counted, converged, and the path
+of its trace. The estimates are recomputed from that file, so it is the one
+record of what has been learned; the code only appends to it, and `logs/`
+is not in git, so no commit or update touches it. A copy goes to the
+*T_min* sheet of the opening-map workbook. Traces:
+`logs/t-min/<setting>/<session>/test001.csv` … and `session.json`.
+Settings: `TMIN_*` in `driver/config.py`.
+
+### Cycling (history 34-35)
+
+Replaced in the window by t-min-tune; `driver/cycle.py` and `cyclerun.py`
+remain (with their tests), and its openings stay in `logs/openings.csv`,
+which the first estimate at a new torque can come from.
 
 ### Batches (until history 34)
 

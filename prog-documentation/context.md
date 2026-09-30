@@ -124,7 +124,26 @@ differently from this page, fix one of them. Add terms as they appear.
 | **Residual** | How far one opening lies from the fit: measured T_open minus what the fit predicts for it. Random if the fit is complete; a trend in time or background shows something the fit is missing. |
 | **Done (setting)** | The status line's flag: the setting's offset is known to ±1 K and its torque's slope to ±2 K/bar (95 %). Until the slope is, it suggests an upstream pressure that would widen the range (*try ~x bar*). It never stops anything. |
 
-## Cycling (history 34)
+## t-min-tune (history 36)
+
+| Term | Meaning |
+|---|---|
+| **t-min-tune** | The window's fourth mode (it replaced *cycle*): finds *T_min* at an *upstream target* by *step and dwell*, test after test, until the results converge or it is stopped. |
+| **T_min** | The lowest valve temperature (TC at the *onset*) at which the valve opens, at a given torque and upstream pressure, found with the valve given time at each temperature — not the T_open of a 3 °C/min creep, which reads higher (TC lag). |
+| **M_A** | The seat screw's tightening torque, N·m (the VDI 2230 symbol). |
+| **Upstream target, band** | The upstream pressure the operator holds by topping up, ± the band (default 0.05 bar ≈ ±0.5 K of T_min). Outside it (or not read) during the hold or a step, the heater cuts off and the test is *abandoned*. |
+| **Test** | One search: hold at the *start*, then *steps* until the valve opens, then wait until it has *closed*. `test001`, `test002` … in the log rows. |
+| **Start (temperature)** | The *estimate* minus the *margin*, rounded down to a whole degree; held until the chamber is settled. Near room temperature, where the heater can't cool the valve to it, the test starts where the valve settles. |
+| **Step / dwell** | A step raises the setpoint 1 K (`TMIN_STEP_K`); the dwell is the 5 min (`TMIN_DWELL_S`) it is held, counted from when the TC is within 0.5 K of it. The step where it opens is the result. |
+| **Estimate** | The T_min expected at the target: this setting's latest 3 results, else its scout, else the other settings at this torque, else the opening map's prediction; recomputed from `logs/t-min.csv` before every test. Results at other pressures are moved to the target along the map's pressure slope. |
+| **Margin (t-min)** | How far below the estimate a test starts: 10 K with no result at this setting, 5 K with one, then 2 × the scatter of its latest results + 1 K, within 3-10 K; +5 K after an *opened at start*. |
+| **Closed** | After an opening: the chamber within +0.02 decades (+5 %) of its baseline before the opening, and settled (< 0.01 decades/min). *T_close* is the TC when it got back within that. The valve closes 10-25 K below where it opened (hysteresis). 30 min cap. |
+| **Outcomes** | *t_min* (opened on a step — counted if in band), *opened at start* (during the hold: the start was too high), *aborted: out of band*, *opened out of band* (not counted), *no opening* (by 15 K above the estimate, or 155 °C: stops — the estimate is far off, or the valve was already open at the start), *scout* (the first test at a torque with nothing measured: a 3 °C/min ramp), *stopped*. |
+| **Converged** | The last 3 counted results all within ±1 K of their mean: the session stops. |
+| **Results file** | `logs/t-min.csv`, a row per test (columns: `schema.TMIN_COLUMNS`), only ever appended to; a version with new columns adds them at the end. The single record the estimates come from; `logs/` is not in git. |
+| **Renew (armed)** | A heater command that restarts the 60 min armed-time clock without touching anything else; t-min-tune sends it at each step, since one test can outlast an hour. The other interlocks are unchanged. |
+
+## Cycling (history 34-35; replaced in the window by t-min-tune)
 
 | Term | Meaning |
 |---|---|

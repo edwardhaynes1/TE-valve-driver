@@ -158,7 +158,11 @@ def command(h, now, **kwargs):
     always succeeds and always wins. The inner (temperature) integrator is
     reset only when switching to or from manual; auto-t ↔ auto-p keeps it,
     since both use the same inner loop and a reset would just cause a sag.
-    What auto-p has learned about the opening point is kept for the session."""
+    What auto-p has learned about the opening point is kept for the session.
+    renew=True restarts the maximum-armed-time clock of an armed heater and
+    changes nothing else (t-min-tune: one test can outlast it, step by step)."""
+    if kwargs.pop('renew', False) and h['armed']:
+        h['armed_at'] = now
     if 'armed' in kwargs:
         if kwargs['armed']:
             h['armed']       = True

@@ -29,7 +29,7 @@ def make_chart(parent, title):
 
 def draw_chart(canvas, data, font, fmt="{:.3f}", log=False,
            ref=None, floor=None, min_span=None,
-           color=BRIGHT, width=1):
+           color=BRIGHT, width=1, band=None, band_color=None, out_color=None):
     """Draw a strip chart on *canvas*.
 
     data  : sequence of values (oldest → newest)
@@ -44,6 +44,9 @@ def draw_chart(canvas, data, font, fmt="{:.3f}", log=False,
             Tick labels gain decimals automatically if they'd repeat.
     color : line colour of the data curve
     width : line width of the data curve, px
+    band  : optional (lo, hi) tolerance band, edges drawn dashed and kept in range
+    band_color : colour of the band edges
+    out_color  : colour of the curve where it lies outside the band
     """
     c = canvas
     c.delete("all")
@@ -90,6 +93,9 @@ def draw_chart(canvas, data, font, fmt="{:.3f}", log=False,
         lo, hi = min(lo, ref_p), max(hi, ref_p)
     if floor is not None:
         lo, hi = min(lo, floor[0]), max(hi, floor[1])
+    if band is not None:                       # the band, with a little room above and below
+        room = 0.5 * (band[1] - band[0])
+        lo, hi = min(lo, band[0] - room), max(hi, band[1] + room)
     need = max(min_span or 0.0, 1e-9)
     if hi - lo < need:
         mid = (hi + lo) / 2
@@ -118,8 +124,28 @@ def draw_chart(canvas, data, font, fmt="{:.3f}", log=False,
         y = ypix(ref_p)
         c.create_line(pad_l, y, w - pad_r, y, fill=REF, dash=(4, 3))
 
+    if band is not None:
+        for edge in band:
+            y = ypix(edge)
+            c.create_line(pad_l, y, w - pad_r, y, fill=band_color or REF, dash=(2, 3))
+
     pts = []
     for i, v in enumerate(plot_vals):
         pts.extend((pad_l + (w - pad_l - pad_r) * i / (n - 1), ypix(v)))
     c.create_line(*pts, fill=color, width=width)
+    if band is not None and out_color:                 # recolour the stretches outside the band
+        outside = [not (band[0] <= v <= band[1]) for v in plot_vals]
+        i = 0
+        while i < n:
+            if outside[i]:
+                j = i
+                while j + 1 < n and outside[j + 1]:
+                    j += 1
+                a, b = max(i - 1, 0), min(j + 1, n - 1)
+                seg = pts[2 * a:2 * b + 2]
+                if len(seg) >= 4:
+                    c.create_line(*seg, fill=out_color, width=width + 1)
+                i = j + 1
+            else:
+                i += 1
     c.tag_raise("title")

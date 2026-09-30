@@ -33,8 +33,8 @@ MAIN_COLUMNS = (
     ("heater_P_mean_meas",      "W, mean of per-tick V x I, blank unless sensing is wired"),
     ("heater_on_s",             "s, gate ON time since the previous row (from edge times)"),
     ("seat_screw_torque_Nm",    "N·m, TE-Valve seat screw torque as entered; blank = not recorded"),
-    ("batch_run",               "cycle001… while cycling (from history 34); scout1 / scout2 / testrun01… in a batch; blank otherwise"),
-    ("batch_phase",             "cooldown / hold / approach / creep (top-up: until history 33; settle: 24 Sept 2026 only), blank outside a batch"),
+    ("batch_run",               "test001… in t-min-tune (from history 36); cycle001… while cycling (history 34-35); scout1 / scout2 / testrun01… in a batch; blank otherwise"),
+    ("batch_phase",             "t-min-tune: wait / hold / step / scout / cool; cycling and batches: cooldown / hold / approach / creep (top-up: until history 33; settle: 24 Sept 2026 only); blank otherwise"),
 )
 
 # Switching log: te-sensor_<timestamp>_pwm.csv, one row per heater gate edge
@@ -152,9 +152,38 @@ OPENINGS_COLUMNS = (
     ("note",                  ""),
 )
 
+# The t-min-tune results: logs/t-min.csv, a row per test (history 36). New
+# columns are only ever added at the end; old files gain them when written.
+TMIN_COLUMNS = (
+    ("time",                  "ISO local time the test ended (the opening's onset, if it opened)"),
+    ("setting",               "one tightening of the seat screw: <date>_<time>_<torque>Nm"),
+    ("torque_Nm",             "seat screw torque M_A, N·m, as entered"),
+    ("upstream_target_bar",   "the upstream pressure the operator held (bar abs)"),
+    ("band_bar",              "± bar around the target"),
+    ("outcome",               "t_min / opened at start / aborted: out of band / opened out of band / "
+                              "no opening / scout / stopped"),
+    ("start_degC",            "the temperature held before stepping"),
+    ("step_degC",             "the last step's setpoint (where it opened, for t_min)"),
+    ("t_min_degC",            "TC at the onset of the opening"),
+    ("t_min_at_target_degC",  "t_min corrected to the target: − k × (target − upstream at the opening)"),
+    ("t_detect_degC",         "TC at detection"),
+    ("t_close_degC",          "TC when the chamber was back at its baseline (closed)"),
+    ("upstream_at_open_bar",  "upstream at the onset (bar abs)"),
+    ("in_band",               "1 = the upstream was inside the band at the onset"),
+    ("baseline_mbar",         "chamber baseline before the opening"),
+    ("estimate_degC",         "the estimate the test started from"),
+    ("margin_K",              "how far below the estimate it started"),
+    ("estimate_from",         "this setting / other settings at this torque / the opening map / scout"),
+    ("counted",               "1 = counts towards the estimate and convergence"),
+    ("converged",             "1 = the last results were within ± TMIN_CONVERGE_K after this test"),
+    ("trace",                 "the test's rows (main-log columns), relative to logs/"),
+    ("note",                  ""),
+)
+
 MAIN = tuple(name for name, _ in MAIN_COLUMNS)
 PWM = tuple(name for name, _ in PWM_COLUMNS)
 RUN_SUMMARY = tuple(name for name, _ in RUN_SUMMARY_COLUMNS)
 BATCH_SUMMARY = tuple(name for name, _ in BATCH_SUMMARY_COLUMNS)
 OPENINGS = tuple(name for name, _ in OPENINGS_COLUMNS)
+TMIN = tuple(name for name, _ in TMIN_COLUMNS)
 PWM_SUFFIX = "_pwm.csv"

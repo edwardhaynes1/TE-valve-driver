@@ -4,6 +4,49 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 36. t-min-tune replaces cycling: the lowest opening temperature, step by step — 30 Sept 2026
+Edward wants the *minimum* T_open for each upstream pressure and screw
+torque, found experimentally, rather than the creep's T_open. Agreed one
+question at a time:
+* **Step and dwell, not a creep.** A 3 °C/min ramp reads T_open high (the
+  TC leads the element) and can miss a slow opening. Each test holds a start
+  below the estimate until the chamber is settled, then raises the setpoint
+  1 K and holds each step 5 min (2-3 time constants) until it opens.
+* **Start well below, narrowing with results:** 10 K below the estimate
+  with no result at the setting (Edward: 3 K isn't enough; at least 5-10 K
+  and reduce as the estimate improves), 5 K with one, then 2 × scatter +
+  1 K (3-10 K). The estimate updates after every test.
+* **The upstream is held by hand in a band** (target ± 0.05 bar by
+  default: ≈ ±0.5 K of T_min; 30 Sept Edward held ±0.015 bar for 4 min).
+  Leaving it during the hold or a step cuts the heater and abandons the test
+  (Edward's rule); the next starts afresh inside the band. The window gets
+  a taller upstream chart with the band dotted and the trace amber outside.
+* **The valve must close before the next test**, judged by the chamber:
+  within +0.02 decades of its baseline before the opening, and settled.
+  Edward: T_open ≠ T_close — once open it must cool further to close
+  (28 Sept: 10-25 K). T_close is logged with every test.
+* **Stop when repeatable:** the last 3 results within ±1 K, or when stopped.
+* **One central results file**, `logs/t-min.csv`, a row per test including
+  the failed ones, never rewritten except to add new columns at the end;
+  the estimates are recomputed from it, and `logs/` is outside git, so
+  program updates can't touch what has been learned (Edward's requirement).
+* **The first estimate** at a new setting comes from the other settings at
+  the same torque (t-min results, else the opening map); only a torque with
+  nothing measured scouts first (Edward chose this over a scout at every
+  new tightening).
+* **"deep every" is gone** with cycling. `cycle.py`, `cyclerun.py` and their
+  tests remain; the window and logger use `tmin.py` / `tminrun.py`.
+* **A test can outlast the 60 min armed limit** (10 K at 5 min per step
+  plus the hold): each step renews the armed-time clock (a new heater
+  command, `renew`); every other interlock stays.
+The temperature control was retuned for it first (history 35): 1 K steps
+now settle in 10-12 s with ≤ 0.2 K overshoot in simulation.
+
+A valve already open at the start temperature (29 Sept, 0.30 N·m at 30 °C)
+shows no rise to detect: the steps stop 15 K above the estimate
+(`TMIN_ABOVE_EST_K`) with "no opening", which names that possibility,
+rather than climbing to 155 °C with the valve open.
+
 ## 35. auto-t lands within 0.5 °C, faster — 30 Sept 2026
 Edward: the feed-forward (the burst) must not overshoot the setpoint by more
 than 0.5 °C, and a D term should get the loop there faster. On the rig the

@@ -24,7 +24,7 @@ Same steady state (G K/W); ambient is settable (a warmer lab).
 import math
 import random
 
-from driver import batch, config, controller, cycle, openmap
+from driver import batch, config, controller, cycle, openmap, tmin, tminlog
 
 G_K_PER_W = 33.0
 TAU_TC = 80.0
@@ -201,3 +201,40 @@ class Rig:
                                            p_up_t=self.now, seat_nm=torque)
             self.advance(dt)
         return c, rows, fit[0], msgs
+
+    def run_tmin(self, torque=0.45, setting="s1", target=3.0, band=0.05, max_s=6 * 3600,
+                 rows=None, fit=None, hook=None, dt=0.25, idle_s=60, stop_after=None):
+        """t-min-tune until it ends or max_s; every finished test is a row of
+        `rows` (the t-min.csv stand-in) and the estimate is recomputed from
+        them, as tminrun does. Returns (s, rows, msgs)."""
+        rows = [] if rows is None else rows
+        s = tmin.new_session(torque, setting, target, band, self.now, self.idle(idle_s))
+
+        def estimate(tgt):
+            return tminlog.estimate(rows, setting, torque, tgt, fit)
+        msgs, self.events = [], []
+        while s['state'] == tmin.RUNNING and self.now - s['started'] < max_s:
+            vac, st = self.vac()
+            cmds, m, ev = tmin.step(s, self.now, self.T, vac, st, self.heater(),
+                                    self.upstream, self.now, estimate)
+            for x in cmds:
+                self.command(x)
+            msgs += m
+            self.events += ev
+            for kind, obj in ev:
+                if kind == 'test_end':
+                    slope = tminlog.slope_for(torque, fit)
+                    rows.append({k: ('' if v is None else str(v)) for k, v in
+                                 tmin.result_row(s, obj, slope, str(self.now)).items()})
+            if hook:
+                hook(self, s)
+            if stop_after is not None and s['results'] >= stop_after:
+                for x in tmin.stop(s, self.now, "enough")[0]:
+                    self.command(x)
+                break
+            self.duty, cm = controller.step(self.h, self.now, dt, self.T, True, vac=vac,
+                                            vac_status=st, p_up=self.upstream,
+                                            p_up_t=self.now, seat_nm=torque)
+            msgs += cm
+            self.advance(dt)
+        return s, rows, msgs

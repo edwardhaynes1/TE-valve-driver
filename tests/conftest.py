@@ -8,7 +8,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from driver import batchrun, config, control, controller, cyclerun, openings, shared  # noqa: E402
+from driver import (batchrun, config, control, controller, cyclerun, openings,  # noqa: E402
+                    shared, tminrun)
 
 
 def reset_shared():
@@ -16,6 +17,7 @@ def reset_shared():
     control.reset()
     batchrun.reset()
     cyclerun.reset()
+    tminrun.reset()
     openings.reset()
 
 
@@ -106,6 +108,8 @@ def fresh_state(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(config, "BATCH_WORKBOOK", str(tmp_path / "map.xlsx"))
     monkeypatch.setattr(config, "BATCH_DIR", str(tmp_path / "batches"))
     monkeypatch.setattr(config, "CYCLE_DIR", str(tmp_path / "cycles"))
+    monkeypatch.setattr(config, "TMIN_CSV", str(tmp_path / "t-min.csv"))
+    monkeypatch.setattr(config, "TMIN_DIR", str(tmp_path / "t-min"))
     reset_shared()
     clock = FakeClock()
     monkeypatch.setattr(control, "clock", clock)

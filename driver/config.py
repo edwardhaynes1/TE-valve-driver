@@ -495,6 +495,39 @@ CYCLE_REFILL_MAX_S      = 600.0    # a refill while heating pauses detection (se
                                    # the cycle is dropped
 CYCLE_DIR               = str(Path(__file__).resolve().parent.parent / "logs" / "cycles")
 
+# ─── t-min-tune — the lowest opening temperature, step by step (tmin.py; history 36) ───
+# At an upstream target the operator holds by hand (± TMIN_BAND_BAR, by
+# topping up), each test holds a start temperature below the estimate until
+# the chamber is settled, then steps the setpoint up TMIN_STEP_K every
+# TMIN_DWELL_S until the valve opens: that step is T_min. The upstream
+# leaving the band cuts the heater and abandons the test. After an opening
+# the valve must close (chamber back at its baseline, settled) before the
+# next test. Every test is a row of TMIN_CSV, which the estimates are
+# recomputed from; the logs folder is not in git, so no commit touches it.
+TMIN_CSV                = str(Path(__file__).resolve().parent.parent / "logs" / "t-min.csv")
+TMIN_DIR                = str(Path(__file__).resolve().parent.parent / "logs" / "t-min")
+TMIN_BAND_BAR           = 0.05     # ± bar around the upstream target (≈ ±0.5 K of T_open
+                                   # at ~10 K/bar; 30 Sept the operator held ±0.015 bar)
+TMIN_UP_CHART_WEIGHT    = 2        # the upstream chart's share of height in t-min-tune
+TMIN_STEP_K             = 1.0      # setpoint step
+TMIN_DWELL_S            = 300.0    # time at each step (2-3 thermal time constants)
+TMIN_STEP_BAND_K        = 0.5      # a step's dwell starts once the TC is this close to it
+TMIN_MARGIN_NEW_K       = 10.0     # start this far below the estimate: no result yet at this setting
+TMIN_MARGIN_ONE_K       = 5.0      # … one result (no scatter yet)
+TMIN_MARGIN_MIN_K       = 3.0      # from two results: 2 × their scatter + TMIN_STEP_K, within
+TMIN_MARGIN_MAX_K       = 10.0     # these limits
+TMIN_ABOVE_EST_K        = 15.0     # no opening by this far above the estimate: the test ends
+                                   # "no opening" and the session stops (the estimate is far off,
+                                   # or the valve was already open at the start: no rise to see)
+TMIN_OPENED_AT_START_K  = 5.0      # opened before stepping (the start was too high): the next
+                                   # test starts this much lower again
+TMIN_CLOSED_DEC         = 0.02     # closed: chamber within +5 % of the baseline before the
+                                   # opening, and settled (BATCH_SETTLE_MAX_*_DEC_MIN)
+TMIN_CLOSE_MAX_S        = 1800.0   # not closed within this long: stop
+TMIN_CONVERGE_N         = 3        # stop when the last N counted results, each corrected to
+TMIN_CONVERGE_K         = 1.0      # the target, all lie within ± this of their mean
+TMIN_ESTIMATE_LAST_N    = 3        # the estimate: the mean of this setting's last N results
+
 # ─── The opening map — every opening, one fit (openmap.py; history 34) ───
 OPENINGS_CSV            = str(Path(__file__).resolve().parent.parent / "logs" / "openings.csv")
 MAP_FIGURE              = str(Path(__file__).resolve().parent.parent / "logs"

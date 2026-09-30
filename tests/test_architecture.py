@@ -21,14 +21,17 @@ ALLOWED = {
     "labjack": {"config", "shared", "control", "thermocouple"},
     "batch": {"config", "controller"},
     "cycle": {"config", "controller", "batch"},
+    "tmin": {"config", "controller", "batch"},
     "workbook": set(),
     "openmap": {"config", "schema", "workbook"},
     "batchrun": {"config", "shared", "control", "schema", "batch", "workbook", "openings",
                  "openmap"},
-    "logfile": {"config", "shared", "control", "schema", "batchrun", "cyclerun"},
+    "tminlog": {"config", "schema", "workbook", "openmap", "tmin"},
+    "logfile": {"config", "shared", "control", "schema", "batchrun", "cyclerun", "tminrun"},
     "cyclerun": {"config", "shared", "control", "schema", "cycle", "openmap"},
+    "tminrun": {"config", "shared", "control", "schema", "tmin", "tminlog", "openmap"},
     "gui": {"config", "shared", "control", "labjack", "logfile", "palette",
-            "charts", "readout", "batchrun", "cyclerun", "openings"},
+            "charts", "readout", "batchrun", "tminrun", "openings"},
     "app": {"config", "shared", "control", "keller", "labjack", "logfile", "gui", "openings",
             "openmap"},
 }
@@ -129,3 +132,8 @@ def test_heater_formulas_live_only_in_config():
         code = "\n".join(re.sub(r"#.*", "", line) for line in source.splitlines())
         for formula in formulas:
             assert formula not in code, f"{path.name}: use the config.heater_… helpers"
+
+
+def test_t_min_logic_has_no_clock_threads_or_io():
+    _, external = imports_of("tmin")
+    assert external <= {"math", "collections", "datetime", "statistics"}, external

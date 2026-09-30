@@ -8,12 +8,12 @@ import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import messagebox
 
-from . import cyclerun
+from . import tminrun
 from . import logfile
 from . import readout
 from . import shared
 from .config import (
-    CYCLE_DEEP_EVERY,
+    CHART_SECONDS, TMIN_BAND_BAR, TMIN_UP_CHART_WEIGHT,
     FLIGHT_POWER_BUDGET_W, HEATER_I_AIN, HEATER_MAX_DUTY, HEATER_PWM_PERIOD_S,
     HEATER_R_OHM, HEATER_V_AIN, PID_SETPOINT_DEFAULT, PRESSURE_TARGET_DEFAULT,
     PRESSURE_TARGET_MIN, PRESSURE_TRIP_MBAR, TEMP_TRIP_C, heater_current_a,
@@ -23,8 +23,8 @@ from .control import AUTO_P, AUTO_T, MANUAL, MODES, heater_command, snapshot
 from .charts import draw_chart, make_chart
 from .labjack import LABJACK_AVAILABLE
 from .palette import (
-    BG, BORDER, BRIGHT, DIM, FIELD, FIELD_HOT, PROMPT, PWR_LINE, TEMP_LINE, TEXT, UP_LINE,
-    VAC_LINE, WARN,
+    BG, BORDER, BRIGHT, DIM, FIELD, FIELD_HOT, PROMPT, PWR_LINE, TEMP_LINE, TEXT, UP_BAND, UP_LINE,
+    UP_OUT, VAC_LINE, WARN,
 )
 
 # readout.py returns a tag per line; the window turns it into a colour.
@@ -32,11 +32,12 @@ TAG_COLOUR = {'bright': BRIGHT, 'dim': DIM, 'warn': WARN, 'err': WARN, 'ok': BRI
               'prompt': PROMPT}
 from .shared import log_event
 
-# The window's fourth mode. Not a heater mode (control.MODES): cycling drives
-# the heater itself, in auto-t, cycle by cycle (cyclerun), so selecting it
-# sends nothing to the heater. It replaced batches (history 34); the widget
-# and method names below still say batch.
-BATCH = "cycle"
+# The window's fourth mode. Not a heater mode (control.MODES): t-min-tune
+# drives the heater itself, in auto-t, test by test (tminrun), so selecting
+# it sends nothing to the heater. It replaced cycling (history 36), which
+# replaced batches (history 34); the widget and method names below still say
+# batch.
+BATCH = "t-min-tune"
 GUI_MODES = (*MODES, BATCH)
 
 
@@ -109,6 +110,9 @@ class TEGui:
         self.vac_canvas = make_chart(charts, "vacuum chamber (mbar, log)   dashed = target")
         self.te_canvas  = make_chart(charts, "valve temperature (°C)   dashed = setpoint")
         self.up_canvas  = make_chart(charts, "upstream pressure (bar abs, Keller raw)")
+        self._charts = charts
+        self._up_row = int(self.up_canvas.grid_info()['row'])
+        self._up_weight = 1
         self.heat_canvas = make_chart(
             charts, f"heater power (W, {p_src}, {HEATER_PWM_PERIOD_S:g} s mean)   "
                     f"dashed = {FLIGHT_POWER_BUDGET_W:g} W flight budget")
@@ -170,8 +174,8 @@ class TEGui:
             self.seat_value.pack(side="left")
 
     def _edit_seat_screw(self):
-        if cyclerun.running():
-            log_event("Cycling is running — the seat screw torque is locked until it stops")
+        if tminrun.running():
+            log_event("t-min-tune is running — the seat screw torque is locked until it stops")
             return
         nm = shared.seat_screw_torque()
         self._seat_editing = True
@@ -203,23 +207,24 @@ class TEGui:
         self._update_inputs()
         self._apply_batch_lock()
         if self.mode_var.get() == BATCH:
-            log_event("Mode cycle — set how often a cycle goes deep, then 'start cycling' "
-                      "(it arms the heater itself)"
+            log_event("Mode t-min-tune — enter the upstream target and ± band, then "
+                      "'start t-min' (it arms the heater itself)"
                       + (" · DISARM first" if snapshot()['armed'] else ""))
         else:
             self._send_update()
 
     def _update_inputs(self):
         """Enable only the input that belongs to the selected mode: duty,
-        setpoint, target, or (cycle) how often a cycle is deep. In cycle mode
-        "update" has nothing to send, so it is greyed out too."""
+        setpoint, target, or (t-min-tune) the upstream target and band. In
+        t-min-tune "update" has nothing to send, so it is greyed out too."""
         mode = self.mode_var.get()
         active = {MANUAL: self.duty_entry,
                   AUTO_T: self.sp_entry,
                   AUTO_P: self.p_entry,
-                  BATCH:  self.runs_entry}[mode]
-        for e in (self.duty_entry, self.sp_entry, self.p_entry, self.runs_entry):
-            on = e is active
+                  BATCH:  None}[mode]
+        cycle = (self.up_entry, self.band_entry)
+        for e in (self.duty_entry, self.sp_entry, self.p_entry, *cycle):
+            on = e is active or (mode == BATCH and e in cycle)
             e.configure(state="normal" if on else "disabled",
                         highlightbackground=BRIGHT if on else BORDER)
             e.label.configure(fg=TEXT if on else DIM)
@@ -228,17 +233,20 @@ class TEGui:
         self._show_action_buttons()
 
     def _show_action_buttons(self):
-        """"update" in manual / auto-t / auto-p; "start cycling" and "stop
-        cycling" in its place in cycle mode. Re-packs only on a change."""
+        """"update" in manual / auto-t / auto-p; "start t-min" and "stop
+        t-min" in its place in t-min-tune, with the upstream row below.
+        Re-packs only on a change."""
         batch = self.mode_var.get() == BATCH
         if batch == self._actions_shown:
             return
         self._actions_shown = batch
         for b in (self.update_btn, self.batch_btn, self.abort_btn):
             b.pack_forget()
+        self._up_row_frame.pack_forget()
         if batch:
             self.batch_btn.pack(side="left", padx=(0, 6))
             self.abort_btn.pack(side="left")
+            self._up_row_frame.pack(fill="x", pady=(0, 4), after=self._row2)
         else:
             self.update_btn.pack(side="left")
 
@@ -267,17 +275,26 @@ class TEGui:
         self.duty_entry = self._entry(row2, "duty %", "0", width=6)
         self.sp_entry   = self._entry(row2, "setpoint °C", f"{PID_SETPOINT_DEFAULT:g}", width=6)
         self.p_entry    = self._entry(row2, "target mbar", f"{PRESSURE_TARGET_DEFAULT:.1e}", width=9)
-        # Cycling (context.md, "Cycling"), the fourth mode: its input (how
-        # often a cycle is deep) sits with the other modes' inputs and is
-        # greyed out unless cycle is selected. In cycle mode "start cycling" /
-        # "stop cycling" take the place of "update" (_show_action_buttons).
-        # While it runs it owns the heater: the heater controls and the
-        # torque are locked, and DISARM stops it.
-        self.runs_entry = self._entry(row2, "deep every", f"{CYCLE_DEEP_EVERY}", width=4)
-        self.runs_entry.unbind("<Return>")
+        self._row2 = row2
+        # t-min-tune (context.md, "t-min-tune"), the fourth mode: "start
+        # t-min" / "stop t-min" take the place of "update"
+        # (_show_action_buttons). While it runs it owns the heater: the
+        # heater controls and the torque are locked, and DISARM stops it.
+        # Its inputs — the upstream pressure the operator holds by topping
+        # up, and the band around it — sit on a row of their own, shown only
+        # in t-min-tune; they stay editable while it runs (the band is drawn
+        # on the upstream chart; leaving it cuts the heater).
+        self._up_row_frame = tk.Frame(parent, bg=BG)
+        self.up_entry = self._entry(self._up_row_frame, "upstream target bar", "", width=6)
+        self.band_entry = self._entry(self._up_row_frame, "±", f"{TMIN_BAND_BAR:g}", width=5)
+        tk.Label(self._up_row_frame, text="bar  (hold it there by topping up)", font=self.f,
+                 fg=DIM, bg=BG).pack(side="left")
+        for e in (self.up_entry, self.band_entry):
+            e.unbind("<Return>")
+            e.bind("<Return>", lambda _ev: self._send_band())
         self.update_btn = tk.Button(row2, text="update", command=self._send_update, **btn)
-        self.batch_btn = tk.Button(row2, text="start cycling", command=self._start_batch, **btn)
-        self.abort_btn = tk.Button(row2, text="stop cycling", command=self._abort_batch, **btn)
+        self.batch_btn = tk.Button(row2, text="start t-min", command=self._start_batch, **btn)
+        self.abort_btn = tk.Button(row2, text="stop t-min", command=self._abort_batch, **btn)
         self._actions_shown = None
         self._show_action_buttons()
         # The three one-line status labels below the controls live in their
@@ -286,7 +303,7 @@ class TEGui:
         self._lines_frame = tk.Frame(parent, bg=BG)
         self._lines_frame.pack(fill="x")
         self.batch_status = tk.Label(self._lines_frame, text="", font=self.f, fg=DIM,
-                                     bg=BG, anchor="w")
+                                     bg=BG, anchor="w", justify="left")
         self._batch_running = False
         self._confirm = messagebox.askokcancel      # tests replace these two
         self._ask = messagebox.askyesnocancel
@@ -333,7 +350,8 @@ class TEGui:
         self.seat_btn.configure(fg=colour,
                                 highlightbackground=PROMPT if locked else BORDER)
         buttons = [self.arm_btn, *self.mode_buttons, self.update_btn]
-        entries = [self.duty_entry, self.sp_entry, self.p_entry, self.runs_entry]
+        entries = [self.duty_entry, self.sp_entry, self.p_entry, self.up_entry,
+                   self.band_entry]
         self._apply_batch_lock()
         if locked:
             for w in buttons + entries:
@@ -350,20 +368,20 @@ class TEGui:
             self._update_inputs()          # the selected mode's box only, as before
 
     def _apply_batch_lock(self):
-        """While cycling runs it owns the heater: mode, duty, setpoint,
+        """While t-min-tune runs it owns the heater: mode, duty, setpoint,
         target, update and the torque are locked; ARM stays (as DISARM,
         which stops it). Start needs a torque, nothing running and the
         heater disarmed; stop only works while it runs."""
-        busy = cyclerun.running()
+        busy = tminrun.running()
         self._batch_running = busy
         heater = [*self.mode_buttons, self.update_btn, self.duty_entry, self.sp_entry,
-                  self.p_entry, self.seat_entry, self.seat_btn, self.runs_entry]
+                  self.p_entry, self.seat_entry, self.seat_btn]
         if busy:
             for w in heater:
                 w.configure(state="disabled")
             for w in (*self.mode_buttons, self.update_btn, self.seat_btn):
                 w.configure(disabledforeground=DIM)
-            for e in (self.duty_entry, self.sp_entry, self.p_entry, self.runs_entry):
+            for e in (self.duty_entry, self.sp_entry, self.p_entry):
                 e.configure(highlightbackground=BORDER)
                 e.label.configure(fg=DIM)
         elif not getattr(self, "_locked", True):
@@ -382,69 +400,74 @@ class TEGui:
                                  fg=WARN if busy else TEXT, disabledforeground=DIM)
 
     def _start_batch(self):
-        """Start cycling: ask whether the screw was re-torqued if the torque
-        has a setting already (no: continue it; yes: a new setting), show
-        the measured upstream pressure, and start. It arms the heater
-        itself, cycle by cycle."""
+        """Start t-min-tune: ask whether the screw was re-torqued if the
+        torque has a setting already, else confirm the torque; then it arms
+        the heater itself, test by test."""
         if self.mode_var.get() != BATCH:
-            log_event("Cycling not started — select cycle mode first")
+            log_event("t-min-tune not started — select t-min-tune first")
             return
+        band = self.band_inputs()
+        if band is None:
+            log_event("t-min-tune not started — enter the upstream target (bar) and the "
+                      "± band (bar)")
+            return
+        target, width = band
+        problem = tminrun.start_problem(target, width)
         torque = shared.seat_screw_torque()
-        try:
-            every = int(self.runs_entry.get().strip())
-        except ValueError:
-            log_event(f"Cycling: deep every '{self.runs_entry.get()}' is not a whole number")
-            return
-        if not 1 <= every <= 100:
-            log_event("Cycling: deep every must be 1 to 100 (1: every cycle deep)")
-            return
-        if torque is None:
-            log_event("Cycling not started — enter the seat screw torque first")
-            return
-        problem = cyclerun.start_problem()
         if problem:
-            log_event(f"Cycling not started — {problem}")
+            log_event(f"t-min-tune not started — {problem}")
             return
         up, _ = shared.upstream()
-        up_txt = (f"{up:.3f} bar (measured; the fit corrects for it as it changes)"
-                  if up is not None else
-                  "NOT READ — openings without upstream can't be fitted; check the Keller")
-        common = (f"Upstream pressure: {up_txt}\n"
-                  "Hold it where you like and refill by hand any time (while heating, "
-                  "detection pauses until the chamber is back)\n"
-                  f"Every {every} cycle{'s' * (every > 1)}, one deep (35 °C and a 4 min hold)\n"
-                  "It runs until stopped; the status line says when this setting is done.\n"
-                  "\nCycling arms the heater itself for each cycle. "
-                  "SW171 must be on. DISARM or 'stop cycling' stops it.")
-        old = cyclerun.last_setting(torque)
+        up_txt = f"{up:.3f} bar now" if up is not None else "NOT READ — check the Keller"
+        common = (f"Upstream: hold {target:g} ± {width:g} bar by topping up ({up_txt}).\n"
+                  "Outside the band the heater cuts off and the test is abandoned; the "
+                  "next starts afresh once you are back inside.\n"
+                  "Each test: hold below the estimate until the chamber is settled, then "
+                  "+1 K every 5 min until it opens; then it waits for the valve to close.\n"
+                  "It stops when the last 3 results agree within ±1 K, or when you stop it. "
+                  "Every test is a row of logs/t-min.csv.\n"
+                  "\nt-min-tune arms the heater itself. SW171 must be on. DISARM or "
+                  "'stop t-min' stops it.")
+        old = tminrun.last_setting(torque)
         retorqued = None
         if old is not None:
             answer = self._ask(
-                "Start cycling",
+                "Start t-min-tune",
                 f"Seat screw torque: {torque:.2f} N·m\n"
                 f"Latest setting at this torque: {old}\n\n"
                 f"Has the seat screw been re-torqued (or the valve disturbed) since?\n\n"
-                f"No: continue that setting.\n"
-                f"Yes: start a new setting (its own offset in the fit).\n\n" + common)
+                f"No: continue that setting (its results so far set the estimate).\n"
+                f"Yes: start a new setting (the estimate comes from the other settings "
+                f"at this torque).\n\n" + common)
             if answer is None:
-                log_event("Cycling not started (cancelled)")
+                log_event("t-min-tune not started (cancelled)")
                 return
             retorqued = bool(answer)
         elif not self._confirm(
-                "Start cycling",
+                "Start t-min-tune",
                 f"Seat screw torque: {torque:.2f} N·m\n"
                 f"Is that the torque on the valve now?\n\n"
-                "Nothing measured at this torque yet: a new setting; the first cycle "
+                "Nothing measured at this torque yet: a new setting; the first test "
                 "scouts from the torque table.\n" + common):
-            log_event("Cycling not started (cancelled)")
+            log_event("t-min-tune not started (cancelled)")
             return
-        ok, msg = cyclerun.start(logfile.LOG_FILE, retorqued=retorqued, deep_every=every)
+        ok, msg = tminrun.start(logfile.LOG_FILE, retorqued=retorqued, target=target,
+                                band=width)
         if not ok:
             log_event(msg)
         self._apply_gate()
 
+    def _send_band(self):
+        """The upstream target or band typed while t-min-tune runs."""
+        band = self.band_inputs()
+        if band is None:
+            log_event("t-min-tune: the upstream target and ± band must be numbers "
+                      "(bar) — unchanged")
+            return
+        tminrun.set_band(*band)
+
     def _abort_batch(self):
-        cyclerun.stop("stopped by the operator")
+        tminrun.stop("stopped by the operator")
         self._apply_gate()
 
     def _set_seat_screw(self):
@@ -470,13 +493,13 @@ class TEGui:
         if snapshot()['armed']:
             heater_command(armed=False)
             log_event("Heater DISARMED by operator")
-            if cyclerun.running():
-                cyclerun.stop("heater disarmed by the operator")
-        elif cyclerun.running():
-            log_event("Cycling is running and arms the heater itself — "
-                      "'stop cycling' to stop it")
+            if tminrun.running():
+                tminrun.stop("heater disarmed by the operator")
+        elif tminrun.running():
+            log_event("t-min-tune is running and arms the heater itself — "
+                      "'stop t-min' to stop it")
         elif self.mode_var.get() == BATCH:
-            log_event("Cycle mode: 'start cycling' arms the heater itself — "
+            log_event("t-min-tune: 'start t-min' arms the heater itself — "
                       "choose manual, auto-t or auto-p to ARM by hand")
         else:
             self._send_update(quiet_if_unchanged=True)   # picks up un-sent edits to the active value, logged
@@ -536,7 +559,7 @@ class TEGui:
         self._input_noted = False
         mode = self.mode_var.get()
         if mode == BATCH:
-            # Nothing of its own to send: keep (or, after cycling, restore)
+            # Nothing of its own to send: keep (or, after t-min-tune, restore)
             # the heater mode last sent from the window.
             mode = a['mode'] or MANUAL
 
@@ -619,6 +642,23 @@ class TEGui:
                           f"  calc (duty × {p_full:.2f} W full)", "bright"))
         return lines
 
+    def band_inputs(self):
+        """(target, band) in bar from the t-min-tune inputs, or None if the
+        target is blank or either is not a sensible number."""
+        try:
+            t = float(self.up_entry.get())
+            b = abs(float(self.band_entry.get()))
+        except ValueError:
+            return None
+        if not (0.0 < t < 20.0) or not (0.0 < b < 5.0):
+            return None
+        return t, b
+
+    def upstream_band(self):
+        """(target, lo, hi) in bar from the t-min-tune inputs, or None."""
+        tb = self.band_inputs()
+        return None if tb is None else (tb[0], tb[0] - tb[1], tb[0] + tb[1])
+
     def _poll(self):
         """Redraw everything from the current readings. Runs every
         GUI_REFRESH_MS on the Tk thread."""
@@ -646,13 +686,13 @@ class TEGui:
         self.heater_status.configure(text=text, fg=TAG_COLOUR[tag])
         text, tag = readout.loop_status(h)
         self.loop_status.configure(text=text, fg=TAG_COLOUR[tag])
-        busy = cyclerun.running()
-        line = cyclerun.status()
+        busy = tminrun.running()
+        line = tminrun.status()
         self.batch_status.configure(text=line or "", fg=BRIGHT if busy else DIM)
         self._show_lines()
         if busy != self._batch_running:
             if not busy:
-                # Cycling drove the heater in auto-t; back to the window's settings.
+                # t-min-tune drove the heater in auto-t; back to the window's settings.
                 self._send_update(quiet_if_unchanged=True)
             self._apply_gate()
         else:
@@ -671,8 +711,22 @@ class TEGui:
                          min_span=0.05, color=VAC_LINE, width=2)
         draw_chart(self.te_canvas,   te_chart, self.f,   fmt="{:.1f}", ref=te_ref, min_span=0.5,
                          color=TEMP_LINE, width=2)
-        draw_chart(self.up_canvas,   up_chart, self.f,   fmt="{:.3f}", min_span=0.005,
-                         color=UP_LINE, width=1)
+        cycle_mode = mode == BATCH or self.mode_var.get() == BATCH
+        weight = TMIN_UP_CHART_WEIGHT if cycle_mode else 1
+        if weight != self._up_weight:                  # taller upstream chart in t-min-tune
+            self._up_weight = weight
+            self._charts.rowconfigure(self._up_row, weight=weight)
+        band = (tminrun.band() or self.upstream_band()) if cycle_mode else None
+        if band:
+            t, lo_b, hi_b = band
+            self.up_canvas.title = (f"upstream (bar abs)   dotted = target {t:g} ± {hi_b - t:g}   amber = outside")
+            draw_chart(self.up_canvas, up_chart, self.f, fmt="{:.3f}", min_span=6 * (hi_b - t),
+                       ref=t, band=(lo_b, hi_b), band_color=UP_BAND, out_color=UP_OUT,
+                       color=UP_LINE, width=2)
+        else:
+            self.up_canvas.title = f"upstream pressure (bar abs, Keller raw)  ·  last {CHART_SECONDS}s"
+            draw_chart(self.up_canvas,   up_chart, self.f,   fmt="{:.3f}", min_span=0.005,
+                             color=UP_LINE, width=1)
         draw_chart(self.heat_canvas, heat_chart, self.f, fmt="{:.2f}",
                          ref=FLIGHT_POWER_BUDGET_W, floor=(0.0, 1.05 * p_full),
                          color=PWR_LINE, width=1)
@@ -690,7 +744,7 @@ class TEGui:
             self._poll_job = self.root.after(150, self._poll)
 
     def shutdown(self):
-        cyclerun.stop("driver closed")           # closes the cycle's files first
+        tminrun.stop("driver closed")           # closes the test's files first
         heater_command(armed=False)
         log_event("Shutdown — heater disarmed")
         shared.stop.set()
