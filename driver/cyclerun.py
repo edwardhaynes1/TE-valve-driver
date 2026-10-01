@@ -23,7 +23,7 @@ import os
 import subprocess
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import config, control, cycle, openmap, schema, shared
@@ -127,6 +127,9 @@ def start(main_log="", retorqued=None, deep_every=None, start_thread=True):
         name, how = old, f"continuing setting {old}"
     else:
         name = f"{now_dt:%Y%m%d_%H%M%S}_{torque:.2f}Nm"
+        while name == old:              # started within the same second: a later name
+            now_dt += timedelta(seconds=1)
+            name = f"{now_dt:%Y%m%d_%H%M%S}_{torque:.2f}Nm"
         how = f"new setting {name}" + (" (re-torqued)" if retorqued else "")
     path = os.path.join(config.CYCLE_DIR, name, f"{now_dt:%Y%m%d_%H%M%S}")
     try:

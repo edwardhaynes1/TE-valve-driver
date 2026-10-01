@@ -20,7 +20,7 @@ import csv
 import json
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import config, control, openmap, schema, shared, tmin, tminlog
 from .shared import log_event
@@ -142,6 +142,9 @@ def start(main_log="", retorqued=None, target=None, band=None, start_thread=True
         name, how = old, f"continuing setting {old}"
     else:
         name = f"{now_dt:%Y%m%d_%H%M%S}_{torque:.2f}Nm"
+        while name == old:              # started within the same second: a later name
+            now_dt += timedelta(seconds=1)
+            name = f"{now_dt:%Y%m%d_%H%M%S}_{torque:.2f}Nm"
         how = f"new setting {name}" + (" (re-torqued)" if retorqued else "")
     path = os.path.join(config.TMIN_DIR, name, f"{now_dt:%Y%m%d_%H%M%S}")
     try:

@@ -309,3 +309,33 @@ def test_the_band_can_change_while_it_runs(clock):
     assert tminrun.set_band(2.0, 0.1)
     assert tminrun._s['target'] == 2.0 and tminrun._s['band'] == 0.1
     assert not tminrun.set_band(None, 0.1)
+
+
+@pytest.mark.parametrize("runner", ["tminrun", "cyclerun"])
+def test_a_new_setting_in_the_same_second_gets_its_own_name(clock, monkeypatch, runner):
+    # setting names are to the second; a re-torque started within the same
+    # second as the last setting (fast test machines) must not reuse its name
+    import datetime as dt
+    from driver import cyclerun
+    mod = {"tminrun": tminrun, "cyclerun": cyclerun}[runner]
+    fixed = dt.datetime(2026, 10, 1, 8, 14, 48)
+
+    class Frozen(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+    monkeypatch.setattr(mod, "datetime", Frozen)
+    ready(clock)
+    kw = dict(target=3.0, band=0.05) if runner == "tminrun" else {}
+    ok, first = mod.start(start_thread=False, **kw)
+    mod.stop("test")
+    if runner == "tminrun":
+        tminlog.append(dict(time="2026-10-01T08:14:48", setting=first, torque_Nm=0.45,
+                            outcome="stopped"), sheet=False)
+    else:
+        from driver import openmap
+        openmap.append(dict(time="2026-10-01T08:14:48", setting=first, torque_Nm=0.45,
+                            upstream_bar=3.0, t_open_degC=128.0, deep=1), sheet=False)
+    ok, second = mod.start(retorqued=True, start_thread=False, **kw)
+    assert ok and second != first and second.endswith("_0.45Nm")
+    assert second == "20261001_081449_0.45Nm"
