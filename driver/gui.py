@@ -13,7 +13,8 @@ from . import logfile
 from . import readout
 from . import shared
 from .config import (
-    CHART_SECONDS, TMIN_BAND_BAR, TMIN_UP_CHART_WEIGHT,
+    CHART_SECONDS, TMIN_BAND_BAR, TMIN_QUIT_DELAY_S, TMIN_QUIT_WHEN_CONVERGED,
+    TMIN_UP_CHART_WEIGHT,
     FLIGHT_POWER_BUDGET_W, HEATER_I_AIN, HEATER_MAX_DUTY, HEATER_PWM_PERIOD_S,
     HEATER_R_OHM, HEATER_V_AIN, PID_SETPOINT_DEFAULT, PRESSURE_TARGET_DEFAULT,
     PRESSURE_TARGET_MIN, PRESSURE_TRIP_MBAR, TEMP_TRIP_C, heater_current_a,
@@ -305,6 +306,7 @@ class TEGui:
         self.batch_status = tk.Label(self._lines_frame, text="", font=self.f, fg=DIM,
                                      bg=BG, anchor="w", justify="left")
         self._batch_running = False
+        self._quit_at = self._quit_for = None   # auto-close after convergence (history 39)
         self._confirm = messagebox.askokcancel      # tests replace these two
         self._ask = messagebox.askyesnocancel
 
@@ -688,6 +690,10 @@ class TEGui:
         self.loop_status.configure(text=text, fg=TAG_COLOUR[tag])
         busy = tminrun.running()
         line = tminrun.status()
+        if self._auto_close(busy):
+            return                              # closed: nothing left to draw
+        if self._quit_at is not None:
+            line = (line or "") + f" · the driver closes in {self._quit_at - time.monotonic():.0f} s"
         self.batch_status.configure(text=line or "", fg=BRIGHT if busy else DIM)
         self._show_lines()
         if busy != self._batch_running:
@@ -742,6 +748,29 @@ class TEGui:
 
         if not shared.stop.is_set():
             self._poll_job = self.root.after(150, self._poll)
+
+    def _auto_close(self, busy):
+        """t-min-tune converged — the valve had closed, the heater is
+        disarmed: close the driver TMIN_QUIT_DELAY_S later (history 39),
+        once per session. Starting t-min-tune again cancels it. True once
+        closed."""
+        key = tminrun.converged_session() if TMIN_QUIT_WHEN_CONVERGED else None
+        if key is not None and key != self._quit_for:
+            self._quit_for, self._quit_at = key, time.monotonic() + TMIN_QUIT_DELAY_S
+            log_event(f"t-min-tune converged and the valve has closed — the driver closes in "
+                      f"{TMIN_QUIT_DELAY_S:g} s (start t-min-tune again to keep it open)")
+        if self._quit_at is None:
+            return False
+        if busy:
+            self._quit_at = None
+            log_event("Closing the driver cancelled — t-min-tune started again")
+            return False
+        if time.monotonic() < self._quit_at:
+            return False
+        self._quit_at = None
+        log_event("Closing the driver: t-min-tune converged")
+        self.shutdown()
+        return True
 
     def shutdown(self):
         tminrun.stop("driver closed")           # closes the test's files first

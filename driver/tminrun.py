@@ -38,6 +38,15 @@ def running():
         return _s is not None and _s['state'] == tmin.RUNNING
 
 
+def converged_session():
+    """The finished session's start time if it ended converged, else None
+    (the window closes the driver once per such session; history 39)."""
+    with _lock:
+        if _s is None or _s['state'] != tmin.CONVERGED:
+            return None
+        return _s['started']
+
+
 def status():
     with _lock:
         if _s is None:

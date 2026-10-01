@@ -74,7 +74,10 @@ target along the opening map's pressure slope), else the other seatings at
 this torque, else the opening map; with nothing at all, the first test
 scouts (3 °C/min from 10 K below the torque table). It stops when the last
 3 results lie within ±1 K of their mean, or when you press **stop t-min**
-(or DISARM).
+(or DISARM). When it converges — the valve has closed by then and the
+heater is disarmed — the driver closes itself 60 s later, saving its logs as
+when you close the window; starting t-min-tune again within that minute
+cancels it (`TMIN_QUIT_WHEN_CONVERGED`, `TMIN_QUIT_DELAY_S`).
 
 Every test is a row of **`logs/t-min.csv`**: time, seating, torque, target
 and band, outcome (t_min, opened at start, aborted: out of band, opened out

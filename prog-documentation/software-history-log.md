@@ -4,6 +4,17 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 39. The driver closes itself once t-min-tune has converged — 1 Oct 2026
+Edward wants the driver to close by itself when a session is done, after
+the valve has closed. Convergence is only checked once the last test's
+valve has closed (chamber back at its baseline), and the heater is already
+disarmed, so the window closes the driver `TMIN_QUIT_DELAY_S` (60 s) after
+a converged session, the same way as closing the window (heater disarmed,
+logs saved, watchdog released). Only for *converged*: a session stopped by
+the operator or by a fault leaves the window open to show why. Starting
+t-min-tune again within the minute cancels it; `TMIN_QUIT_WHEN_CONVERGED =
+False` turns it off.
+
 ## 38. t-min-tune starts 2 K below the lowest result; the converged T_min is recorded — 1 Oct 2026
 The first 0.30 N·m session (1 Oct, 0.959 bar) converged on 67.3 °C, but
 spent most of its time on steps where the valve never opens: test006 held

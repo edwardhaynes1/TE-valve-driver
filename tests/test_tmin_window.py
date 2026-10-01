@@ -253,3 +253,40 @@ def test_the_band_is_drawn_and_the_upstream_chart_is_taller(gui):
     gui._on_mode()
     gui._poll()
     assert gui._up_weight == 1 and "target" not in gui.up_canvas.title
+
+
+# ── closing the driver once t-min-tune has converged (history 39) ───────────
+
+def _converged(monkeypatch, gui, running=False):
+    import driver.gui as gm
+    monkeypatch.setattr(gm, "TMIN_QUIT_DELAY_S", 0.2)
+    monkeypatch.setattr(tminrun, "converged_session", lambda: 1234.0)
+    monkeypatch.setattr(tminrun, "running", lambda: running)
+    closed = []
+    gui.shutdown = lambda: closed.append(True)
+    return closed
+
+
+def test_the_driver_closes_after_t_min_tune_converged(gui, monkeypatch):
+    closed = _converged(monkeypatch, gui)
+    assert gui._auto_close(False) is False                  # the countdown starts
+    assert gui._quit_at is not None
+    assert any("closes in" in t for _, t in shared.recent_events())
+    time.sleep(0.25)
+    assert gui._auto_close(False) is True and closed == [True]
+    assert gui._auto_close(False) is False and closed == [True]   # once per session
+
+
+def test_starting_again_cancels_the_close(gui, monkeypatch):
+    closed = _converged(monkeypatch, gui)
+    gui._auto_close(False)
+    time.sleep(0.25)
+    assert gui._auto_close(True) is False and gui._quit_at is None and not closed
+    assert any("cancelled" in t for _, t in shared.recent_events())
+
+
+def test_it_can_be_switched_off(gui, monkeypatch):
+    import driver.gui as gm
+    closed = _converged(monkeypatch, gui)
+    monkeypatch.setattr(gm, "TMIN_QUIT_WHEN_CONVERGED", False)
+    assert gui._auto_close(False) is False and gui._quit_at is None and not closed
