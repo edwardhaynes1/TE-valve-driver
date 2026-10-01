@@ -7,6 +7,7 @@ The logic is in tmin.py; this module adds the clock, the thread and the I/O
     estimate_problem(estimate_c) -> str or None
     set_band(target, band)                  GUI: the operator changed them
     last_seating(torque) -> name or None    the newest seating at this torque
+    seating_lock_nut(name) -> N·m or None   its lock nut torque, as recorded
     stop(reason)                            GUI: stop, DISARM, closing
     running() / status() / labels()         for the window and the log rows
     record_row(row)                         logger: a main-log row was written
@@ -101,6 +102,19 @@ def last_seating(torque):
     return best[1] if best else None
 
 
+def seating_lock_nut(name):
+    """The lock nut torque last recorded for this seating in t-min.csv, or
+    None (not recorded, or rows from before history 43)."""
+    found = None
+    for r in tminlog.load():
+        if r.get('seating') == name:
+            try:
+                found = float(r.get('lock_nut_torque_Nm'))
+            except (TypeError, ValueError):
+                pass
+    return found
+
+
 def band_problem(target, band):
     if target is None:
         return "enter the upstream target (bar)"
@@ -161,6 +175,7 @@ def start(main_log="", retorqued=None, target=None, band=None, estimate_c=None,
     if problem:
         return False, f"t-min-tune not started — {problem}"
     torque = shared.seat_screw_torque()
+    nut = shared.lock_nut_torque()
     old = last_seating(torque)
     now_dt = datetime.now()
     if retorqued is False and old is not None:
@@ -176,7 +191,8 @@ def start(main_log="", retorqued=None, target=None, band=None, estimate_c=None,
         os.makedirs(path, exist_ok=True)
         with open(os.path.join(path, "session.json"), "w", encoding="utf-8") as f:
             json.dump(dict(seating=name, started=now_dt.isoformat(timespec='seconds'),
-                           seat_screw_torque_Nm=torque, retorqued=retorqued,
+                           seat_screw_torque_Nm=torque, lock_nut_torque_Nm=nut,
+                           retorqued=retorqued,
                            continued=(name == old), upstream_target_bar=target, band_bar=band,
                            operator_estimate_degC=estimate_c, main_log=main_log, detect_rule=openmap.current_rule(),
                            results=config.TMIN_CSV, settings=_settings()), f, indent=2)
@@ -193,16 +209,18 @@ def start(main_log="", retorqued=None, target=None, band=None, estimate_c=None,
             low = None
         _s = tmin.new_session(torque, name, target, band, control.clock(),
                               shared.vacuum_history(), opened_low=low,
-                              operator_est=estimate_c)
+                              operator_est=estimate_c, lock_nut=nut)
         _folder, _fit = path, fit
         _files.clear()
     est = _estimate(target)
     if estimate_c is not None and (est is None or not est['how'].startswith(tminlog.OPERATOR)):
         log_event(f"t-min-tune: your estimate {estimate_c:g} °C is not used — this seating "
                   f"has a result of its own")
-    log_event(f"t-min-tune started at {torque:.2f} N·m, {how}; upstream {target:g} ± {band:g} "
-              f"bar; " + (f"estimate {est['T']:.1f} °C ({est['how']})" if est else
-                          "nothing measured at this torque yet: the first test scouts")
+    log_event(f"t-min-tune started at {torque:.2f} N·m"
+              + (f" (lock nut {nut:.2f} N·m)" if nut is not None else "")
+              + f", {how}; upstream {target:g} ± {band:g} bar; "
+              + (f"estimate {est['T']:.1f} °C ({est['how']})" if est else
+                 "nothing measured at this torque yet: the first test scouts")
               + f" — results to {config.TMIN_CSV}")
     if start_thread:
         _thread = threading.Thread(target=_loop, daemon=True, name="t-min-tune")

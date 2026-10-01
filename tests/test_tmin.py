@@ -357,7 +357,7 @@ def test_the_start_can_be_capped_at_the_last_T_close(monkeypatch):
 
 def test_the_converged_T_min_is_filled_in_for_rows_written_before(tmp_path):
     p = tmp_path / "t-min.csv"
-    cols = list(schema.TMIN)[:-1]                     # the file before history 38
+    cols = list(schema.TMIN)[:schema.TMIN.index('t_min_converged_degC')]  # before history 38
     with open(p, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(cols)

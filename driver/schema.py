@@ -35,6 +35,7 @@ MAIN_COLUMNS = (
     ("seat_screw_torque_Nm",    "N·m, TE-Valve seat screw torque as entered; blank = not recorded"),
     ("batch_run",               "test001… in t-min-tune (from history 36); cycle001… while cycling (history 34-35); scout1 / scout2 / testrun01… in a batch; blank otherwise"),
     ("batch_phase",             "t-min-tune: wait / hold / step / scout / cool; cycling and batches: cooldown / hold / approach / creep (top-up: until history 33; settle: 24 Sept 2026 only); blank otherwise"),
+    ("lock_nut_torque_Nm",      "N·m, lock nut torque as entered (history 43); blank = not recorded"),
 )
 
 # Switching log: te-sensor_<timestamp>_pwm.csv, one row per heater gate edge
@@ -173,7 +174,8 @@ TMIN_COLUMNS = (
     ("baseline_mbar",         "chamber baseline before the opening"),
     ("estimate_degC",         "the estimate the test started from"),
     ("margin_K",              "how far below the estimate it started"),
-    ("estimate_from",         "this seating / other seatings at this torque / the opening map / scout"),
+    ("estimate_from",         "this seating / the operator's estimate (history 42) / other seatings at "
+                              "this torque / the opening map / scout"),
     ("counted",               "1 = counts towards the estimate and convergence"),
     ("converged",             "1 = the last results were within ± TMIN_CONVERGE_K after this test"),
     ("trace",                 "the test's rows (main-log columns), relative to logs/"),
@@ -181,6 +183,8 @@ TMIN_COLUMNS = (
     ("t_min_converged_degC",  "on the row that converged: the converged T_min, the mean of the last "
                               "TMIN_CONVERGE_N counted results at the target (history 38; filled in "
                               "for rows written before)"),
+    ("lock_nut_torque_Nm",    "lock nut torque, N·m, as entered at the start (history 43); blank = "
+                              "not recorded"),
 )
 
 # Columns renamed since they were first written: old name → new. Files

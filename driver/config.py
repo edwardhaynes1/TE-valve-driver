@@ -93,6 +93,8 @@ def power_from_voltage_w(volts):
 # ─── TE-Valve settings the operator enters ───────────────────────────────────
 SEAT_SCREW_TORQUE_MAX_NM = 5.0     # highest seat screw torque the driver accepts, N·m.
                                    # Blank at start-up until entered (see context.md).
+LOCK_NUT_TORQUE_MAX_NM  = 5.0      # highest lock nut torque it accepts, N·m (history 43).
+                                   # Optional: blank = not recorded; locks nothing.
 
 # ─── Heater interlocks ───────────────────────────────────────────────────────
 TEMP_TRIP_C           = 160.0      # latch off above this valve temperature

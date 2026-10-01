@@ -107,7 +107,7 @@ def test_the_column_is_appended_at_the_end():
     # Appended after the 22 older columns; later columns (the batch labels)
     # come after it, never before (schema.py: append-only).
     assert schema.MAIN.index("seat_screw_torque_Nm") == 22
-    assert schema.MAIN[23:] == ("batch_run", "batch_phase")
+    assert schema.MAIN[23:25] == ("batch_run", "batch_phase")
 
 
 def test_every_row_carries_the_value_blank_until_entered(tmp_path, monkeypatch):

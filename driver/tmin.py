@@ -104,12 +104,13 @@ def test_name(n):
 
 
 def new_session(torque, seating, target, band, now, history=(), opened_low=None,
-                operator_est=None):
+                operator_est=None, lock_nut=None):
     """history: [(time, mbar)] recent chamber readings. opened_low: the
     lowest temperature an earlier test at this torque opened at during its
     hold (t-min.csv), so a scout starts below it (history 41). operator_est:
     the T_min (°C) the operator expects, used until this seating has a
-    result of its own (history 42)."""
+    result of its own (history 42). lock_nut: its torque, N·m, as entered
+    (recorded only; history 43)."""
     if torque is None:
         raise ValueError("t-min-tune needs the seat screw torque")
     s = dict(torque=torque, seating=seating, target=target, band=band, started=now,
@@ -118,7 +119,7 @@ def new_session(torque, seating, target, band, now, history=(), opened_low=None,
                                    * LABJACK_SAMPLE_HZ * 2)),
              y_filt=None, last_t=None, base=None, bad_vac=0, up=None, trend=None,
              extra=0.0, results=0, est=None, waiting_note=False, cool_since=None, last_close=None,
-             opened_low=opened_low, operator_est=operator_est,
+             opened_low=opened_low, operator_est=operator_est, lock_nut=lock_nut,
              room=[])
     for t, mbar in history:
         if mbar and mbar > 0 and t <= now:
@@ -559,7 +560,8 @@ def result_row(s, test, slope, time_iso, trace="", converged=False, converged_T=
         margin_K=test['margin'], estimate_from=test['how'],
         counted=1 if counted(test) else 0, converged=1 if converged else 0,
         trace=trace, note=test['note'],
-        t_min_converged_degC=round(converged_T, 3) if converged_T is not None else None)
+        t_min_converged_degC=round(converged_T, 3) if converged_T is not None else None,
+        lock_nut_torque_Nm=s.get('lock_nut'))
 
 
 def status_text(s):

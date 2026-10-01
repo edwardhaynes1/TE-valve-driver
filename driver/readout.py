@@ -3,8 +3,9 @@ and heater state to strings. No Tk and no shared state, so every line can be
 checked directly (tests/test_readout.py).
 
     status_segments(...)      -> [(text, tag)] for the status panel, made of
-      sensor_segments / seat_screw_segments / heater_segments
+      sensor_segments / seat_screw_segments / lock_nut_segments / heater_segments
     parse_seat_screw_torque(text) -> N·m, or ValueError with the reason
+    parse_lock_nut_torque(text)   -> the same for the lock nut (history 43)
     torque_gate(seat_screw_nm) -> (locked, tag)   controls locked until entered
     heater_vi_lines(...)      -> [(label, value, note, tag)] for V / I / P
     heater_status(heater)     -> (text, tag)   the armed / tripped line
@@ -21,7 +22,7 @@ from .config import (
     HEATER_MAX_RUN_S, HEATER_R_OHM, P20_REF_K,
     PRESSURE_BURST_MARGIN_K, PRESSURE_MIN_STEP_MBAR, PRESSURE_OPEN_FLOOR_BELOW_K,
     PRESSURE_SEEK_START_C, PRESSURE_TSP_MAX_C,
-    PRESSURE_TSP_MIN_C, SEAT_SCREW_TORQUE_MAX_NM, TEMP_TRIP_C, heater_current_a, heater_power_w,
+    PRESSURE_TSP_MIN_C, LOCK_NUT_TORQUE_MAX_NM, SEAT_SCREW_TORQUE_MAX_NM, TEMP_TRIP_C, heater_current_a, heater_power_w,
     heater_voltage_v,
 )
 from .control import AUTO_P, AUTO_T, MANUAL
@@ -33,13 +34,14 @@ def _mean(values):
 
 
 def status_segments(readings, health, heater, output, labjack_available,
-                    seat_screw_nm=None):
+                    seat_screw_nm=None, lock_nut_nm=None):
     """The status panel, top to bottom: title, health flags, sensor readings,
     the seat screw torque, and the heater's voltage / current / power lines.
     The window draws the three parts separately (the seat screw line holds
     the torque input), but this is the whole panel as text."""
     return (sensor_segments(readings, health, labjack_available)
             + seat_screw_segments(seat_screw_nm)
+            + lock_nut_segments(lock_nut_nm)
             + heater_segments(heater, output, health['labjack']))
 
 
@@ -50,6 +52,16 @@ def seat_screw_segments(seat_screw_nm):
         seg += [("---", "dim"), ("  (not entered)\n", "prompt")]
     else:
         seg += [(f"{seat_screw_nm:.2f} N·m\n", "bright")]
+    return seg
+
+
+def lock_nut_segments(lock_nut_nm):
+    """The LOCK NUT line (history 43): optional, so 'not entered' is dim."""
+    seg = [("LOCK NUT     ", "dim")]
+    if lock_nut_nm is None:
+        seg += [("---", "dim"), ("  (not entered)\n", "dim")]
+    else:
+        seg += [(f"{lock_nut_nm:.2f} N·m\n", "bright")]
     return seg
 
 
@@ -121,15 +133,24 @@ def parse_seat_screw_torque(text):
     """The operator's entry as N·m. Accepts a decimal point or comma;
     anything else, or a value outside 0 … SEAT_SCREW_TORQUE_MAX_NM, raises
     ValueError saying why."""
+    return _parse_torque(text, "Seat screw", SEAT_SCREW_TORQUE_MAX_NM, "0.4")
+
+
+def parse_lock_nut_torque(text):
+    """As parse_seat_screw_torque, for the lock nut (0 … LOCK_NUT_TORQUE_MAX_NM)."""
+    return _parse_torque(text, "Lock nut", LOCK_NUT_TORQUE_MAX_NM, "0.1")
+
+
+def _parse_torque(text, what, top, example):
     cleaned = text.strip().replace(",", ".")
     try:
         nm = float(cleaned)
     except ValueError:
-        raise ValueError(f"Seat screw torque: '{text.strip()}' is not a number "
-                         f"(enter N·m, e.g. 0.4)") from None
-    if not (0.0 <= nm <= SEAT_SCREW_TORQUE_MAX_NM):
-        raise ValueError(f"Seat screw torque {nm:g} N·m is outside "
-                         f"0 to {SEAT_SCREW_TORQUE_MAX_NM:g} N·m — not changed")
+        raise ValueError(f"{what} torque: '{text.strip()}' is not a number "
+                         f"(enter N·m, e.g. {example})") from None
+    if not (0.0 <= nm <= top):
+        raise ValueError(f"{what} torque {nm:g} N·m is outside "
+                         f"0 to {top:g} N·m — not changed")
     return nm
 
 

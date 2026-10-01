@@ -15,7 +15,8 @@ are private, so the locking rules live in this file only.
                                   health, heater_output, vacuum_history
     the logger takes:             take_log_readings, take_events,
                                   put_back_events, take_edges, put_back_edges
-    the operator enters:          set_seat_screw_torque (read: seat_screw_torque)
+    the operator enters:          set_seat_screw_torque (read: seat_screw_torque),
+                                  set_lock_nut_torque (read: lock_nut_torque)
     control.py queues:            queue_edge
     events:                       log_event, ascii_text
     tests:                        reset, pending_edges
@@ -27,7 +28,8 @@ from collections import deque
 from datetime import datetime
 
 from .config import (
-    CHART_SECONDS, KELLER_POLL_HZ, LABJACK_SAMPLE_HZ, SEAT_SCREW_TORQUE_MAX_NM,
+    CHART_SECONDS, KELLER_POLL_HZ, LABJACK_SAMPLE_HZ, LOCK_NUT_TORQUE_MAX_NM,
+    SEAT_SCREW_TORQUE_MAX_NM,
 )
 
 stop = threading.Event()
@@ -76,6 +78,7 @@ def _fresh_output():
 _readings = _fresh_readings()
 _output = _fresh_output()
 _seat_screw_nm = None             # seat screw torque as entered; None = not recorded
+_lock_nut_nm = None               # lock nut torque as entered; None = not recorded
 _charts = _fresh_charts()
 _vac_hist = deque(maxlen=CHART_SECONDS * LABJACK_SAMPLE_HZ)   # (time, mbar), valid readings
 _events = deque(maxlen=200)       # (timestamp, text) for the GUI
@@ -193,6 +196,25 @@ def set_seat_screw_torque(nm):
         log_event(f"Seat screw torque unchanged ({nm:.2f} N·m)")
 
 
+def set_lock_nut_torque(nm):
+    """Record the lock nut torque the operator entered, N·m, and note it in
+    the event log (history 43). Raises ValueError outside
+    0 … LOCK_NUT_TORQUE_MAX_NM."""
+    global _lock_nut_nm
+    if not (isinstance(nm, (int, float)) and math.isfinite(nm)
+            and 0.0 <= nm <= LOCK_NUT_TORQUE_MAX_NM):
+        raise ValueError(f"lock nut torque must be 0 to "
+                         f"{LOCK_NUT_TORQUE_MAX_NM:g} N·m, not {nm!r}")
+    with _lock:
+        old, _lock_nut_nm = _lock_nut_nm, float(nm)
+    if old is None:
+        log_event(f"Lock nut torque set to {nm:.2f} N·m")
+    elif old != nm:
+        log_event(f"Lock nut torque {old:.2f} → {nm:.2f} N·m")
+    else:
+        log_event(f"Lock nut torque unchanged ({nm:.2f} N·m)")
+
+
 # ─── anyone reads ───────────────────────────────────────────────────────────
 
 def latest():
@@ -237,6 +259,12 @@ def seat_screw_torque():
     """The seat screw torque entered this session, N·m, or None if not yet."""
     with _lock:
         return _seat_screw_nm
+
+
+def lock_nut_torque():
+    """The lock nut torque entered this session, N·m, or None if not yet."""
+    with _lock:
+        return _lock_nut_nm
 
 
 def health():
@@ -339,9 +367,9 @@ def pending_edges():
 
 def reset():
     """Back to the start-up state."""
-    global _readings, _charts, _seat_screw_nm
+    global _readings, _charts, _seat_screw_nm, _lock_nut_nm
     with _lock:
-        _seat_screw_nm = None
+        _seat_screw_nm = _lock_nut_nm = None
         _readings = _fresh_readings()
         _output.update(_fresh_output())
         _charts = _fresh_charts()

@@ -97,6 +97,7 @@ def logger_thread():
             h = control.snapshot()
             out = shared.heater_output()
             seat_nm = shared.seat_screw_torque()
+            nut_nm = shared.lock_nut_torque()
             batch_run, batch_phase = tminrun.labels()
             if not batch_run:                     # (cycling: history 34-35)
                 batch_run, batch_phase = cyclerun.labels()
@@ -138,6 +139,7 @@ def logger_thread():
                 'seat_screw_torque_Nm': blank_or(seat_nm, 3),
                 'batch_run': batch_run,
                 'batch_phase': batch_phase,
+                'lock_nut_torque_Nm': blank_or(nut_nm, 3),
             }
             try:
                 writer.writerow([row[c] for c in schema.MAIN])

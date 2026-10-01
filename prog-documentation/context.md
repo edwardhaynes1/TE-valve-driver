@@ -130,6 +130,7 @@ differently from this page, fix one of them. Add terms as they appear.
 |---|---|
 | **t-min-tune** | The window's fourth mode (it replaced *cycle*): finds *T_min* at an *upstream target* by *step and dwell*, test after test, until the results converge or it is stopped. |
 | **T_min** | The lowest valve temperature (TC at the *onset*) at which the valve opens, at a given torque and upstream pressure, found with the valve given time at each temperature — not the T_open of a 3 °C/min creep, which reads higher (TC lag). |
+| **Lock nut torque** | Torque on the lock nut that secures the seat screw, N·m (`LOCK NUT`, history 43). Optional: blank means *not recorded*; it locks nothing. Logged in every main-log row (`lock_nut_torque_Nm`) and in every t-min-tune row and `session.json`, noted in the event log when it changes. Tightening it appears to lower the seat preload (1 Oct 2026: 0.40 N·m gave 102.3, 87.8 and ≫ 92 °C). |
 | **M_A** | The seat screw's tightening torque, N·m (the VDI 2230 symbol). |
 | **Upstream target, band** | The upstream pressure the operator holds by topping up, ± the band (default 0.05 bar ≈ ±0.5 K of T_min). Outside it (or not read) during the hold or a step, the heater cuts off and the test is *abandoned*. |
 | **Test** | One search: hold at the *start*, then *steps* until the valve opens, then wait until it has *closed*. `test001`, `test002` … in the log rows. |

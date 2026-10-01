@@ -86,9 +86,11 @@ class TEGui:
                          padx=8, pady=2)
 
         # The status panel in three parts: the sensor lines, the SEAT SCREW
-        # line (which holds the torque input), and the heater V / I / P lines.
+        # and LOCK NUT lines (which hold the torque inputs), and the heater
+        # V / I / P lines.
         self.status_text = self._status_block(outer, height=8)
         self._build_seat_row(outer)
+        self._build_nut_row(outer)
         self.heater_text = self._status_block(outer, height=3)
 
         self._build_heater_panel(outer)
@@ -139,26 +141,57 @@ class TEGui:
     def _build_seat_row(self, parent):
         """The SEAT SCREW line of the status panel. Until a torque is entered
         it holds only the input box and "set" (and nothing else works,
-        _apply_gate); once entered, only the torque. Clicking the torque
-        opens the box again to change it (not while a batch runs)."""
-        self.seat_row = tk.Frame(parent, bg=BG)
-        self.seat_row.pack(fill="x")
-        self.seat_entry = self._entry(self.seat_row, "SEAT SCREW   ", "", width=6)
-        self.seat_entry.label.configure(padx=1, pady=0, bd=0)
-        self.seat_entry.bind("<Return>", lambda _ev: self._set_seat_screw())
-        self.seat_entry.bind("<Escape>", lambda _ev: self._cancel_seat_edit())
-        self.seat_btn = tk.Button(self.seat_row, text="set",
-                                  command=self._set_seat_screw, **self._btn)
-        self.seat_btn.pack(side="left")
-        self.seat_value = tk.Label(self.seat_row, text="", font=self.f, fg=BRIGHT,
-                                   bg=BG, bd=0, padx=0, pady=0, cursor="hand2")
-        self.seat_value.bind("<Button-1>", lambda _ev: self._edit_seat_screw())
+        _apply_gate); once entered, the torque and a small "update" button
+        (history 43), which opens the box in its place to change it —
+        clicking the torque does too (not while t-min-tune runs)."""
+        (self.seat_row, self.seat_entry, self.seat_btn, self.seat_value,
+         self.seat_upd_btn) = self._torque_row(parent, "SEAT SCREW   ", self._set_seat_screw,
+                                               self._edit_seat_screw, self._cancel_seat_edit)
         self._seat_editing = False
         self._seat_shown = None
 
+    def _build_nut_row(self, parent):
+        """The LOCK NUT line (history 43), like the SEAT SCREW line but
+        optional: blank means not recorded, and it locks nothing."""
+        (self.nut_row, self.nut_entry, self.nut_btn, self.nut_value,
+         self.nut_upd_btn) = self._torque_row(parent, "LOCK NUT     ", self._set_lock_nut,
+                                              self._edit_lock_nut, self._cancel_nut_edit)
+        self.nut_hint = tk.Label(self.nut_row, text="(optional)", font=self.f, fg=DIM, bg=BG)
+        self._nut_editing = False
+        self._nut_shown = None
+
+    def _torque_row(self, parent, label, set_cmd, edit_cmd, cancel_cmd):
+        row = tk.Frame(parent, bg=BG)
+        row.pack(fill="x")
+        entry = self._entry(row, label, "", width=6)
+        entry.label.configure(padx=1, pady=0, bd=0)
+        entry.bind("<Return>", lambda _ev: set_cmd())
+        entry.bind("<Escape>", lambda _ev: cancel_cmd())
+        btn = tk.Button(row, text="set", command=set_cmd, **self._btn)
+        btn.pack(side="left")
+        value = tk.Label(row, text="", font=self.f, fg=BRIGHT, bg=BG, bd=0, padx=0, pady=0,
+                         cursor="hand2")
+        value.bind("<Button-1>", lambda _ev: edit_cmd())
+        upd = tk.Button(row, text="update", command=edit_cmd,
+                        **{**self._btn, 'padx': 4, 'pady': 0})
+        return row, entry, btn, value, upd
+
+    @staticmethod
+    def _pack_torque(editing, entry, btn, value, upd, extra=()):
+        for w in (entry, btn, value, upd, *extra):
+            w.pack_forget()
+        if editing:
+            entry.pack(side="left", padx=(2, 12))
+            btn.pack(side="left")
+            for w in extra:
+                w.pack(side="left", padx=(8, 0))
+        else:
+            value.pack(side="left")
+            upd.pack(side="left", padx=(12, 0))
+
     def _show_seat_row(self):
         """Box and "set" while the torque is missing or being changed;
-        otherwise just the torque. Re-packs only when that changes."""
+        otherwise the torque and "update". Re-packs only when that changes."""
         nm = shared.seat_screw_torque()
         editing = nm is None or self._seat_editing
         if nm is not None:
@@ -166,13 +199,20 @@ class TEGui:
         if editing == self._seat_shown:
             return
         self._seat_shown = editing
-        for w in (self.seat_entry, self.seat_btn, self.seat_value):
-            w.pack_forget()
-        if editing:
-            self.seat_entry.pack(side="left", padx=(2, 12))
-            self.seat_btn.pack(side="left")
-        else:
-            self.seat_value.pack(side="left")
+        self._pack_torque(editing, self.seat_entry, self.seat_btn, self.seat_value,
+                          self.seat_upd_btn)
+
+    def _show_nut_row(self):
+        nm = shared.lock_nut_torque()
+        editing = nm is None or self._nut_editing
+        if nm is not None:
+            self.nut_value.configure(text=f"{nm:.2f} N·m")
+        if editing == self._nut_shown:
+            return
+        self._nut_shown = editing
+        self.nut_hint.pack_forget()
+        self._pack_torque(editing, self.nut_entry, self.nut_btn, self.nut_value,
+                          self.nut_upd_btn, extra=() if nm is not None else (self.nut_hint,))
 
     def _edit_seat_screw(self):
         if tminrun.running():
@@ -189,6 +229,38 @@ class TEGui:
         if shared.seat_screw_torque() is not None:
             self._seat_editing = False
             self._show_seat_row()
+
+    def _edit_lock_nut(self):
+        if tminrun.running():
+            log_event("t-min-tune is running — the lock nut torque is locked until it stops")
+            return
+        nm = shared.lock_nut_torque()
+        self._nut_editing = True
+        self._set_entry(self.nut_entry, "" if nm is None else f"{nm:g}")
+        self._show_nut_row()
+        self.nut_entry.focus_set()
+        self.nut_entry.select_range(0, "end")
+
+    def _cancel_nut_edit(self):
+        nm = shared.lock_nut_torque()
+        if nm is None:
+            self._set_entry(self.nut_entry, "")
+        self._nut_editing = False
+        self._show_nut_row()
+
+    def _set_lock_nut(self):
+        """Record the lock nut torque typed in the box."""
+        try:
+            nm = readout.parse_lock_nut_torque(self.nut_entry.get())
+        except ValueError as err:
+            log_event(str(err))
+            current = shared.lock_nut_torque()
+            self._set_entry(self.nut_entry, "" if current is None else f"{current:g}")
+            return
+        shared.set_lock_nut_torque(nm)
+        self._set_entry(self.nut_entry, f"{nm:g}")
+        self._nut_editing = False
+        self._show_nut_row()
 
     # ── heater panel ──────────────────────────────────────────────────────
     def _entry(self, parent, label, initial, width=8):
@@ -325,6 +397,7 @@ class TEGui:
         self._send_update()
         self._apply_gate()
         self._show_seat_row()
+        self._show_nut_row()
 
     def _show_lines(self):
         """Pack the batch / heater / loop status labels that have text, in
@@ -383,29 +456,40 @@ class TEGui:
         busy = tminrun.running()
         self._batch_running = busy
         heater = [*self.mode_buttons, self.update_btn, self.duty_entry, self.sp_entry,
-                  self.p_entry, self.est_entry, self.seat_entry, self.seat_btn]
+                  self.p_entry, self.est_entry, self.seat_entry, self.seat_btn,
+                  *self._torque_buttons()]
         if busy:
             for w in heater:
                 w.configure(state="disabled")
-            for w in (*self.mode_buttons, self.update_btn, self.seat_btn):
+            for w in (*self.mode_buttons, self.update_btn, self.seat_btn,
+                      *self._torque_buttons()):
                 w.configure(disabledforeground=DIM)
             for e in (self.duty_entry, self.sp_entry, self.p_entry, self.est_entry):
                 e.configure(highlightbackground=BORDER)
                 e.label.configure(fg=DIM)
         elif not getattr(self, "_locked", True):
-            for w in (*self.mode_buttons, self.update_btn, self.seat_btn):
+            for w in (*self.mode_buttons, self.update_btn, self.seat_btn,
+                      *self._torque_buttons()):
                 w.configure(state="normal")
             self.seat_entry.configure(state="normal")
             self._update_inputs()
         else:
             self.seat_entry.configure(state="normal")
             self.seat_btn.configure(state="normal")
+            for w in self._torque_buttons():
+                w.configure(state="normal")
         can_start = (not busy and shared.seat_screw_torque() is not None
                      and not snapshot()['armed'] and self.mode_var.get() == BATCH)
         self.batch_btn.configure(state="normal" if can_start else "disabled",
                                  disabledforeground=DIM)
         self.abort_btn.configure(state="normal" if busy else "disabled",
                                  fg=WARN if busy else TEXT, disabledforeground=DIM)
+
+    def _torque_buttons(self):
+        """The torque controls t-min-tune locks while it runs, besides the
+        seat screw box and "set": both "update" buttons and the lock nut's
+        box and "set" (history 43)."""
+        return [self.seat_upd_btn, self.nut_upd_btn, self.nut_entry, self.nut_btn]
 
     def _start_batch(self):
         """Start t-min-tune: ask whether the screw was re-torqued if the
@@ -440,15 +524,20 @@ class TEGui:
                   "Every test is a row of logs/t-min.csv.\n"
                   "\nt-min-tune arms the heater itself. SW171 must be on. DISARM or "
                   "'stop t-min' stops it.")
+        nut = shared.lock_nut_torque()
+        nut_txt = (f"Lock nut torque: {nut:.2f} N·m" if nut is not None
+                   else "Lock nut torque: not entered")
         old = tminrun.last_seating(torque)
+        old_nut = tminrun.seating_lock_nut(old) if old is not None else None
         retorqued = None
         first = (f"the first test starts {TMIN_MARGIN_NEW_K:g} K below your estimate "
                  f"{est_c:g} °C" if est_c is not None else None)
         if old is not None:
             answer = self._ask(
                 "Start t-min-tune",
-                f"Seat screw torque: {torque:.2f} N·m\n"
-                f"Latest seating at this torque: {old}\n\n"
+                f"Seat screw torque: {torque:.2f} N·m\n{nut_txt}\n"
+                f"Latest seating at this torque: {old}"
+                + (f" (lock nut {old_nut:.2f} N·m)" if old_nut is not None else "") + "\n\n"
                 f"Has the seat screw been re-torqued (or the valve disturbed) since?\n\n"
                 f"No: continue that seating (its results so far set the estimate).\n"
                 + (f"Yes: start a new seating ({first}; your estimate also applies "
@@ -461,8 +550,8 @@ class TEGui:
             retorqued = bool(answer)
         elif not self._confirm(
                 "Start t-min-tune",
-                f"Seat screw torque: {torque:.2f} N·m\n"
-                f"Is that the torque on the valve now?\n\n"
+                f"Seat screw torque: {torque:.2f} N·m\n{nut_txt}\n"
+                f"Is that what is on the valve now?\n\n"
                 + (f"Nothing measured at this torque yet: a new seating; {first}.\n"
                    if first else "Nothing measured at this torque yet: a new seating; the "
                    "first test scouts from the torque table.\n") + common):
@@ -703,6 +792,7 @@ class TEGui:
         self._fill(self.heater_text,
                    readout.heater_segments(h, shared.heater_output(), health['labjack']))
         self._show_seat_row()
+        self._show_nut_row()
 
         self.arm_btn.configure(text="DISARM" if h['armed'] else "ARM",
                                fg=WARN if h['armed'] else TEXT)

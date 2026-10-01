@@ -4,6 +4,23 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 43. The lock nut torque is recorded; both torques have an "update" button — 1 Oct 2026
+Tightening the lock nut appears to lower the seat preload (0.40 N·m
+seatings: 102.3, 87.8 and ≫ 92 °C), so its torque belongs with the results.
+A **LOCK NUT** line under SEAT SCREW takes it like the seat screw torque
+(N·m, point or comma, 0-5 N·m, `LOCK_NUT_TORQUE_MAX_NM`), but it is
+optional and locks nothing: blank means not recorded. It goes in every
+main-log row (`lock_nut_torque_Nm`, appended at the end), every t-min.csv
+row (likewise; older files gain the column) and `session.json`; the start
+dialog shows it, and the latest seating's when that was recorded. It does
+not change the estimates: they still pool by seat screw torque.
+
+Changing a torque used to mean clicking the value, which nobody would
+guess. Each line now shows the value and a small **update** button; it
+puts the box, holding the current value, where the value was. Return or
+"set" saves, Escape keeps the old value; clicking the value still works.
+Both lines are locked while t-min-tune runs, as the seat screw already was.
+
 ## 42. An optional "estimate °C" starts a new seating from the value Edward expects — 1 Oct 2026
 The lock-nut seatings at 0.40 N·m gave 102.3, 87.8 and ≫ 92 °C: the other
 seatings' mean says little about the next one, and Edward often has a
