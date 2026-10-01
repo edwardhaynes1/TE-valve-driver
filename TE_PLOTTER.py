@@ -24,7 +24,9 @@ counts as open while the pressure sits clearly above its fitted baseline
 The seat screw torque (N·m, as entered in the driver) goes in the figure
 title and the terminal summary; if it changed during the run, both plots
 get a dotted vertical line at each change. Logs from before the column
-existed say "not recorded".
+existed say "not recorded". The lock nut torque (history 44) is shown the
+same way, with its own dotted lines; logs from before it existed leave it
+out.
 
 Step-response fits, upstream decay rates (raw pressure), heater energy and
 the outgassing fit are printed to the terminal.
@@ -103,6 +105,7 @@ ROLE_COLUMNS = {
     "fault": "tc_fault",
     "mode": "heater_mode",
     "seat_screw": "seat_screw_torque_Nm",
+    "lock_nut": "lock_nut_torque_Nm",
 }
 assert not SCHEMA_COLUMNS or set(ROLE_COLUMNS.values()) <= SCHEMA_COLUMNS, \
     "TE_PLOTTER.ROLE_COLUMNS names a column that driver/schema.py doesn't define"
@@ -135,6 +138,7 @@ COLUMN_ALIASES = {
     "fault":    ["tcfault", "fault"],
     "mode":     ["heatermode", "mode"],
     "seat_screw": ["seatscrewtorque", "seatscrew"],
+    "lock_nut": ["locknuttorque", "locknut"],
 }
 
 # Fragments that disqualify a column for a given role, so that e.g.
@@ -175,6 +179,7 @@ VALVE_BASELINE_DEG = 1     # polynomial order of the baseline drift (1 = linear)
 VALVE_SEED_BIN_PERCENTILE = 40  # percentile of time-bin minima used to seed the baseline
 VALVE_LINE_COLOUR = "0.15"
 SEAT_SCREW_COLOUR = "#7b3fa0"      # seat screw torque changes (purple, dotted)
+LOCK_NUT_COLOUR = "#1b7f6b"        # lock nut torque changes (teal, dotted)
 
 MIN_STEP_SAMPLES = 120     # ignore duty segments shorter than this
 JUMP_BAR = 0.02            # upstream step that marks a refill/adjustment
@@ -281,7 +286,7 @@ def load(path, cols):
 
     for role in ("temp", "chamber", "upstream", "duty", "keller_temp",
                  "current_meas", "current_calc", "power_meas", "power_calc",
-                 "p_target", "t_setpoint", "seat_screw"):
+                 "p_target", "t_setpoint", "seat_screw", "lock_nut"):
         if cols[role]:
             df[cols[role]] = numeric(df, cols[role])
 
@@ -500,10 +505,10 @@ def detect_valve_events(df, cols):
     return baseline, events
 
 
-def seat_screw_history(df, cols):
+def seat_screw_history(df, cols, role="seat_screw"):
     """[(t, N·m or None), …]: the value at the start and at each change.
     None means not recorded. Returns None if the log has no such column."""
-    col = cols.get("seat_screw")
+    col = cols.get(role)
     if not col:
         return None
     history, last = [], object()
@@ -515,30 +520,48 @@ def seat_screw_history(df, cols):
     return history
 
 
-def seat_screw_text(history):
+def lock_nut_history(df, cols):
+    """As seat_screw_history, for the lock nut torque (history 44)."""
+    return seat_screw_history(df, cols, role="lock_nut")
+
+
+def lock_nut_text(history):
+    """'lock nut torque 0.10 N·m' (or its changes); '' for a log from
+    before the column, which then says nothing about it."""
+    return "" if history is None else seat_screw_text(history, what="lock nut")
+
+
+def torques_text(seat_screw, lock_nut=None):
+    """The seat screw text, and the lock nut's after it when there is one."""
+    nut = lock_nut_text(lock_nut)
+    return seat_screw_text(seat_screw) + (f"  ·  {nut}" if nut else "")
+
+
+def seat_screw_text(history, what="seat screw"):
     """'seat screw torque 0.40 N·m', or the sequence of values if it changed."""
     if history is None:
-        return "seat screw torque not recorded (log predates the column)"
+        return f"{what} torque not recorded (log predates the column)"
     def fmt(v):
         return "not recorded" if v is None else f"{v:.2f} N·m"
     if not history:
-        return "seat screw torque not recorded"
-    text = "seat screw torque " + fmt(history[0][1])
+        return f"{what} torque not recorded"
+    text = f"{what} torque " + fmt(history[0][1])
     for t, v in history[1:]:
         text += f" → {fmt(v)} at {t:.1f} s"
     return text
 
 
-def mark_seat_screw(axes, history, label_ax):
-    """Dotted vertical lines where the seat screw torque changed mid-run."""
+def mark_seat_screw(axes, history, label_ax, what="seat screw", colour=SEAT_SCREW_COLOUR):
+    """Dotted vertical lines where the seat screw (or lock nut) torque
+    changed mid-run."""
     trans = matplotlib.transforms.blended_transform_factory(
         label_ax.transData, label_ax.transAxes)
     for t, v in (history or [])[1:]:
         for ax in axes:
-            ax.axvline(t, ls=":", lw=1.4, color=SEAT_SCREW_COLOUR, zorder=5)
-        label = "seat screw not recorded" if v is None else f"seat screw {v:.2f} N·m"
+            ax.axvline(t, ls=":", lw=1.4, color=colour, zorder=5)
+        label = f"{what} not recorded" if v is None else f"{what} {v:.2f} N·m"
         label_ax.text(t, 0.02, f" {label} ", transform=trans, rotation=90,
-                      ha="right", va="bottom", fontsize=8, color=SEAT_SCREW_COLOUR,
+                      ha="right", va="bottom", fontsize=8, color=colour,
                       zorder=6, bbox=dict(fc="white", ec="none", alpha=0.8, pad=1))
 
 
@@ -652,7 +675,7 @@ def add_to_legend(ax, handle):
 
 
 def make_figure(df, cols, steps, segs, outgas, title, valve=(None, []),
-                seat_screw=None):
+                seat_screw=None, lock_nut=None):
     """Supporting traces on top; larger chamber + temperature plot below.
     Both share one time axis."""
     has_main = any(cols.get(r) for r in MAIN_ROLES)
@@ -664,7 +687,7 @@ def make_figure(df, cols, steps, segs, outgas, title, valve=(None, []),
     else:
         fig, ax = plt.subplots(figsize=(14, 7 if has_main else 5.5))
         ax_t, ax_m = (None, ax) if has_main else (ax, None)
-    fig.suptitle(f"{title}  ·  {seat_screw_text(seat_screw)}", fontsize=12, y=0.99)
+    fig.suptitle(f"{title}  ·  {torques_text(seat_screw, lock_nut)}", fontsize=12, y=0.99)
 
     if ax_t is not None:
         panel_timeseries(ax_t, df, cols, roles=TOP_ROLES)
@@ -705,16 +728,19 @@ def make_figure(df, cols, steps, segs, outgas, title, valve=(None, []),
         mark_valve_events(hosts, events, ax_m if ax_m is not None else ax_t)
     if seat_screw and len(seat_screw) > 1:
         mark_seat_screw(hosts, seat_screw, ax_m if ax_m is not None else ax_t)
+    if lock_nut and len(lock_nut) > 1:
+        mark_seat_screw(hosts, lock_nut, ax_m if ax_m is not None else ax_t,
+                        what="lock nut", colour=LOCK_NUT_COLOUR)
 
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     return fig
 
 
 def report(path, df, cols, steps, segs, outgas, ambient, valve=(None, []),
-           seat_screw=None):
+           seat_screw=None, lock_nut=None):
     print(f"\nfile      : {path}")
     print(f"duration  : {df.t.iloc[-1]:.0f} s   samples: {len(df)}")
-    print(f"TE-Valve  : {seat_screw_text(seat_screw)}")
+    print(f"TE-Valve  : {torques_text(seat_screw, lock_nut)}")
     if cols["temp"]:
         print(f"ambient   : {ambient:.1f} °C")
         print(f"max |ΔT| between samples: "
@@ -1333,12 +1359,13 @@ def main():
     valve = detect_valve_events(df, cols)
 
     seat_screw = seat_screw_history(df, cols)
+    lock_nut = lock_nut_history(df, cols)
 
-    report(args.logfile, df, cols, steps, segs, outgas, ambient, valve, seat_screw)
+    report(args.logfile, df, cols, steps, segs, outgas, ambient, valve, seat_screw, lock_nut)
 
     fig = make_figure(df, cols, steps, segs, outgas,
                       args.logfile.replace("\\", "/").split("/")[-1], valve,
-                      seat_screw)
+                      seat_screw, lock_nut)
     out = args.output or args.logfile.rsplit(".", 1)[0] + ".png"
     fig.savefig(out, dpi=150)
     print(f"\nfigure written to {out}\n")

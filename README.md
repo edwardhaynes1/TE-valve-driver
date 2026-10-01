@@ -29,6 +29,9 @@ is optional: blank means not recorded, and it locks nothing. Once a torque
 is entered its line shows the value and a small **update** button, which
 puts the box back in its place to enter a new value (Return or **set**
 saves, Escape keeps the old one). Both are locked while t-min-tune runs.
+Results pool only at the same seat screw *and* lock nut torque (blank
+counts as its own value), and a lock nut torque different from the latest
+seating's starts a new seating without the re-torque question.
 
 ### The window
 
@@ -78,8 +81,9 @@ The upstream leaving the band during the hold or a step cuts the heater and
 abandons the test; the next starts afresh once it is back inside. An
 opening during the hold (the start was too high) moves the next start 5 K
 lower. The estimate is this seating's latest results (corrected to the
-target along the opening map's pressure slope), else your estimate, else the other seatings at
-this torque (each one's latest 3 results), else the opening map; with nothing at all, the first test
+target along the opening map's pressure slope), else your estimate, else
+the other seatings at this torque and lock nut torque (each one's latest 3
+results), else the opening map; with nothing at all, the first test
 scouts (3 °C/min from 10 K below the torque table). It stops when the last
 3 results lie within ±1 K of their mean, or when you press **stop t-min**
 (or DISARM). When it converges — the valve has closed by then and the
@@ -310,8 +314,8 @@ Requirements: `py -m pip install -r requirements.txt`
 
 The plotter draws the supporting traces (upstream pressure, heater power) on
 top and chamber pressure with valve temperature below, marks valve openings
-and closings, puts the seat screw torque in the title (with a dotted line at
-each change), and prints fits and a summary to the terminal.
+and closings, puts the seat screw and lock nut torques in the title (with a
+dotted line at each change), and prints fits and a summary to the terminal.
 
 ## Layout
 

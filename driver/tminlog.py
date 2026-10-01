@@ -11,7 +11,9 @@ the logs folder is not in git, so no commit or update touches it.
                                              T_min filled in where missing
     fill_converged(rows, fit=None) -> n      the latter, on rows in memory
     at_target(row, target, slope) -> °C or None
-    estimate(rows, seating, torque, target, fit=None, operator=None) -> dict or None
+    estimate(rows, seating, torque, target, fit=None, operator=None, lock_nut=None)
+        -> dict or None
+    same_lock_nut(a, b) -> bool              blank (None) matches only blank
     margin(est), converged(values)           the rules (tmin.py), here for convenience
 """
 
@@ -163,6 +165,18 @@ def _same_torque(a, b):
     return a is not None and b is not None and abs(a - b) <= config.SEAT_SCREW_TOL_NM + 1e-9
 
 
+def same_lock_nut(a, b):
+    """Two lock nut torques (N·m or None) count as the same: both not
+    recorded, or within SEAT_SCREW_TOL_NM (history 44)."""
+    if a is None or b is None:
+        return a is None and b is None
+    return _same_torque(a, b)
+
+
+def _nut(row):
+    return _num(row.get('lock_nut_torque_Nm'))
+
+
 def slope_for(torque, fit=None):
     """K per bar (signed: negative, T_min falls as upstream rises): the opening
     map's slope for this torque, else −PRESSURE_UP_K_PER_BAR."""
@@ -189,23 +203,26 @@ def _counted(r):
     return r.get('outcome') == T_MIN and str(r.get('counted')) in ('1', 'True', '1.0')
 
 
-def opened_low(rows, torque):
-    """The lowest temperature any test at this torque opened at while
-    holding its start ('opened at start' rows), or None (history 41)."""
+def opened_low(rows, torque, lock_nut=None):
+    """The lowest temperature any test at this torque (and lock nut torque,
+    history 44) opened at while holding its start ('opened at start' rows),
+    or None (history 41)."""
     vals = [_num(r.get('t_min_degC')) for r in rows
-            if r.get('outcome') == OPENED_AT_START and _same_torque(_num(r.get('torque_Nm')), torque)]
+            if r.get('outcome') == OPENED_AT_START and _same_torque(_num(r.get('torque_Nm')), torque)
+            and same_lock_nut(_nut(r), lock_nut)]
     vals = [v for v in vals if v is not None]
     return min(vals) if vals else None
 
 
-def estimate(rows, seating, torque, target, fit=None, operator=None):
+def estimate(rows, seating, torque, target, fit=None, operator=None, lock_nut=None):
     """The T_min expected at the target for this seating, as a dict
     (T, how, n, sd, values), or None. In order: this seating's counted
     results (the mean of the last TMIN_ESTIMATE_LAST_N); this seating's
     scout; the operator's estimate (°C at the target, typed at the start —
-    history 42); the other seatings at this torque (the mean, over them, of
-    each one's last TMIN_ESTIMATE_LAST_N counted results — history 40); the
-    opening map's prediction for a new seating at this torque. n and sd are
+    history 42); the other seatings at this torque and lock nut torque
+    (history 44; the mean, over them, of each one's last
+    TMIN_ESTIMATE_LAST_N counted results — history 40); the opening map's
+    prediction for a new seating at this torque (it knows no lock nut). n and sd are
     this seating's own (they set the margin)."""
     k = slope_for(torque, fit)
     own = [at_target(r, target, k) for r in rows
@@ -227,7 +244,8 @@ def estimate(rows, seating, torque, target, fit=None, operator=None):
     by_seating = {}
     for r in rows:
         if r.get('seating') != seating and _counted(r) \
-                and _same_torque(_num(r.get('torque_Nm')), torque):
+                and _same_torque(_num(r.get('torque_Nm')), torque) \
+                and same_lock_nut(_nut(r), lock_nut):
             v = at_target(r, target, k)
             if v is not None:
                 by_seating.setdefault(r.get('seating'), []).append(v)
@@ -237,7 +255,8 @@ def estimate(rows, seating, torque, target, fit=None, operator=None):
         means = [statistics.mean(v[-config.TMIN_ESTIMATE_LAST_N:]) for v in by_seating.values()]
         m = len(means)
         return dict(T=statistics.mean(means), n=0, sd=None, values=[],
-                    how=f"the mean of {m} other seating{'s' * (m > 1)} at {torque:.2f} N·m")
+                    how=f"the mean of {m} other seating{'s' * (m > 1)} at {torque:.2f} N·m"
+                    + (f", lock nut {lock_nut:.2f} N·m" if lock_nut is not None else ""))
     if fit is not None:
         p = fit.predict(seating, torque, target)
         if p is not None:

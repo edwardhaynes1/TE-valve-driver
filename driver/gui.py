@@ -532,18 +532,30 @@ class TEGui:
         retorqued = None
         first = (f"the first test starts {TMIN_MARGIN_NEW_K:g} K below your estimate "
                  f"{est_c:g} °C" if est_c is not None else None)
-        if old is not None:
+        old_txt = (f"Latest seating at this torque: {old}"
+                   + (f" (lock nut {old_nut:.2f} N·m)" if old_nut is not None else
+                      " (lock nut not recorded)") if old is not None else "")
+        new_from = (first if first else "the estimate comes from the other seatings at this "
+                    "torque and lock nut torque, if any")
+        if tminrun.lock_nut_changed(old):
+            # history 44: a different lock nut torque is a new seating — no question
+            if not self._confirm(
+                    "Start t-min-tune",
+                    f"Seat screw torque: {torque:.2f} N·m\n{nut_txt}\n{old_txt}\n\n"
+                    f"The lock nut torque has changed: this starts a new seating "
+                    f"({new_from}).\n\n" + common):
+                log_event("t-min-tune not started (cancelled)")
+                return
+            retorqued = True
+        elif old is not None:
             answer = self._ask(
                 "Start t-min-tune",
-                f"Seat screw torque: {torque:.2f} N·m\n{nut_txt}\n"
-                f"Latest seating at this torque: {old}"
-                + (f" (lock nut {old_nut:.2f} N·m)" if old_nut is not None else "") + "\n\n"
+                f"Seat screw torque: {torque:.2f} N·m\n{nut_txt}\n{old_txt}\n\n"
                 f"Has the seat screw been re-torqued (or the valve disturbed) since?\n\n"
                 f"No: continue that seating (its results so far set the estimate).\n"
                 + (f"Yes: start a new seating ({first}; your estimate also applies "
                    f"to 'No' if that seating has no result yet).\n\n" if first else
-                   f"Yes: start a new seating (the estimate comes from the other seatings "
-                   f"at this torque).\n\n") + common)
+                   f"Yes: start a new seating ({new_from}).\n\n") + common)
             if answer is None:
                 log_event("t-min-tune not started (cancelled)")
                 return

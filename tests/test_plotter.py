@@ -251,3 +251,29 @@ def test_no_chamber_column_gives_no_events(plotter):
     df = pd.DataFrame({"t": np.arange(0, 10, 0.5)})
     baseline, events = plotter.detect_valve_events(df, {"chamber": None})
     assert baseline is None and events == []
+
+
+# ── lock nut torque (history 44) ────────────────────────────────────────────
+
+def test_lock_nut_in_the_title_summary_and_markers(plotter, tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    df = with_seat_screw([0.4] * 600)
+    df["lock_nut_torque_Nm"] = [0.1] * 300 + [0.2] * 300
+    df, cols = loaded(plotter, tmp_path, df)
+    nut = plotter.lock_nut_history(df, cols)
+    assert plotter.lock_nut_text(nut) == "lock nut torque 0.10 N·m → 0.20 N·m at 150.0 s"
+    fig = plotter.make_figure(df, cols, [], [], None, "log.csv",
+                              seat_screw=plotter.seat_screw_history(df, cols), lock_nut=nut)
+    title = fig._suptitle.get_text()
+    assert "seat screw torque 0.40 N·m  ·  lock nut torque 0.10 N·m → 0.20 N·m" in title
+    labels = [t.get_text() for ax in fig.axes for t in ax.texts]
+    assert any("lock nut 0.20 N·m" in s for s in labels)
+
+
+def test_logs_before_the_lock_nut_column_leave_it_out(plotter, tmp_path):
+    old = [c for c in schema.MAIN if c != "lock_nut_torque_Nm"]
+    df, cols = loaded(plotter, tmp_path, synthetic_log(6, columns=old))
+    nut = plotter.lock_nut_history(df, cols)
+    assert nut is None and "lock nut" not in plotter.torques_text(
+        plotter.seat_screw_history(df, cols), nut)

@@ -162,10 +162,25 @@ def _settings():
     return {n: getattr(config, n) for n in sorted(names)}
 
 
+def seating_name(when, torque, nut):
+    """<date>_<time>_<torque>Nm, with _nut<torque>Nm when the lock nut
+    torque is entered (history 44)."""
+    return (f"{when:%Y%m%d_%H%M%S}_{torque:.2f}Nm"
+            + (f"_nut{nut:.2f}Nm" if nut is not None else ""))
+
+
+def lock_nut_changed(old):
+    """True if the lock nut torque entered differs from the one recorded for
+    seating `old` (blank counts as a value): a new seating (history 44)."""
+    return old is not None and not tminlog.same_lock_nut(seating_lock_nut(old),
+                                                         shared.lock_nut_torque())
+
+
 def start(main_log="", retorqued=None, target=None, band=None, estimate_c=None,
           start_thread=True):
     """Start at the torque entered. retorqued False continues the newest
-    seating at this torque; True (or None, or none yet) starts a new one.
+    seating at this torque, unless the lock nut torque differs from that
+    seating's (history 44); True (or None, or none yet) starts a new one.
     estimate_c: the T_min (°C, at the target) the operator expects, used
     instead of the other seatings until this seating has a result of its own
     (history 42)."""
@@ -178,14 +193,16 @@ def start(main_log="", retorqued=None, target=None, band=None, estimate_c=None,
     nut = shared.lock_nut_torque()
     old = last_seating(torque)
     now_dt = datetime.now()
-    if retorqued is False and old is not None:
+    nut_changed = lock_nut_changed(old)
+    if retorqued is False and old is not None and not nut_changed:
         name, how = old, f"continuing seating {old}"
     else:
-        name = f"{now_dt:%Y%m%d_%H%M%S}_{torque:.2f}Nm"
+        name = seating_name(now_dt, torque, nut)
         while name == old:              # started within the same second: a later name
             now_dt += timedelta(seconds=1)
-            name = f"{now_dt:%Y%m%d_%H%M%S}_{torque:.2f}Nm"
-        how = f"new seating {name}" + (" (re-torqued)" if retorqued else "")
+            name = seating_name(now_dt, torque, nut)
+        how = f"new seating {name}" + (" (lock nut torque changed)" if nut_changed else
+                                       " (re-torqued)" if retorqued else "")
     path = os.path.join(config.TMIN_DIR, name, f"{now_dt:%Y%m%d_%H%M%S}")
     try:
         os.makedirs(path, exist_ok=True)
@@ -204,7 +221,7 @@ def start(main_log="", retorqued=None, target=None, band=None, estimate_c=None,
     fit = _refit()
     with _lock:
         try:
-            low = tminlog.opened_low(tminlog.load(), torque)
+            low = tminlog.opened_low(tminlog.load(), torque, nut)
         except Exception:                            # a bad file must not stop the start
             low = None
         _s = tmin.new_session(torque, name, target, band, control.clock(),
@@ -258,7 +275,7 @@ def _estimate(target):
         return None
     try:
         return tminlog.estimate(tminlog.load(), s['seating'], s['torque'], target, f,
-                                operator=s.get('operator_est'))
+                                operator=s.get('operator_est'), lock_nut=s.get('lock_nut'))
     except Exception as e:                           # a bad file must not stop the run
         log_event(f"t-min estimate failed — {type(e).__name__}: {e}")
         return None

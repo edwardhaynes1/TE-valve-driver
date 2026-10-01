@@ -4,6 +4,27 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 44. The lock nut torque pools results and starts a new seating; the plotter shows it — 1 Oct 2026
+Edward: history 43 only recorded it. Since tightening the lock nut appears
+to change the seat preload, results at different lock nut torques are not
+the same experiment.
+* **Pooling.** A new seating's estimate from the other seatings, and a
+  scout's memory of openings at the start (history 41), count only
+  seatings at the same seat screw *and* lock nut torque (within
+  `SEAT_SCREW_TOL_NM`). Blank (not recorded) counts as a value of its own,
+  so results from before history 43 pool only with sessions where it is
+  left blank. The opening map knows no lock nut and stays the fallback;
+  the estimate box (history 42) is the way to start a lock-nut seating
+  from a value.
+* **A new seating.** If the lock nut torque differs from the one recorded
+  for the latest seating at this seat screw torque (blank vs a value counts
+  as different), t-min-tune starts a new seating without the re-torque
+  question; the dialog says why. The seating name ends `_nut<torque>Nm`
+  when it is entered.
+* **The plotter** puts the lock nut torque in the title and the terminal
+  summary after the seat screw's, with teal dotted lines where it changed
+  mid-run. Logs from before the column leave it out.
+
 ## 43. The lock nut torque is recorded; both torques have an "update" button — 1 Oct 2026
 Tightening the lock nut appears to lower the seat preload (0.40 N·m
 seatings: 102.3, 87.8 and ≫ 92 °C), so its torque belongs with the results.

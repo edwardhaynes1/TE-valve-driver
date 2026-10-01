@@ -1,4 +1,5 @@
-"""Lock nut torque, and the "update" buttons on both torque lines (history 43).
+"""Lock nut torque, and the "update" buttons on both torque lines (history
+43); it pools results and a different one is a new seating (history 44).
 
 Agreed behaviour (1 Oct 2026):
   * the lock nut torque is entered like the seat screw torque (N·m, point or
@@ -11,6 +12,12 @@ Agreed behaviour (1 Oct 2026):
   * every main-log row carries it (lock_nut_torque_Nm, the last column);
     every t-min.csv row and session.json record it; the start dialog shows
     it, and the latest seating's when that was recorded
+  * (history 44) the estimate from other seatings, and a scout's memory of
+    openings at the start, count only seatings at the same seat screw and
+    lock nut torques (blank = not recorded counts as a value); a lock nut
+    torque different from the latest seating's at this seat screw torque
+    starts a new seating without the re-torque question; the seating name
+    ends _nut<torque>Nm when it is entered
 """
 import csv
 import json
@@ -266,3 +273,78 @@ def test_the_dialog_says_when_it_is_not_entered_and_the_latest_seatings(gui):
     seen = start_tmin(gui)
     assert "Lock nut torque: not entered" in seen[0]
     assert "20261001_110000_0.40Nm (lock nut 0.20 N·m)" in seen[0]
+
+
+# ── history 44: the lock nut torque pools results and makes a new seating ──
+
+def row(seating, T, nut, outcome=tminlog.T_MIN, torque="0.4"):
+    return dict(time="2026-10-01T11:00:00", seating=seating, torque_Nm=torque, outcome=outcome, counted="1",
+                t_min_degC=str(T), upstream_at_open_bar="0.955",
+                lock_nut_torque_Nm="" if nut is None else str(nut))
+
+
+def test_other_seatings_count_only_at_the_same_lock_nut_torque():
+    rows = [row("a", 100.0, 0.1), row("b", 88.0, 0.2), row("c", 120.0, None)]
+    est = tminlog.estimate(rows, "new", 0.4, 0.955, lock_nut=0.1)
+    assert est['T'] == 100.0 and "lock nut 0.10 N·m" in est['how']
+    assert tminlog.estimate(rows, "new", 0.4, 0.955, lock_nut=0.21)['T'] == 88.0  # within tol
+    assert tminlog.estimate(rows, "new", 0.4, 0.955)['T'] == 120.0       # blank: blank only
+    assert tminlog.estimate(rows, "new", 0.4, 0.955, lock_nut=0.3) is None
+
+
+def test_openings_at_the_start_count_only_at_the_same_lock_nut_torque():
+    rows = [row("a", 30.0, 0.1, tminlog.OPENED_AT_START), row("b", 25.0, None,
+                                                               tminlog.OPENED_AT_START)]
+    assert tminlog.opened_low(rows, 0.4, 0.1) == 30.0
+    assert tminlog.opened_low(rows, 0.4) == 25.0
+    assert tminlog.opened_low(rows, 0.4, 0.2) is None
+
+
+def test_the_seating_name_carries_the_lock_nut_torque(clock):
+    ready(clock, nut=0.1)
+    ok, name = tminrun.start(target=0.955, band=0.05, start_thread=False)
+    assert ok and name.endswith("_0.40Nm_nut0.10Nm")
+
+
+@pytest.mark.parametrize("old_nut, now_nut, same", [
+    (0.1, 0.1, True), (0.1, 0.2, False), (None, 0.1, False), (0.1, None, False),
+    (None, None, True)])
+def test_a_different_lock_nut_torque_is_a_new_seating(clock, old_nut, now_nut, same):
+    old = "20261001_110000_0.40Nm"
+    tminlog.append(row(old, 100.0, old_nut), sheet=False)
+    ready(clock, nut=now_nut)
+    assert tminrun.lock_nut_changed(old) is not same
+    ok, name = tminrun.start(retorqued=False, target=0.955, band=0.05, start_thread=False)
+    assert ok and (name == old) is same
+    if not same:
+        assert "(lock nut torque changed)" in " | ".join(events())
+
+
+def test_the_window_does_not_ask_when_the_lock_nut_torque_changed(gui):
+    tminlog.append(row("20261001_110000_0.40Nm", 100.0, 0.1), sheet=False)
+    set_seat(gui)
+    set_nut(gui, "0.2")
+    gui._ask = lambda *a: pytest.fail("no re-torque question: the lock nut changed")
+    seen = start_tmin(gui)
+    assert "The lock nut torque has changed: this starts a new seating" in seen[0]
+    assert "(lock nut 0.10 N·m)" in seen[0]
+    assert tminrun.running() and tminrun.seating().endswith("_nut0.20Nm")
+
+
+def test_the_window_asks_when_the_lock_nut_torque_is_the_same(gui):
+    old = "20261001_110000_0.40Nm"
+    tminlog.append(row(old, 100.0, 0.1), sheet=False)
+    set_seat(gui)
+    set_nut(gui, "0.1")
+    asked = []
+    gui._ask = lambda title, text: asked.append(text) or False
+    gui.mode_var.set("t-min-tune")
+    shared.store_valve_temp(25.0, 0)
+    shared.store_vacuum(1e-6, None, 1.7)
+    shared.store_keller(0.955, None, control.clock())
+    gui._on_mode()
+    gui._set_entry(gui.up_entry, "0.955")
+    gui._poll()
+    gui._start_batch()
+    assert asked and "Has the seat screw been re-torqued" in asked[0]
+    assert tminrun.seating() == old                      # No: continued
