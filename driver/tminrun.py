@@ -2,8 +2,9 @@
 The logic is in tmin.py; this module adds the clock, the thread and the I/O
 (as cyclerun.py does for cycling, which it replaced in the window; history 36).
 
-    start(main_log="", retorqued=None, target=None, band=None)
+    start(main_log="", retorqued=None, target=None, band=None, estimate_c=None)
         -> (ok, message)                    GUI: start
+    estimate_problem(estimate_c) -> str or None
     set_band(target, band)                  GUI: the operator changed them
     last_seating(torque) -> name or None    the newest seating at this torque
     stop(reason)                            GUI: stop, DISARM, closing
@@ -110,7 +111,18 @@ def band_problem(target, band):
     return None
 
 
-def start_problem(target=None, band=None):
+def estimate_problem(estimate_c):
+    """The operator's estimate (°C, optional): None is fine; otherwise it
+    must lie between room temperature and the ceiling."""
+    if estimate_c is None:
+        return None
+    if not (config.TMIN_OPERATOR_EST_MIN_C <= estimate_c <= config.BATCH_CEILING_C):
+        return (f"estimate {estimate_c:g} °C is out of range "
+                f"({config.TMIN_OPERATOR_EST_MIN_C:g}-{config.BATCH_CEILING_C:g} °C)")
+    return None
+
+
+def start_problem(target=None, band=None, estimate_c=None):
     torque = shared.seat_screw_torque()
     if torque is None:
         return "enter the seat screw torque first"
@@ -118,7 +130,7 @@ def start_problem(target=None, band=None):
         return "t-min-tune is already running"
     if control.snapshot()['armed']:
         return "disarm the heater first; t-min-tune arms it itself"
-    problem = band_problem(target, band)
+    problem = band_problem(target, band) or estimate_problem(estimate_c)
     if problem:
         return problem
     r = shared.latest()
@@ -136,12 +148,16 @@ def _settings():
     return {n: getattr(config, n) for n in sorted(names)}
 
 
-def start(main_log="", retorqued=None, target=None, band=None, start_thread=True):
+def start(main_log="", retorqued=None, target=None, band=None, estimate_c=None,
+          start_thread=True):
     """Start at the torque entered. retorqued False continues the newest
-    seating at this torque; True (or None, or none yet) starts a new one."""
+    seating at this torque; True (or None, or none yet) starts a new one.
+    estimate_c: the T_min (°C, at the target) the operator expects, used
+    instead of the other seatings until this seating has a result of its own
+    (history 42)."""
     global _s, _folder, _fit, _thread
     band = config.TMIN_BAND_BAR if band is None else band
-    problem = start_problem(target, band)
+    problem = start_problem(target, band, estimate_c)
     if problem:
         return False, f"t-min-tune not started — {problem}"
     torque = shared.seat_screw_torque()
@@ -162,7 +178,7 @@ def start(main_log="", retorqued=None, target=None, band=None, start_thread=True
             json.dump(dict(seating=name, started=now_dt.isoformat(timespec='seconds'),
                            seat_screw_torque_Nm=torque, retorqued=retorqued,
                            continued=(name == old), upstream_target_bar=target, band_bar=band,
-                           main_log=main_log, detect_rule=openmap.current_rule(),
+                           operator_estimate_degC=estimate_c, main_log=main_log, detect_rule=openmap.current_rule(),
                            results=config.TMIN_CSV, settings=_settings()), f, indent=2)
     except OSError as e:
         return False, f"t-min-tune not started — can't create {path}: {e}"
@@ -176,10 +192,14 @@ def start(main_log="", retorqued=None, target=None, band=None, start_thread=True
         except Exception:                            # a bad file must not stop the start
             low = None
         _s = tmin.new_session(torque, name, target, band, control.clock(),
-                              shared.vacuum_history(), opened_low=low)
+                              shared.vacuum_history(), opened_low=low,
+                              operator_est=estimate_c)
         _folder, _fit = path, fit
         _files.clear()
     est = _estimate(target)
+    if estimate_c is not None and (est is None or not est['how'].startswith(tminlog.OPERATOR)):
+        log_event(f"t-min-tune: your estimate {estimate_c:g} °C is not used — this seating "
+                  f"has a result of its own")
     log_event(f"t-min-tune started at {torque:.2f} N·m, {how}; upstream {target:g} ± {band:g} "
               f"bar; " + (f"estimate {est['T']:.1f} °C ({est['how']})" if est else
                           "nothing measured at this torque yet: the first test scouts")
@@ -219,7 +239,8 @@ def _estimate(target):
     if s is None:
         return None
     try:
-        return tminlog.estimate(tminlog.load(), s['seating'], s['torque'], target, f)
+        return tminlog.estimate(tminlog.load(), s['seating'], s['torque'], target, f,
+                                operator=s.get('operator_est'))
     except Exception as e:                           # a bad file must not stop the run
         log_event(f"t-min estimate failed — {type(e).__name__}: {e}")
         return None

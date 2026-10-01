@@ -203,15 +203,17 @@ class Rig:
         return c, rows, fit[0], msgs
 
     def run_tmin(self, torque=0.45, seating="s1", target=3.0, band=0.05, max_s=6 * 3600,
-                 rows=None, fit=None, hook=None, dt=0.25, idle_s=60, stop_after=None):
+                 rows=None, fit=None, hook=None, dt=0.25, idle_s=60, stop_after=None,
+                 operator=None):
         """t-min-tune until it ends or max_s; every finished test is a row of
         `rows` (the t-min.csv stand-in) and the estimate is recomputed from
         them, as tminrun does. Returns (s, rows, msgs)."""
         rows = [] if rows is None else rows
-        s = tmin.new_session(torque, seating, target, band, self.now, self.idle(idle_s))
+        s = tmin.new_session(torque, seating, target, band, self.now, self.idle(idle_s),
+                             operator_est=operator)
 
         def estimate(tgt):
-            return tminlog.estimate(rows, seating, torque, tgt, fit)
+            return tminlog.estimate(rows, seating, torque, tgt, fit, operator=operator)
         msgs, self.events = [], []
         while s['state'] == tmin.RUNNING and self.now - s['started'] < max_s:
             vac, st = self.vac()

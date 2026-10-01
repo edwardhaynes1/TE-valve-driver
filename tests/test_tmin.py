@@ -1,7 +1,8 @@
 """t-min-tune: the lowest opening temperature, step by step (history 36).
 
 Agreed behaviour (30 Sept 2026):
-  * the estimate: this seating's results, else the other seatings at this
+  * the estimate: this seating's results, else (1 Oct, history 42) the
+    operator's estimate typed at the start, else the other seatings at this
     torque (or the opening map); with nothing at all, one scout ramp
   * start 10 K below it (no result at this seating), 5 K (one), then
     (1 Oct, history 38) 2 K below the lowest of the latest 3, within 3-10 K
@@ -93,6 +94,35 @@ def test_other_seatings_count_with_their_latest_results_only():
     est = tminlog.estimate(rows, "new", 0.5, 0.952)
     assert est['T'] == pytest.approx((122.16 + 120.08 + 120.20) / 3) and est['n'] == 0
     assert math.floor(est['T'] - tminlog.margin(est)) == 110
+
+
+def test_the_operators_estimate_comes_before_the_other_seatings():
+    # history 42: a seating started from the value Edward expects (the
+    # lock-nut seatings), with the usual 10 K margin; no scout
+    old = [dict(time="t", seating="old", torque_Nm="0.45", outcome=tminlog.T_MIN,
+                counted="1", t_min_degC=str(T), upstream_at_open_bar="3.0")
+           for T in (121.0, 122.0)]
+    rig, s, rows, msgs = run(rows=list(old), stop_after=1, operator=118.0)
+    new = rows[len(old):]
+    assert new[0]['outcome'] == tminlog.T_MIN
+    assert float(new[0]['estimate_degC']) == 118.0 and float(new[0]['margin_K']) == 10.0
+    assert float(new[0]['start_degC']) == 108.0
+    assert new[0]['estimate_from'].startswith(tminlog.OPERATOR)
+    # nothing measured at the torque: no scout either
+    rig, s, rows, msgs = run(stop_after=1, operator=118.0)
+    assert rows[0]['outcome'] == tminlog.T_MIN and float(rows[0]['start_degC']) == 108.0
+
+
+def test_the_seatings_own_results_come_before_the_operators_estimate():
+    own = [dict(time="t", seating="a", torque_Nm="0.4", outcome=tminlog.T_MIN, counted="1",
+                t_min_degC="90.0", upstream_at_open_bar="0.95")]
+    est = tminlog.estimate(own, "a", 0.4, 0.95, operator=100.0)
+    assert est['T'] == 90.0 and "this seating" in est['how']
+    scout = [dict(time="t", seating="a", torque_Nm="0.4", outcome=tminlog.SCOUT,
+                  t_min_degC="92.0", upstream_at_open_bar="0.95")]
+    assert tminlog.estimate(scout, "a", 0.4, 0.95, operator=100.0)['how'] == "this seating's scout"
+    est = tminlog.estimate(own, "b", 0.4, 0.95, operator=100.0)
+    assert est['T'] == 100.0 and est['n'] == 0 and tminlog.margin(est) == 10.0
 
 
 def test_results_are_corrected_to_the_target_pressure():
@@ -422,6 +452,28 @@ def test_start_needs_the_torque_the_target_and_a_disarmed_heater(clock):
     control.heater_command(armed=True)
     ok, msg = tminrun.start(target=3.0, start_thread=False)
     assert not ok and "disarm" in msg
+
+
+def test_tminrun_starts_a_new_seating_from_the_operators_estimate(clock):
+    ready(clock)
+    ok, msg = tminrun.start(target=3.0, band=0.05, estimate_c=200.0, start_thread=False)
+    assert not ok and "out of range" in msg
+    ok, name = tminrun.start(target=3.0, band=0.05, estimate_c=98.5, start_thread=False)
+    assert ok
+    est = tminrun._estimate(3.0)
+    assert est['T'] == 98.5 and est['how'].startswith(tminlog.OPERATOR)
+    info = json.load(open(Path(tminrun.folder()) / "session.json", encoding="utf-8"))
+    assert info['operator_estimate_degC'] == 98.5
+    assert "estimate 98.5 °C (the operator's estimate" in shared.recent_events()[-1][1]
+    tminrun.stop("test")
+    # a seating with a result of its own: the estimate is noted and not used
+    tminlog.append(dict(time="2026-10-01T09:00:00", seating=name, torque_Nm=0.45,
+                        upstream_target_bar=3.0, outcome="t_min", t_min_degC=101.0,
+                        upstream_at_open_bar=3.0, counted=1), sheet=False)
+    ok, again = tminrun.start(retorqued=False, target=3.0, band=0.05, estimate_c=98.5,
+                              start_thread=False)
+    assert ok and again == name and tminrun._estimate(3.0)['T'] == 101.0
+    assert any("98.5 °C is not used" in t for _, t in shared.recent_events())
 
 
 def test_the_band_can_change_while_it_runs(clock):

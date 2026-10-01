@@ -2,7 +2,8 @@
 cycling controls): its row (upstream target and ± band) shows only in
 t-min-tune; start needs a torque, a target and a disarmed heater and asks
 for confirmation — and, if the torque has a seating already, whether the
-screw was re-torqued; while it runs it owns the heater (the heater controls
+screw was re-torqued; an optional estimate (°C) starts a new seating from
+it (history 42); while it runs it owns the heater (the heater controls
 and the torque are locked, the band stays editable); stop and DISARM end it."""
 import time
 
@@ -195,6 +196,45 @@ def test_no_question_without_a_seating_at_that_torque(gui):
     gui._confirm = lambda title, text: seen.append(text) or True
     gui._start_batch()
     assert "Nothing measured at this torque yet" in seen[0] and tminrun.running()
+
+
+# ── the optional estimate (history 42) ─────────────────────────────────────
+
+def test_the_estimate_starts_the_seating_and_is_then_cleared(gui):
+    enter_torque(gui)
+    gui._set_entry(gui.est_entry, "96")
+    seen = []
+    gui._confirm = lambda title, text: seen.append(text) or True
+    gui._start_batch()
+    assert "10 K below your estimate 96 °C" in seen[0] and tminrun.running()
+    assert tminrun._estimate(3.0)['T'] == 96.0
+    assert gui.est_entry.get() == "" and state(gui.est_entry) == "disabled"
+    tminrun.stop("test")
+    gui._poll()
+    assert state(gui.est_entry) == "normal"
+
+
+def test_the_estimate_is_named_in_the_re_torque_question(gui):
+    tminlog.append(dict(time="2026-09-30T11:30:00", seating=OLD, torque_Nm=0.30,
+                        upstream_target_bar=3.0, outcome="t_min", t_min_degC=61.2,
+                        upstream_at_open_bar=3.0, counted=1), sheet=False)
+    enter_torque(gui)
+    gui._set_entry(gui.est_entry, "70")
+    seen = []
+    gui._ask = lambda title, text: seen.append(text) or True
+    gui._start_batch()
+    assert "Yes: start a new seating (the first test starts 10 K below your estimate 70 °C" \
+        in seen[0]
+    assert tminrun._estimate(3.0)['T'] == 70.0
+
+
+@pytest.mark.parametrize("text, why", [("abc", "must be a number"), ("300", "out of range")])
+def test_a_bad_estimate_starts_nothing(gui, text, why):
+    enter_torque(gui)
+    gui._set_entry(gui.est_entry, text)
+    gui._start_batch()
+    assert not tminrun.running() and why in shared.recent_events()[-1][1]
+    assert gui.est_entry.get() == text
 
 
 # ── t-min-tune is the fourth mode ──────────────────────────────────────────

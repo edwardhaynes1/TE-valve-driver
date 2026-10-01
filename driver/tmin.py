@@ -103,10 +103,13 @@ def test_name(n):
     return f"test{n:03d}"
 
 
-def new_session(torque, seating, target, band, now, history=(), opened_low=None):
+def new_session(torque, seating, target, band, now, history=(), opened_low=None,
+                operator_est=None):
     """history: [(time, mbar)] recent chamber readings. opened_low: the
     lowest temperature an earlier test at this torque opened at during its
-    hold (t-min.csv), so a scout starts below it (history 41)."""
+    hold (t-min.csv), so a scout starts below it (history 41). operator_est:
+    the T_min (°C) the operator expects, used until this seating has a
+    result of its own (history 42)."""
     if torque is None:
         raise ValueError("t-min-tune needs the seat screw torque")
     s = dict(torque=torque, seating=seating, target=target, band=band, started=now,
@@ -115,7 +118,7 @@ def new_session(torque, seating, target, band, now, history=(), opened_low=None)
                                    * LABJACK_SAMPLE_HZ * 2)),
              y_filt=None, last_t=None, base=None, bad_vac=0, up=None, trend=None,
              extra=0.0, results=0, est=None, waiting_note=False, cool_since=None, last_close=None,
-             opened_low=opened_low,
+             opened_low=opened_low, operator_est=operator_est,
              room=[])
     for t, mbar in history:
         if mbar and mbar > 0 and t <= now:

@@ -533,6 +533,7 @@ TMIN_CLOSE_MAX_S        = 1800.0   # not closed within this long: stop
 TMIN_CONVERGE_N         = 3        # stop when the last N counted results, each corrected to
 TMIN_CONVERGE_K         = 1.0      # the target, all lie within ± this of their mean
 TMIN_ESTIMATE_LAST_N    = 3        # the estimate: the mean of this seating's last N results
+TMIN_OPERATOR_EST_MIN_C = 20.0     # the optional "estimate °C" at the start: 20 °C … BATCH_CEILING_C
 TMIN_QUIT_WHEN_CONVERGED = True    # converged (the valve has closed by then): the driver closes
 TMIN_QUIT_DELAY_S       = 60.0     # … after this long; starting t-min-tune again cancels it (history 39)
 

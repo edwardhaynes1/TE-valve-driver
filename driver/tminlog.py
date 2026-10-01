@@ -11,7 +11,7 @@ the logs folder is not in git, so no commit or update touches it.
                                              T_min filled in where missing
     fill_converged(rows, fit=None) -> n      the latter, on rows in memory
     at_target(row, target, slope) -> °C or None
-    estimate(rows, seating, torque, target, fit=None) -> dict or None
+    estimate(rows, seating, torque, target, fit=None, operator=None) -> dict or None
     margin(est), converged(values)           the rules (tmin.py), here for convenience
 """
 
@@ -25,6 +25,9 @@ from .openmap import rename_header, torque_key
 from .tmin import (ABORTED_BAND, NO_OPENING, OPENED_AT_START, OPENED_OUT_OF_BAND,  # noqa: F401
                    SCOUT_RESULT as SCOUT, STOPPED_TEST as STOPPED, T_MIN, converged,
                    converged_value, margin)
+
+
+OPERATOR = "the operator's estimate"     # estimate_from of a test started from it
 
 
 def _path(path):
@@ -195,12 +198,13 @@ def opened_low(rows, torque):
     return min(vals) if vals else None
 
 
-def estimate(rows, seating, torque, target, fit=None):
+def estimate(rows, seating, torque, target, fit=None, operator=None):
     """The T_min expected at the target for this seating, as a dict
     (T, how, n, sd, values), or None. In order: this seating's counted
     results (the mean of the last TMIN_ESTIMATE_LAST_N); this seating's
-    scout; the other seatings at this torque (the mean, over them, of each
-    one's last TMIN_ESTIMATE_LAST_N counted results — history 40); the
+    scout; the operator's estimate (°C at the target, typed at the start —
+    history 42); the other seatings at this torque (the mean, over them, of
+    each one's last TMIN_ESTIMATE_LAST_N counted results — history 40); the
     opening map's prediction for a new seating at this torque. n and sd are
     this seating's own (they set the margin)."""
     k = slope_for(torque, fit)
@@ -217,6 +221,9 @@ def estimate(rows, seating, torque, target, fit=None):
     scouts = [v for v in scouts if v is not None]
     if scouts:
         return dict(T=scouts[-1], n=0, sd=None, values=[], how="this seating's scout")
+    if operator is not None:
+        return dict(T=float(operator), n=0, sd=None, values=[],
+                    how=f"{OPERATOR} {float(operator):.1f} °C")
     by_seating = {}
     for r in rows:
         if r.get('seating') != seating and _counted(r) \

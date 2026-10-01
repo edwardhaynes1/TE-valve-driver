@@ -51,7 +51,10 @@ choose **t-min-tune** (the fourth mode), enter the **upstream target** (bar)
 and its **±** band (default 0.05 bar) and press **start t-min**. If the
 torque has been measured before it asks **has the seat screw been
 re-torqued (or the valve disturbed) since?** *No* continues that seating;
-*yes* starts a new one. Hold the upstream inside the band by topping up; the
+*yes* starts a new one. The optional **estimate °C** box sets the first
+estimate of a seating with no result yet (e.g. after changing the lock nut):
+its first test starts 10 K below it, instead of from the other seatings or
+a scout; it is cleared once used. Hold the upstream inside the band by topping up; the
 upstream chart is taller in this mode, with the band dotted and the trace
 amber outside it. Then, test after test:
 
@@ -70,7 +73,7 @@ The upstream leaving the band during the hold or a step cuts the heater and
 abandons the test; the next starts afresh once it is back inside. An
 opening during the hold (the start was too high) moves the next start 5 K
 lower. The estimate is this seating's latest results (corrected to the
-target along the opening map's pressure slope), else the other seatings at
+target along the opening map's pressure slope), else your estimate, else the other seatings at
 this torque (each one's latest 3 results), else the opening map; with nothing at all, the first test
 scouts (3 °C/min from 10 K below the torque table). It stops when the last
 3 results lie within ±1 K of their mean, or when you press **stop t-min**

@@ -4,6 +4,20 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 42. An optional "estimate °C" starts a new seating from the value Edward expects — 1 Oct 2026
+The lock-nut seatings at 0.40 N·m gave 102.3, 87.8 and ≫ 92 °C: the other
+seatings' mean says little about the next one, and Edward often has a
+better guess. The t-min-tune row now has an **estimate °C** box (optional,
+20-155 °C). Filled in at the start, it is the estimate until the seating has
+a result of its own (a counted result or its scout); it comes before the
+other seatings, the opening map and the scout, with the usual 10 K margin
+for a new seating. A seating that already has results ignores it, and the
+event log says so. It is read at the start only: locked while t-min-tune
+runs, and cleared once used, so it isn't carried to the next seating by
+mistake. Rows started from it say "the operator's estimate …" in
+`estimate_from`; `session.json` records it as `operator_estimate_degC`. No
+new column in `t-min.csv`.
+
 ## 41. A scout also remembers openings at the start from earlier sessions — 1 Oct 2026
 History 40 lowered the next scout within a session; a new session at 0.20
 N·m still scouted from 40 °C (the torque table) after the valve had opened

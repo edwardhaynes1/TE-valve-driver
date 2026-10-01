@@ -13,8 +13,8 @@ from . import logfile
 from . import readout
 from . import shared
 from .config import (
-    CHART_SECONDS, TMIN_BAND_BAR, TMIN_QUIT_DELAY_S, TMIN_QUIT_WHEN_CONVERGED,
-    TMIN_UP_CHART_WEIGHT,
+    CHART_SECONDS, TMIN_BAND_BAR, TMIN_MARGIN_NEW_K, TMIN_QUIT_DELAY_S,
+    TMIN_QUIT_WHEN_CONVERGED, TMIN_UP_CHART_WEIGHT,
     FLIGHT_POWER_BUDGET_W, HEATER_I_AIN, HEATER_MAX_DUTY, HEATER_PWM_PERIOD_S,
     HEATER_R_OHM, HEATER_V_AIN, PID_SETPOINT_DEFAULT, PRESSURE_TARGET_DEFAULT,
     PRESSURE_TARGET_MIN, PRESSURE_TRIP_MBAR, TEMP_TRIP_C, heater_current_a,
@@ -224,8 +224,10 @@ class TEGui:
                   AUTO_P: self.p_entry,
                   BATCH:  None}[mode]
         cycle = (self.up_entry, self.band_entry)
-        for e in (self.duty_entry, self.sp_entry, self.p_entry, *cycle):
-            on = e is active or (mode == BATCH and e in cycle)
+        est_on = mode == BATCH and not tminrun.running()
+        for e in (self.duty_entry, self.sp_entry, self.p_entry, *cycle, self.est_entry):
+            on = e is active or (mode == BATCH and e in cycle) or (e is self.est_entry
+                                                                   and est_on)
             e.configure(state="normal" if on else "disabled",
                         highlightbackground=BRIGHT if on else BORDER)
             e.label.configure(fg=TEXT if on else DIM)
@@ -289,7 +291,11 @@ class TEGui:
         self.up_entry = self._entry(self._up_row_frame, "upstream target bar", "", width=6)
         self.band_entry = self._entry(self._up_row_frame, "±", f"{TMIN_BAND_BAR:g}", width=5)
         tk.Label(self._up_row_frame, text="bar  (hold it there by topping up)", font=self.f,
-                 fg=DIM, bg=BG).pack(side="left")
+                 fg=DIM, bg=BG).pack(side="left", padx=(0, 12))
+        # optional: the T_min expected at a new seating (history 42); read
+        # at the start only, so locked while it runs, and cleared once used
+        self.est_entry = self._entry(self._up_row_frame, "estimate °C", "", width=6)
+        self.est_entry.unbind("<Return>")
         for e in (self.up_entry, self.band_entry):
             e.unbind("<Return>")
             e.bind("<Return>", lambda _ev: self._send_band())
@@ -353,7 +359,7 @@ class TEGui:
                                 highlightbackground=PROMPT if locked else BORDER)
         buttons = [self.arm_btn, *self.mode_buttons, self.update_btn]
         entries = [self.duty_entry, self.sp_entry, self.p_entry, self.up_entry,
-                   self.band_entry]
+                   self.band_entry, self.est_entry]
         self._apply_batch_lock()
         if locked:
             for w in buttons + entries:
@@ -377,13 +383,13 @@ class TEGui:
         busy = tminrun.running()
         self._batch_running = busy
         heater = [*self.mode_buttons, self.update_btn, self.duty_entry, self.sp_entry,
-                  self.p_entry, self.seat_entry, self.seat_btn]
+                  self.p_entry, self.est_entry, self.seat_entry, self.seat_btn]
         if busy:
             for w in heater:
                 w.configure(state="disabled")
             for w in (*self.mode_buttons, self.update_btn, self.seat_btn):
                 w.configure(disabledforeground=DIM)
-            for e in (self.duty_entry, self.sp_entry, self.p_entry):
+            for e in (self.duty_entry, self.sp_entry, self.p_entry, self.est_entry):
                 e.configure(highlightbackground=BORDER)
                 e.label.configure(fg=DIM)
         elif not getattr(self, "_locked", True):
@@ -414,7 +420,11 @@ class TEGui:
                       "± band (bar)")
             return
         target, width = band
-        problem = tminrun.start_problem(target, width)
+        ok_est, est_c = self.estimate_input()
+        if not ok_est:
+            log_event("t-min-tune not started — the estimate must be a number (°C) or blank")
+            return
+        problem = tminrun.start_problem(target, width, est_c)
         torque = shared.seat_screw_torque()
         if problem:
             log_event(f"t-min-tune not started — {problem}")
@@ -432,6 +442,8 @@ class TEGui:
                   "'stop t-min' stops it.")
         old = tminrun.last_seating(torque)
         retorqued = None
+        first = (f"the first test starts {TMIN_MARGIN_NEW_K:g} K below your estimate "
+                 f"{est_c:g} °C" if est_c is not None else None)
         if old is not None:
             answer = self._ask(
                 "Start t-min-tune",
@@ -439,8 +451,10 @@ class TEGui:
                 f"Latest seating at this torque: {old}\n\n"
                 f"Has the seat screw been re-torqued (or the valve disturbed) since?\n\n"
                 f"No: continue that seating (its results so far set the estimate).\n"
-                f"Yes: start a new seating (the estimate comes from the other seatings "
-                f"at this torque).\n\n" + common)
+                + (f"Yes: start a new seating ({first}; your estimate also applies "
+                   f"to 'No' if that seating has no result yet).\n\n" if first else
+                   f"Yes: start a new seating (the estimate comes from the other seatings "
+                   f"at this torque).\n\n") + common)
             if answer is None:
                 log_event("t-min-tune not started (cancelled)")
                 return
@@ -449,14 +463,17 @@ class TEGui:
                 "Start t-min-tune",
                 f"Seat screw torque: {torque:.2f} N·m\n"
                 f"Is that the torque on the valve now?\n\n"
-                "Nothing measured at this torque yet: a new seating; the first test "
-                "scouts from the torque table.\n" + common):
+                + (f"Nothing measured at this torque yet: a new seating; {first}.\n"
+                   if first else "Nothing measured at this torque yet: a new seating; the "
+                   "first test scouts from the torque table.\n") + common):
             log_event("t-min-tune not started (cancelled)")
             return
         ok, msg = tminrun.start(logfile.LOG_FILE, retorqued=retorqued, target=target,
-                                band=width)
+                                band=width, estimate_c=est_c)
         if not ok:
             log_event(msg)
+        elif est_c is not None:
+            self._set_entry(self.est_entry, "")      # one seating's: not carried to the next
         self._apply_gate()
 
     def _send_band(self):
@@ -655,6 +672,17 @@ class TEGui:
         if not (0.0 < t < 20.0) or not (0.0 < b < 5.0):
             return None
         return t, b
+
+    def estimate_input(self):
+        """(ok, °C or None) from the optional estimate box: blank is (True,
+        None); not a number is (False, None)."""
+        text = self.est_entry.get().strip()
+        if not text:
+            return True, None
+        try:
+            return True, float(text)
+        except ValueError:
+            return False, None
 
     def upstream_band(self):
         """(target, lo, hi) in bar from the t-min-tune inputs, or None."""
