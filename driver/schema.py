@@ -178,6 +178,9 @@ TMIN_COLUMNS = (
     ("converged",             "1 = the last results were within ± TMIN_CONVERGE_K after this test"),
     ("trace",                 "the test's rows (main-log columns), relative to logs/"),
     ("note",                  ""),
+    ("t_min_converged_degC",  "on the row that converged: the converged T_min, the mean of the last "
+                              "TMIN_CONVERGE_N counted results at the target (history 38; filled in "
+                              "for rows written before)"),
 )
 
 # Columns renamed since they were first written: old name → new. Files

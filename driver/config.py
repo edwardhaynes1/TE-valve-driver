@@ -514,8 +514,14 @@ TMIN_DWELL_S            = 300.0    # time at each step (2-3 thermal time constan
 TMIN_STEP_BAND_K        = 0.5      # a step's dwell starts once the TC is this close to it
 TMIN_MARGIN_NEW_K       = 10.0     # start this far below the estimate: no result yet at this seating
 TMIN_MARGIN_ONE_K       = 5.0      # … one result (no scatter yet)
-TMIN_MARGIN_MIN_K       = 3.0      # from two results: 2 × their scatter + TMIN_STEP_K, within
-TMIN_MARGIN_MAX_K       = 10.0     # these limits
+TMIN_START_BELOW_LOWEST_K = 2.0    # from two results: start this far below the lowest of the
+                                   # latest TMIN_ESTIMATE_LAST_N (history 38) …
+TMIN_MARGIN_MIN_K       = 3.0      # … but at least this far below the estimate, and at most
+TMIN_MARGIN_MAX_K       = 10.0     # this far
+TMIN_START_ABOVE_CLOSE_K = None   # K: start no higher than the previous test's T_close + this
+                                   # (history 38); None = off. Off by default: on 1 Oct
+                                   # (0.30 N·m) +3 K would have started tests at 58-59 °C
+                                   # instead of 64-65, ~30 min more each
 TMIN_ABOVE_EST_K        = 15.0     # no opening by this far above the estimate: the test ends
                                    # "no opening" and the session stops (the estimate is far off,
                                    # or the valve was already open at the start: no rise to see)

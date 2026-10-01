@@ -16,7 +16,8 @@ threads, clock, files or hardware (tminrun.py adds those).
     in_band(s, p_up) -> bool
 
 A test: hold (auto-t at the start temperature — the estimate minus the
-margin — until the chamber is settled) → step (+TMIN_STEP_K, each held
+margin, or from two results 2 K below the lowest of the latest — until the
+chamber is settled) → step (+TMIN_STEP_K, each held
 TMIN_DWELL_S once the TC is within TMIN_STEP_BAND_K of it) until the valve
 opens: that step is T_min → cool (heater off) until closed: the chamber
 within TMIN_CLOSED_DEC of its baseline before the opening, and settled; the
@@ -43,8 +44,9 @@ from .config import (
     PRESSURE_BASE_GUARD_S, PRESSURE_BASE_MIN_S, PRESSURE_BASE_WINDOW_S, PRESSURE_FILTER_S,
     PRESSURE_TRIP_MBAR, PRESSURE_UP_K_PER_BAR, PRESSURE_UP_MAX_DOWN_K,
     PRESSURE_UP_MAX_SHIFT_K, TMIN_CLOSE_MAX_S, TMIN_CLOSED_DEC, TMIN_CONVERGE_K,
-    TMIN_ABOVE_EST_K, TMIN_CONVERGE_N, TMIN_DWELL_S, TMIN_MARGIN_MAX_K, TMIN_MARGIN_MIN_K, TMIN_MARGIN_NEW_K,
-    TMIN_MARGIN_ONE_K, TMIN_OPENED_AT_START_K, TMIN_STEP_BAND_K, TMIN_STEP_K,
+    TMIN_ABOVE_EST_K, TMIN_CONVERGE_N, TMIN_DWELL_S, TMIN_ESTIMATE_LAST_N, TMIN_MARGIN_MAX_K,
+    TMIN_MARGIN_MIN_K, TMIN_MARGIN_NEW_K, TMIN_MARGIN_ONE_K, TMIN_OPENED_AT_START_K,
+    TMIN_START_ABOVE_CLOSE_K, TMIN_START_BELOW_LOWEST_K, TMIN_STEP_BAND_K, TMIN_STEP_K,
     VAC_HIGH_STATES,
 )
 from .controller import AUTO_T, opening_point
@@ -67,13 +69,25 @@ _ROOM_SLOW_S = 120.0            # …for this long starts where it is (it can't 
 
 def margin(est):
     """K below the estimate to start: TMIN_MARGIN_NEW_K without a result at
-    this seating, TMIN_MARGIN_ONE_K with one, then 2 × the scatter of the
-    latest results + TMIN_STEP_K, within TMIN_MARGIN_MIN_K … _MAX_K."""
+    this seating, TMIN_MARGIN_ONE_K with one; from two (history 38),
+    TMIN_START_BELOW_LOWEST_K below the lowest of the latest
+    TMIN_ESTIMATE_LAST_N, kept within TMIN_MARGIN_MIN_K … _MAX_K of the
+    estimate — so one high result doesn't push the start down."""
     if est is None or est['n'] == 0:
         return TMIN_MARGIN_NEW_K
-    if est['sd'] is None:
+    if est['n'] == 1 or not est.get('values'):
         return TMIN_MARGIN_ONE_K
-    return min(TMIN_MARGIN_MAX_K, max(TMIN_MARGIN_MIN_K, 2.0 * est['sd'] + TMIN_STEP_K))
+    lowest = min(est['values'][-TMIN_ESTIMATE_LAST_N:])
+    below = est['T'] - (lowest - TMIN_START_BELOW_LOWEST_K)
+    return min(TMIN_MARGIN_MAX_K, max(TMIN_MARGIN_MIN_K, below))
+
+
+def converged_value(values):
+    """The converged T_min: the mean of the last TMIN_CONVERGE_N values, or
+    None when they haven't converged."""
+    if not converged(values):
+        return None
+    return statistics.mean(values[-TMIN_CONVERGE_N:])
 
 
 def converged(values):
@@ -98,7 +112,7 @@ def new_session(torque, seating, target, band, now, history=()):
              hist=deque(maxlen=int((max(PRESSURE_BASE_WINDOW_S, BATCH_SETTLE_WINDOW_S) + 10)
                                    * LABJACK_SAMPLE_HZ * 2)),
              y_filt=None, last_t=None, base=None, bad_vac=0, up=None, trend=None,
-             extra=0.0, results=0, est=None, waiting_note=False, cool_since=None,
+             extra=0.0, results=0, est=None, waiting_note=False, cool_since=None, last_close=None,
              room=[])
     for t, mbar in history:
         if mbar and mbar > 0 and t <= now:
@@ -259,10 +273,17 @@ def _begin_test(s, now, temp, est, cmds, msgs, events):
         why = (f"scouting (nothing measured at this torque): {SCOUT_BELOW_K:g} K below "
                f"{how}, then {BATCH_CREEP_C_MIN:g} °C/min until it opens")
     else:
-        m = margin(est) + s['extra']
-        test.update(est=est['T'], how=est['how'], margin=m,
-                    start_c=math.floor(min(BATCH_CEILING_C - 5.0, est['T'] - m)))
-        why = (f"{m:g} K below the estimate {est['T']:.1f} °C ({est['how']}), then "
+        m = round(margin(est) + s['extra'], 2)
+        start = math.floor(min(BATCH_CEILING_C - 5.0, est['T'] - m))
+        cap = ""
+        if TMIN_START_ABOVE_CLOSE_K is not None and s['last_close'] is not None:
+            limit = math.floor(s['last_close'] + TMIN_START_ABOVE_CLOSE_K)
+            if limit < start:
+                start, m = limit, round(est['T'] - limit, 2)
+                cap = (f", capped at the last T_close {s['last_close']:.1f} °C + "
+                       f"{TMIN_START_ABOVE_CLOSE_K:g} K")
+        test.update(est=est['T'], how=est['how'], margin=m, start_c=start)
+        why = (f"{m:g} K below the estimate {est['T']:.1f} °C ({est['how']}){cap}, then "
                f"+{TMIN_STEP_K:g} K every {TMIN_DWELL_S / 60:g} min")
     test['sp'] = test['start_c']
     s.update(bad_vac=0, room=[])
@@ -432,6 +453,7 @@ def _cool(s, now, temp, msgs, events):
     back = base is None or (yf is not None and yf <= base + TMIN_CLOSED_DEC)
     if back and test['closed_t'] is None:
         test['closed_t'], test['closed_T'] = now, temp
+        s['last_close'] = temp
     if back and settled(s['trend']):
         msgs.append(f"t-min-tune: {test['name']} — closed (chamber back at its baseline"
                     + (f"; T_close {test['closed_T']:.1f} °C" if test['closed_T'] is not None
@@ -498,8 +520,9 @@ def stop(s, now, reason):
     return cmds, msgs, events
 
 
-def result_row(s, test, slope, time_iso, trace="", converged=False):
-    """The t-min.csv row of a finished test."""
+def result_row(s, test, slope, time_iso, trace="", converged=False, converged_T=None):
+    """The t-min.csv row of a finished test. converged_T: the converged
+    T_min, on the row that converged."""
     t_min = test['T_onset']
     corr = None
     if t_min is not None:
@@ -520,7 +543,8 @@ def result_row(s, test, slope, time_iso, trace="", converged=False):
         estimate_degC=round(test['est'], 2) if test['est'] is not None else None,
         margin_K=test['margin'], estimate_from=test['how'],
         counted=1 if counted(test) else 0, converged=1 if converged else 0,
-        trace=trace, note=test['note'])
+        trace=trace, note=test['note'],
+        t_min_converged_degC=round(converged_T, 3) if converged_T is not None else None)
 
 
 def status_text(s):

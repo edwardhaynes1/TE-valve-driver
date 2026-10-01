@@ -1,11 +1,15 @@
 """The t-min-tune results (history 36): logs/t-min.csv, one row per test,
 and the estimates recomputed from it. The file is the single record of what
 t-min-tune has learned: the code only appends to it (a newer version with
-more columns adds them at the end, rewriting the header once), and the logs
-folder is not in git, so no commit or update touches it.
+more columns adds them at the end, rewriting the file once, and fills in a
+new column's value for old rows where it can be worked out from them), and
+the logs folder is not in git, so no commit or update touches it.
 
     load(path=None) -> [row]                 rows as dicts of strings
     append(row, path=None, sheet=True) -> (ok, message)
+    upgrade(path=None) -> (filled, message)  new columns, and the converged
+                                             T_min filled in where missing
+    fill_converged(rows, fit=None) -> n      the latter, on rows in memory
     at_target(row, target, slope) -> °C or None
     estimate(rows, seating, torque, target, fit=None) -> dict or None
     margin(est), converged(values)           the rules (tmin.py), here for convenience
@@ -19,7 +23,8 @@ import statistics
 from . import config, schema, workbook
 from .openmap import rename_header, torque_key
 from .tmin import (ABORTED_BAND, NO_OPENING, OPENED_AT_START, OPENED_OUT_OF_BAND,  # noqa: F401
-                   SCOUT_RESULT as SCOUT, STOPPED_TEST as STOPPED, T_MIN, converged, margin)
+                   SCOUT_RESULT as SCOUT, STOPPED_TEST as STOPPED, T_MIN, converged,
+                   converged_value, margin)
 
 
 def _path(path):
@@ -54,30 +59,83 @@ def _header(path):
         return None
 
 
+def fill_converged(rows, fit=None):
+    """Give each row that converged (converged = 1) without a
+    t_min_converged_degC the value it would have been written with: the
+    mean of its seating's last TMIN_CONVERGE_N counted results up to and
+    including it, at that row's upstream target (history 38). Results at
+    that target keep their t_min_at_target_degC; others are moved to it
+    along the slope. Changes rows in place; returns how many were filled."""
+    filled = 0
+    for i, r in enumerate(rows):
+        if str(r.get('converged', '')).strip() != '1' or \
+                _num(r.get('t_min_converged_degC')) is not None:
+            continue
+        target = _num(r.get('upstream_target_bar'))
+        k = slope_for(_num(r.get('torque_Nm')), fit)
+        values = []
+        for q in rows[:i + 1]:
+            if q.get('seating') != r.get('seating') or not _counted(q):
+                continue
+            same = target is not None and _num(q.get('upstream_target_bar')) == target
+            v = _num(q.get('t_min_at_target_degC')) if same else None
+            values.append(v if v is not None else at_target(q, target, k))
+        values = [v for v in values if v is not None]
+        T = converged_value(values)
+        if T is not None:
+            r['t_min_converged_degC'] = _cell(round(T, 3))
+            filled += 1
+    return filled
+
+
+def _rewrite(p, header, rows):
+    tmp = p + ".tmp"
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        for r in rows:
+            w.writerow([r.get(c, '') for c in header])
+    os.replace(tmp, p)
+
+
+def upgrade(path=None):
+    """Bring a file written by an older version up to date: renamed columns,
+    new columns at the end, and the converged T_min filled in on rows that
+    converged. Nothing already in it is changed or dropped. Returns (rows
+    filled, message — '' when there was nothing to report)."""
+    p = _path(path)
+    try:
+        rename_header(p)
+        header = _header(p)
+        if not header:
+            return 0, ""
+        missing = [c for c in schema.TMIN if c not in header]
+        rows = load(p)
+        filled = fill_converged(rows)
+        if not missing and not filled:
+            return 0, ""
+        _rewrite(p, header + missing, rows)
+    except OSError as e:
+        return 0, f"t-min.csv not brought up to date — can't write {p}: {e}"
+    return filled, (f"t-min.csv: converged T_min filled in on {filled} row"
+                    f"{'s' * (filled != 1)}" if filled else "")
+
+
 def append(row, path=None, sheet=True):
     """Add one test to the file (and a copy to the workbook's T_min sheet).
-    A file written by an older version, with fewer columns, gains the new
-    ones at the end first; nothing already in it is changed or dropped."""
+    A file written by an older version is brought up to date first
+    (upgrade); nothing already in it is changed or dropped."""
     p = _path(path)
     try:
         os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
-        rename_header(p)
         header = _header(p)
         if header is None or header == []:
             header = list(schema.TMIN)
             with open(p, "w", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(header)
-        missing = [c for c in schema.TMIN if c not in header]
-        if missing:
-            old = load(p)
-            header = header + missing
-            tmp = p + ".tmp"
-            with open(tmp, "w", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                w.writerow(header)
-                for r in old:
-                    w.writerow([r.get(c, '') for c in header])
-            os.replace(tmp, p)
+        else:
+            upgrade(p)
+            header = _header(p)
         with open(p, "a", newline="", encoding="utf-8") as f:
             csv.writer(f).writerow([_cell(row.get(c)) for c in header])
     except OSError as e:

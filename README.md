@@ -57,7 +57,8 @@ amber outside it. Then, test after test:
 
 1. hold a start temperature below the estimate until the chamber is
    settled — 10 K below while the seating has no result, 5 K with one, then
-   2 × the scatter of its latest results + 1 K (3-10 K);
+   2 K below the lowest of its latest 3 results (kept 3-10 K below the
+   estimate);
 2. step the setpoint up 1 K every 5 min (from when the TC is within 0.5 K
    of it) until the valve opens: that step is T_min (the TC at the onset);
 3. heater off; wait until the valve has closed — the chamber within +5 %
@@ -79,8 +80,10 @@ Every test is a row of **`logs/t-min.csv`**: time, seating, torque, target
 and band, outcome (t_min, opened at start, aborted: out of band, opened out
 of band, no opening, scout, stopped), start, step, T_min (and corrected to
 the target), T_detect, T_close, upstream at the opening, in band, baseline,
-the estimate and margin it started from, counted, converged, and the path
-of its trace. The estimates are recomputed from that file, so it is the one
+the estimate and margin it started from, counted, converged, the path of
+its trace, and — on the row that converged — the converged T_min
+(`t_min_converged_degC`, the mean of the last 3; filled in for rows written
+before it existed, the next time t-min-tune starts or a row is added). The estimates are recomputed from that file, so it is the one
 record of what has been learned; the code only appends to it, and `logs/`
 is not in git, so no commit or update touches it. A copy goes to the
 *T_min* sheet of the opening-map workbook. Traces:

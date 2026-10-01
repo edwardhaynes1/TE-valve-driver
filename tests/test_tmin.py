@@ -4,7 +4,8 @@ Agreed behaviour (30 Sept 2026):
   * the estimate: this seating's results, else the other seatings at this
     torque (or the opening map); with nothing at all, one scout ramp
   * start 10 K below it (no result at this seating), 5 K (one), then
-    2 × scatter + 1 K within 3-10 K; hold until the chamber is settled
+    (1 Oct, history 38) 2 K below the lowest of the latest 3, within 3-10 K
+    of the estimate; hold until the chamber is settled
   * step +1 K every 5 min (once the TC is within 0.5 K); the step where it
     opens is T_min
   * the upstream outside target ± band cuts the heater and abandons the
@@ -12,9 +13,12 @@ Agreed behaviour (30 Sept 2026):
   * after an opening: closed = chamber within +0.02 dec of its baseline and
     settled; T_close logged; 30 min cap
   * stop when the last 3 results agree within ±1 K, or stopped
-  * every test is a row of logs/t-min.csv, the central record, only appended to
+  * every test is a row of logs/t-min.csv, the central record, only appended to;
+    the row that converged carries the converged T_min (history 38), filled
+    in for rows written before
 """
 import csv
+import math
 import json
 from pathlib import Path
 
@@ -44,7 +48,7 @@ def test_a_session_scouts_then_converges_on_the_opening_point():
     got = results(rows)
     assert len(got) == 3
     assert all(119.0 <= float(r['t_min_degC']) <= 121.5 for r in got)
-    # the margin narrows: 10 K (no result), 5 K (one), then 2 × scatter + 1 K ≥ 3 K
+    # the margin narrows: 10 K (no result), 5 K (one), then 2 K below the lowest, ≥ 3 K
     assert [float(r['margin_K']) for r in got] == [10.0, 5.0, pytest.approx(3.0, abs=0.01)]
     for r in got:
         # started below it, opened on a step, closed well below
@@ -223,12 +227,86 @@ def test_the_file_only_grows_and_gains_new_columns(tmp_path):
     assert header[:6] == old_cols and set(schema.TMIN) <= set(header)
 
 
+def _est(values):
+    last = values[-3:]
+    return dict(T=sum(last) / len(last), n=len(values), sd=None if len(last) < 2 else 0.0,
+                values=list(values))
+
+
 def test_margin_and_convergence_rules():
     assert tminlog.margin(None) == 10.0
-    assert tminlog.margin(dict(n=1, sd=None)) == 5.0
-    assert tminlog.margin(dict(n=3, sd=0.2)) == 3.0
-    assert tminlog.margin(dict(n=3, sd=2.0)) == 5.0
-    assert tminlog.margin(dict(n=3, sd=9.0)) == 10.0
+    assert tminlog.margin(dict(n=1, sd=None, values=[67.0])) == 5.0
+    # from two results: 2 K below the lowest of the latest 3, 3-10 K below the estimate
+    assert tminlog.margin(_est([67.0, 67.2, 67.1])) == pytest.approx(3.0)        # floor
+    assert tminlog.margin(_est([75.0, 67.0, 67.0])) == pytest.approx(4.667, abs=1e-3)
+    assert tminlog.margin(_est([90.0, 90.0, 60.0])) == pytest.approx(10.0)       # ceiling
+    assert tminlog.margin(_est([60.0, 67.0, 67.0, 67.0])) == pytest.approx(3.0)  # latest 3 only
+    assert not tminlog.converged([120.0, 121.0])
+    assert tminlog.converged([125.0, 120.0, 121.0, 120.5])
+    assert not tminlog.converged([120.0, 121.0, 122.5])
+    assert tminlog.converged_value([125.0, 120.0, 121.0, 120.5]) == pytest.approx(120.5)
+    assert tminlog.converged_value([120.0, 121.0, 122.5]) is None
+
+
+# 1 Oct 2026, 0.30 N·m at 0.959 bar: (seating, outcome, counted, converged,
+# t_min_degC, t_min_at_target_degC, upstream_at_open_bar)
+OCT1 = [("a", "scout", "0", "0", 90.953, 90.955, 0.9592),
+        ("a", "t_min", "1", "0", 70.969, 70.97, 0.9591),
+        ("a", "t_min", "1", "0", 66.984, 66.984, 0.959),
+        ("a", "t_min", "1", "0", 67.062, 67.064, 0.9591),
+        ("a", "t_min", "1", "1", 67.93, 67.935, 0.9594),
+        ("b", "scout", "0", "0", 107.742, 107.858, 0.9596)]
+
+
+def _oct1_rows():
+    return [dict(time=f"2026-10-01T09:{i:02d}", seating=se, torque_Nm="0.3" if se == "a" else "0.4",
+                 upstream_target_bar="0.959" if se == "a" else "0.95", band_bar="0.05",
+                 outcome=o, counted=c, converged=v, t_min_degC=str(t), t_min_at_target_degC=str(tt),
+                 upstream_at_open_bar=str(p))
+            for i, (se, o, c, v, t, tt, p) in enumerate(OCT1)]
+
+
+def test_the_start_is_2_K_below_the_lowest_recent_result():
+    # 1 Oct: the estimate before test007 was 68.3 °C with 2.3 K scatter; the old
+    # rule started at 62 °C, 2 K below the lowest (66.98) is 64 °C
+    rows = _oct1_rows()[:4]
+    est = tminlog.estimate(rows, "a", 0.3, 0.959)
+    assert est['T'] == pytest.approx(68.339, abs=1e-3)
+    assert math.floor(est['T'] - tminlog.margin(est)) == 64
+
+
+def test_the_start_can_be_capped_at_the_last_T_close(monkeypatch):
+    # off by default; on, no test starts above the previous T_close + K
+    # (the valve closes 15 K below where it opened, so the cap bites)
+    assert config.TMIN_START_ABOVE_CLOSE_K is None
+    monkeypatch.setattr(tmin, "TMIN_START_ABOVE_CLOSE_K", 3.0)
+    rig, s, rows, msgs = run(stop_after=3)
+    done = [r for r in rows if r['t_close_degC']]
+    assert len(done) >= 3
+    for prev, r in zip(done, done[1:]):
+        assert float(r['start_degC']) <= float(prev['t_close_degC']) + 3.0
+    assert any("capped at the last T_close" in m for m in msgs)
+
+
+def test_the_converged_T_min_is_filled_in_for_rows_written_before(tmp_path):
+    p = tmp_path / "t-min.csv"
+    cols = list(schema.TMIN)[:-1]                     # the file before history 38
+    with open(p, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(cols)
+        for r in _oct1_rows():
+            w.writerow([r.get(c, '') for c in cols])
+    before = tminlog.load(str(p))
+    filled, msg = tminlog.upgrade(str(p))
+    assert filled == 1 and "1 row" in msg
+    rows = tminlog.load(str(p))
+    assert [r['t_min_converged_degC'] for r in rows] == ['', '', '', '', '67.328', '']
+    for a, b in zip(before, rows):                    # nothing else changed
+        assert all(a[c] == b[c] for c in cols)
+    assert tminlog.upgrade(str(p)) == (0, "")         # once only
+    # the next row appended keeps it
+    tminlog.append(dict(time="t", seating="b", outcome="t_min"), path=str(p), sheet=False)
+    assert tminlog.load(str(p))[4]['t_min_converged_degC'] == '67.328'
     assert not tminlog.converged([120.0, 121.0])
     assert tminlog.converged([125.0, 120.0, 121.0, 120.5])
     assert not tminlog.converged([120.0, 121.0, 122.5])
@@ -272,9 +350,15 @@ def test_tminrun_writes_the_central_file_and_the_traces(clock):
     ready(clock)
     ok, name = tminrun.start(target=3.0, band=0.05, start_thread=False)
     assert ok and name.endswith("_0.45Nm")
-    drive(clock, Rig(**VALVE), max_s=4 * 3600)
+    drive(clock, Rig(**VALVE), max_s=8 * 3600)
     tminrun.stop("test")
     rows = tminlog.load()
+    # the row that converged carries the converged T_min: the mean of the last 3
+    conv = [i for i, r in enumerate(rows) if r['converged'] == '1']
+    assert len(conv) == 1 and conv[0] == len(rows) - 1
+    last3 = [float(r['t_min_at_target_degC']) for r in rows if r['counted'] == '1'][-3:]
+    assert float(rows[-1]['t_min_converged_degC']) == pytest.approx(sum(last3) / 3, abs=1e-3)
+    assert all(r['t_min_converged_degC'] == '' for r in rows[:-1])
     assert rows and rows[0]['outcome'] == tminlog.SCOUT
     assert any(r['outcome'] == tminlog.T_MIN and r['counted'] == '1' for r in rows)
     assert {r['seating'] for r in rows} == {name}

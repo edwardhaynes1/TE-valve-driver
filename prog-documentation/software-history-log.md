@@ -4,6 +4,28 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 38. t-min-tune starts 2 K below the lowest result; the converged T_min is recorded — 1 Oct 2026
+The first 0.30 N·m session (1 Oct, 0.959 bar) converged on 67.3 °C, but
+spent most of its time on steps where the valve never opens: test006 held
+63-66 °C for 20 of its 22.5 min. Test004's 71 °C (started above T_min)
+inflated the scatter, and with it the old margin (2 × scatter + 1 K).
+* **Start from two results at 2 K below the lowest of the latest 3**
+  (`TMIN_START_BELOW_LOWEST_K`), kept 3-10 K below the estimate. One high
+  result no longer pushes the start down; 2 K still gives a full 5 min step
+  below the last opening, so a downward drift is caught. 1 Oct: 64 °C
+  instead of 62 °C. Step (1 K) and dwell (5 min) unchanged: the openings
+  came 43-159 s into their step, too few to shorten it yet.
+* **Optional cap at the previous T_close + K** (`TMIN_START_ABOVE_CLOSE_K`),
+  Edward's idea for high upstream pressure. Off by default: whether the
+  valve has closed is already judged by the chamber before the next test,
+  and the cap starts tests lower exactly when the valve closes far below
+  T_min (1 Oct, +3 K: 58-59 °C instead of 64-65, ~30 min more per test).
+* **The converged T_min is recorded**: `t_min_converged_degC` on the row
+  that converged (the mean of the last 3 counted results at the target).
+  Until now it was only in the event log. Rows written before get it when
+  t-min-tune starts or a row is added (`tminlog.upgrade`); nothing else in
+  the file changes.
+
 ## 37. "Setting" is now "seating" — 1 Oct 2026
 Edward didn't like "setting" (nor "tightening") for one tightening of the
 seat screw; "seating" names what changes — how the valve is seated and

@@ -157,6 +157,9 @@ def start(main_log="", retorqued=None, target=None, band=None, start_thread=True
                            results=config.TMIN_CSV, settings=_settings()), f, indent=2)
     except OSError as e:
         return False, f"t-min-tune not started — can't create {path}: {e}"
+    filled, message = tminlog.upgrade()
+    if message:
+        log_event(message)
     fit = _refit()
     with _lock:
         _s = tmin.new_session(torque, name, target, band, control.clock(),
@@ -316,10 +319,11 @@ def _result(test):
             corr = test['T_onset'] + (slope * (s['target'] - test['up_open'])
                                       if test['up_open'] is not None else 0.0)
             values.append(corr)
-        conv = tmin.counted(test) and tminlog.converged(values)
+        conv_T = tmin.converged_value(values) if tmin.counted(test) else None
+        conv = conv_T is not None
         trace = _source(os.path.join(path, f"{test['name']}.csv")) if path else ""
         row = tmin.result_row(s, test, slope, _iso(test['t_onset'] or test['t_end']),
-                              trace=trace, converged=conv)
+                              trace=trace, converged=conv, converged_T=conv_T)
     ok, message = tminlog.append(row)
     if message:
         log_event(("" if ok else "WARNING: ") + message)
@@ -329,7 +333,7 @@ def _result(test):
             log_event(f"t-min-tune: T_min estimate at {s['target']:g} bar "
                       f"{est['T']:.1f} °C ({est['how']}"
                       + (f", scatter {est['sd']:.1f} K" if est['sd'] is not None else "")
-                      + f"); next margin {tminlog.margin(est):g} K")
+                      + f"); next margin {tminlog.margin(est):.1f} K")
 
 
 def _source(path):
