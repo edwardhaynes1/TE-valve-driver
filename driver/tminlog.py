@@ -7,7 +7,7 @@ folder is not in git, so no commit or update touches it.
     load(path=None) -> [row]                 rows as dicts of strings
     append(row, path=None, sheet=True) -> (ok, message)
     at_target(row, target, slope) -> °C or None
-    estimate(rows, setting, torque, target, fit=None) -> dict or None
+    estimate(rows, seating, torque, target, fit=None) -> dict or None
     margin(est), converged(values)           the rules (tmin.py), here for convenience
 """
 
@@ -17,7 +17,7 @@ import os
 import statistics
 
 from . import config, schema, workbook
-from .openmap import torque_key
+from .openmap import rename_header, torque_key
 from .tmin import (ABORTED_BAND, NO_OPENING, OPENED_AT_START, OPENED_OUT_OF_BAND,  # noqa: F401
                    SCOUT_RESULT as SCOUT, STOPPED_TEST as STOPPED, T_MIN, converged, margin)
 
@@ -29,7 +29,7 @@ def _path(path):
 def load(path=None):
     try:
         with open(_path(path), newline="", encoding="utf-8") as f:
-            return list(csv.DictReader(f))
+            return [schema.upgrade_row(r) for r in csv.DictReader(f)]
     except FileNotFoundError:
         return []
 
@@ -61,6 +61,7 @@ def append(row, path=None, sheet=True):
     p = _path(path)
     try:
         os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+        rename_header(p)
         header = _header(p)
         if header is None or header == []:
             header = list(schema.TMIN)
@@ -127,41 +128,41 @@ def _counted(r):
     return r.get('outcome') == T_MIN and str(r.get('counted')) in ('1', 'True', '1.0')
 
 
-def estimate(rows, setting, torque, target, fit=None):
-    """The T_min expected at the target for this setting, as a dict
-    (T, how, n, sd, values), or None. In order: this setting's counted
-    results (the mean of the last TMIN_ESTIMATE_LAST_N); this setting's
-    scout; the other settings at this torque (their counted results); the
-    opening map's prediction for a new setting at this torque. n and sd are
-    this setting's own (they set the margin)."""
+def estimate(rows, seating, torque, target, fit=None):
+    """The T_min expected at the target for this seating, as a dict
+    (T, how, n, sd, values), or None. In order: this seating's counted
+    results (the mean of the last TMIN_ESTIMATE_LAST_N); this seating's
+    scout; the other seatings at this torque (their counted results); the
+    opening map's prediction for a new seating at this torque. n and sd are
+    this seating's own (they set the margin)."""
     k = slope_for(torque, fit)
     own = [at_target(r, target, k) for r in rows
-           if r.get('setting') == setting and _counted(r)]
+           if r.get('seating') == seating and _counted(r)]
     own = [v for v in own if v is not None]
     if own:
         last = own[-config.TMIN_ESTIMATE_LAST_N:]
         sd = statistics.stdev(last) if len(last) >= 2 else None
         return dict(T=statistics.mean(last), n=len(own), sd=sd, values=own,
-                    how=f"this setting's {len(last)} latest result{'s' * (len(last) > 1)}")
+                    how=f"this seating's {len(last)} latest result{'s' * (len(last) > 1)}")
     scouts = [at_target(r, target, k) for r in rows
-              if r.get('setting') == setting and r.get('outcome') == SCOUT]
+              if r.get('seating') == seating and r.get('outcome') == SCOUT]
     scouts = [v for v in scouts if v is not None]
     if scouts:
-        return dict(T=scouts[-1], n=0, sd=None, values=[], how="this setting's scout")
-    by_setting = {}
+        return dict(T=scouts[-1], n=0, sd=None, values=[], how="this seating's scout")
+    by_seating = {}
     for r in rows:
-        if r.get('setting') != setting and _counted(r) \
+        if r.get('seating') != seating and _counted(r) \
                 and _same_torque(_num(r.get('torque_Nm')), torque):
             v = at_target(r, target, k)
             if v is not None:
-                by_setting.setdefault(r.get('setting'), []).append(v)
-    if by_setting:
-        means = [statistics.mean(v) for v in by_setting.values()]
+                by_seating.setdefault(r.get('seating'), []).append(v)
+    if by_seating:
+        means = [statistics.mean(v) for v in by_seating.values()]
         m = len(means)
         return dict(T=statistics.mean(means), n=0, sd=None, values=[],
-                    how=f"the mean of {m} other setting{'s' * (m > 1)} at {torque:.2f} N·m")
+                    how=f"the mean of {m} other seating{'s' * (m > 1)} at {torque:.2f} N·m")
     if fit is not None:
-        p = fit.predict(setting, torque, target)
+        p = fit.predict(seating, torque, target)
         if p is not None:
             return dict(T=p[0], n=0, sd=None, values=[], how=f"the opening map ({p[1]})")
     return None

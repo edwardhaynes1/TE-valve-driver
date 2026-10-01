@@ -5,7 +5,7 @@ The logic is in tmin.py; this module adds the clock, the thread and the I/O
     start(main_log="", retorqued=None, target=None, band=None)
         -> (ok, message)                    GUI: start
     set_band(target, band)                  GUI: the operator changed them
-    last_setting(torque) -> name or None    the newest setting at this torque
+    last_seating(torque) -> name or None    the newest seating at this torque
     stop(reason)                            GUI: stop, DISARM, closing
     running() / status() / labels()         for the window and the log rows
     record_row(row)                         logger: a main-log row was written
@@ -13,7 +13,7 @@ The logic is in tmin.py; this module adds the clock, the thread and the I/O
 
 Files: every test is a row of logs/t-min.csv (tminlog.py) — the central
 record, only ever appended to — and its rows (main-log columns) go to
-logs/t-min/<setting>/<session>/test001.csv …, with session.json (settings).
+logs/t-min/<seating>/<session>/test001.csv …, with session.json (settings).
 """
 
 import csv
@@ -69,13 +69,13 @@ def folder():
         return _folder
 
 
-def setting():
+def seating():
     with _lock:
-        return _s['setting'] if _s is not None else None
+        return _s['seating'] if _s is not None else None
 
 
-def last_setting(torque):
-    """The newest setting at this torque in t-min.csv, else in the openings
+def last_seating(torque):
+    """The newest seating at this torque in t-min.csv, else in the openings
     table (within SEAT_SCREW_TOL_NM), or None."""
     best = None
     for r in tminlog.load() + openmap.load():
@@ -87,7 +87,7 @@ def last_setting(torque):
             continue
         t = openmap.parse_time(r.get('time'))
         if t is not None and (best is None or t > best[0]):
-            best = (t, r.get('setting'))
+            best = (t, r.get('seating'))
     return best[1] if best else None
 
 
@@ -129,28 +129,28 @@ def _settings():
 
 def start(main_log="", retorqued=None, target=None, band=None, start_thread=True):
     """Start at the torque entered. retorqued False continues the newest
-    setting at this torque; True (or None, or none yet) starts a new one."""
+    seating at this torque; True (or None, or none yet) starts a new one."""
     global _s, _folder, _fit, _thread
     band = config.TMIN_BAND_BAR if band is None else band
     problem = start_problem(target, band)
     if problem:
         return False, f"t-min-tune not started — {problem}"
     torque = shared.seat_screw_torque()
-    old = last_setting(torque)
+    old = last_seating(torque)
     now_dt = datetime.now()
     if retorqued is False and old is not None:
-        name, how = old, f"continuing setting {old}"
+        name, how = old, f"continuing seating {old}"
     else:
         name = f"{now_dt:%Y%m%d_%H%M%S}_{torque:.2f}Nm"
         while name == old:              # started within the same second: a later name
             now_dt += timedelta(seconds=1)
             name = f"{now_dt:%Y%m%d_%H%M%S}_{torque:.2f}Nm"
-        how = f"new setting {name}" + (" (re-torqued)" if retorqued else "")
+        how = f"new seating {name}" + (" (re-torqued)" if retorqued else "")
     path = os.path.join(config.TMIN_DIR, name, f"{now_dt:%Y%m%d_%H%M%S}")
     try:
         os.makedirs(path, exist_ok=True)
         with open(os.path.join(path, "session.json"), "w", encoding="utf-8") as f:
-            json.dump(dict(setting=name, started=now_dt.isoformat(timespec='seconds'),
+            json.dump(dict(seating=name, started=now_dt.isoformat(timespec='seconds'),
                            seat_screw_torque_Nm=torque, retorqued=retorqued,
                            continued=(name == old), upstream_target_bar=target, band_bar=band,
                            main_log=main_log, detect_rule=openmap.current_rule(),
@@ -203,7 +203,7 @@ def _estimate(target):
     if s is None:
         return None
     try:
-        return tminlog.estimate(tminlog.load(), s['setting'], s['torque'], target, f)
+        return tminlog.estimate(tminlog.load(), s['seating'], s['torque'], target, f)
     except Exception as e:                           # a bad file must not stop the run
         log_event(f"t-min estimate failed — {type(e).__name__}: {e}")
         return None

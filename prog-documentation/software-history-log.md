@@ -4,6 +4,17 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 37. "Setting" is now "seating" — 1 Oct 2026
+Edward didn't like "setting" (nor "tightening") for one tightening of the
+seat screw; "seating" names what changes — how the valve is seated and
+preloaded — and doesn't clash with configuration settings. Renamed
+throughout: code, messages, the `seating` column of `logs/openings.csv`,
+`logs/t-min.csv` and the workbook sheets, `session.json`, docs (including
+the entries below). Files written before are read with their `setting`
+column as `seating`, and the header is renamed the next time a row is
+added (only the header line changes; `schema.RENAMED_COLUMNS`). The seat
+screw's tightening torque may be written M_A (VDI 2230).
+
 ## 36. t-min-tune replaces cycling: the lowest opening temperature, step by step — 30 Sept 2026
 Edward wants the *minimum* T_open for each upstream pressure and screw
 torque, found experimentally, rather than the creep's T_open. Agreed one
@@ -13,7 +24,7 @@ question at a time:
   below the estimate until the chamber is settled, then raises the setpoint
   1 K and holds each step 5 min (2-3 time constants) until it opens.
 * **Start well below, narrowing with results:** 10 K below the estimate
-  with no result at the setting (Edward: 3 K isn't enough; at least 5-10 K
+  with no result at the seating (Edward: 3 K isn't enough; at least 5-10 K
   and reduce as the estimate improves), 5 K with one, then 2 × scatter +
   1 K (3-10 K). The estimate updates after every test.
 * **The upstream is held by hand in a band** (target ± 0.05 bar by
@@ -30,7 +41,7 @@ question at a time:
   the failed ones, never rewritten except to add new columns at the end;
   the estimates are recomputed from it, and `logs/` is outside git, so
   program updates can't touch what has been learned (Edward's requirement).
-* **The first estimate** at a new setting comes from the other settings at
+* **The first estimate** at a new seating comes from the other seatings at
   the same torque (t-min results, else the opening map); only a torque with
   nothing measured scouts first (Edward chose this over a scout at every
   new tightening).
@@ -89,9 +100,9 @@ this before being applied):
   runs trying to avoid it. The 28 Sept 0.45 N·m batch shows why this works:
   corrected for upstream, T_open = 128.0 ± 1.1 K at 2.5 bar, slope −12.0 ±
   3.5 K/bar, scatter 1.1 K; the batch's own "± 4.3 K" was the leak's spread.
-* **Slope per torque, offset per setting.** Re-torquing to the same value
-  may not give the same valve, so every tightening (a *setting*) gets its
-  own offset, while all settings at one torque share the pressure slope —
+* **Slope per torque, offset per seating.** Re-torquing to the same value
+  may not give the same valve, so every tightening (a *seating*) gets its
+  own offset, while all seatings at one torque share the pressure slope —
   which also measures how well re-torquing reproduces. A per-batch slope
   over a few tenths of a bar is mostly noise; pooled, it improves with every
   pressure visited.
@@ -100,7 +111,7 @@ this before being applied):
   margin + 2 K below the prediction, repeat. The valve closes 17-27 K below
   T_open within ~30 s (28 Sept), so a cycle should take 3-4 min instead of
   ~16. No scouts once a torque has data, no stopping rule: a status line
-  says when a setting is *done* (offset ±1 K, slope ±2 K/bar) and suggests
+  says when a seating is *done* (offset ±1 K, slope ±2 K/bar) and suggests
   where to take the pressure next. Every 5th cycle is deep (35 °C and the
   4 min hold) so the warm-start effect is measured rather than assumed.
 * **The fit checks for drift and for the chamber background**, each added
@@ -116,7 +127,7 @@ this before being applied):
   say which rule found them) and ~15 × the gauge noise; the 28 Sept
   openings jumped ~1 × 10⁻⁷ within 2-3 s, so 0.2-0.8 × 10⁻⁷ would all give
   nearly the same backdated T_open. To be re-derived from the traces.
-* **Old batch folders are imported** into the table, one setting each (it
+* **Old batch folders are imported** into the table, one seating each (it
   can't be known whether the screw was touched between them), so the fit
   starts from today's data.
 * Built in stages: detection and the table with its import and fit first,
@@ -128,16 +139,16 @@ Found while building (simulation, tests/batch_sim.py `run_cycling`):
   two moved together exactly (r = −1.00): the background fell steadily with
   time. Picking one would be arbitrary, so terms that move together
   (|r| ≥ 0.8) are reported as not separable and neither corrects the fit.
-  Judged within the settings that carry most of the variation: pooled with
+  Judged within the seatings that carry most of the variation: pooled with
   simulated sessions whose background was steady, the 28 Sept confound fell
   below 0.8 and the background term slipped back in. In simulation the
   warm-start term was confounded with the background too (a deep cycle's
   hold at 35 °C sits at another background than a shallow one near the
   opening point), so it may take cycles at deliberately different
   backgrounds to separate them on the rig.
-* A drift term measured from the first opening of a setting shifted its
-  offset to that moment; it is centred per setting, so the offset stays
-  the setting's average.
+* A drift term measured from the first opening of a seating shifted its
+  offset to that moment; it is centred per seating, so the offset stays
+  the seating's average.
 * A valve that closes slowly (flows until well below the target) made the
   cooldown reach the target, wait for the chamber, then warm back up to
   the target: now it holds where the cooldown ended if that is lower.
@@ -148,15 +159,15 @@ Found while building (simulation, tests/batch_sim.py `run_cycling`):
   test runs had the same weakness.) One that opens during the hold is
   caught there too (the chamber rising above its lowest level in the hold,
   unless a refill was seen).
-* With an offset per setting, the pressure slope can only be learned from
-  pressure changes *within* a setting — between settings the offsets absorb
-  them. Two settings at one torque, each held at its own pressure, made the
-  fit unsolvable: a slope is now fitted only once one setting spans 0.3 bar
+* With an offset per seating, the pressure slope can only be learned from
+  pressure changes *within* a seating — between seatings the offsets absorb
+  them. Two seatings at one torque, each held at its own pressure, made the
+  fit unsolvable: a slope is now fitted only once one seating spans 0.3 bar
   (else −12 K/bar, assumed), and the status line's hint says to change the
   pressure without re-torquing. In practice: sweep the pressure, then
   re-torque.
 * Asked for: the map in 3D. `logs/opening-map-3d.png` is drawn next to the
-  2D figure after every opening (torque, upstream, T_open; each setting's
+  2D figure after every opening (torque, upstream, T_open; each seating's
   fitted line; a surface between the torques' mean lines, linear between
   torques — a guide, not a model); `TE_PLOTTER.py --map --3d` shows it
   rotatable.
@@ -168,7 +179,7 @@ Found while building (simulation, tests/batch_sim.py `run_cycling`):
 ## 33. Top-up pause removed — 28 Sept 2026
 Entry 28 added an optional pause before a run once upstream had fallen a
 set amount (default 0.3 bar), and a "continue" button. Edward didn't want
-the setting: the batch should just account for the changing upstream
+the seating: the batch should just account for the changing upstream
 pressure, which it already does (each run's upstream is logged; starts are
 shifted for it; the stopping rule corrects to the mean; T_open is fitted
 against it and stored at the mean). The pre-filled 0.3 also read as unclear

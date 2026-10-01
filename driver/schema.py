@@ -135,7 +135,7 @@ BATCH_SUMMARY_COLUMNS = (
 # a row per opening (history 34). openmap.py fits over it.
 OPENINGS_COLUMNS = (
     ("time",                  "ISO local time of the onset"),
-    ("setting",               "one tightening of the seat screw: <date>_<time>_<torque>Nm, or the batch name for an imported batch"),
+    ("seating",               "one seating of the valve: from tightening the seat screw until it is re-torqued; <date>_<time>_<torque>Nm, or the batch name for an imported batch (column 'setting' until 1 Oct 2026)"),
     ("torque_Nm",             "N·m, as entered"),
     ("upstream_bar",          "upstream pressure at the onset (measured)"),
     ("t_open_degC",           "valve temperature at the onset: the opening point"),
@@ -156,7 +156,7 @@ OPENINGS_COLUMNS = (
 # columns are only ever added at the end; old files gain them when written.
 TMIN_COLUMNS = (
     ("time",                  "ISO local time the test ended (the opening's onset, if it opened)"),
-    ("setting",               "one tightening of the seat screw: <date>_<time>_<torque>Nm"),
+    ("seating",               "one seating of the valve: from tightening the seat screw until it is re-torqued; <date>_<time>_<torque>Nm (column 'setting' until 1 Oct 2026)"),
     ("torque_Nm",             "seat screw torque M_A, N·m, as entered"),
     ("upstream_target_bar",   "the upstream pressure the operator held (bar abs)"),
     ("band_bar",              "± bar around the target"),
@@ -173,12 +173,33 @@ TMIN_COLUMNS = (
     ("baseline_mbar",         "chamber baseline before the opening"),
     ("estimate_degC",         "the estimate the test started from"),
     ("margin_K",              "how far below the estimate it started"),
-    ("estimate_from",         "this setting / other settings at this torque / the opening map / scout"),
+    ("estimate_from",         "this seating / other seatings at this torque / the opening map / scout"),
     ("counted",               "1 = counts towards the estimate and convergence"),
     ("converged",             "1 = the last results were within ± TMIN_CONVERGE_K after this test"),
     ("trace",                 "the test's rows (main-log columns), relative to logs/"),
     ("note",                  ""),
 )
+
+# Columns renamed since they were first written: old name → new. Files
+# written before are read under the new name and rewritten with it the next
+# time a row is added (history 37: "setting" became "seating", 1 Oct 2026).
+RENAMED_COLUMNS = {"setting": "seating"}
+
+
+def upgrade_row(row):
+    """A row read from an older file, with its columns under their new names."""
+    for old, new in RENAMED_COLUMNS.items():
+        if old in row and new not in row:
+            row[new] = row.pop(old)
+    return row
+
+
+def upgrade_header(header):
+    """(header with the new names, whether anything was renamed)."""
+    new = [RENAMED_COLUMNS.get(c, c) if RENAMED_COLUMNS.get(c) not in header else c
+           for c in header]
+    return new, new != list(header)
+
 
 MAIN = tuple(name for name, _ in MAIN_COLUMNS)
 PWM = tuple(name for name, _ in PWM_COLUMNS)

@@ -2,7 +2,7 @@
 upstream pressure the operator holds (history 36) — the logic, with no
 threads, clock, files or hardware (tminrun.py adds those).
 
-    new_session(torque, setting, target, band, now, history=())
+    new_session(torque, seating, target, band, now, history=())
     set_band(s, target, band)            the operator changed the target or band
     step(s, now, temp, vac, vac_status, heater, p_up, p_up_t, estimate)
         -> (commands, msgs, events)      one step, ~4 Hz. estimate(target) ->
@@ -67,7 +67,7 @@ _ROOM_SLOW_S = 120.0            # …for this long starts where it is (it can't 
 
 def margin(est):
     """K below the estimate to start: TMIN_MARGIN_NEW_K without a result at
-    this setting, TMIN_MARGIN_ONE_K with one, then 2 × the scatter of the
+    this seating, TMIN_MARGIN_ONE_K with one, then 2 × the scatter of the
     latest results + TMIN_STEP_K, within TMIN_MARGIN_MIN_K … _MAX_K."""
     if est is None or est['n'] == 0:
         return TMIN_MARGIN_NEW_K
@@ -89,11 +89,11 @@ def test_name(n):
     return f"test{n:03d}"
 
 
-def new_session(torque, setting, target, band, now, history=()):
+def new_session(torque, seating, target, band, now, history=()):
     """history: [(time, mbar)] recent chamber readings."""
     if torque is None:
         raise ValueError("t-min-tune needs the seat screw torque")
-    s = dict(torque=torque, setting=setting, target=target, band=band, started=now,
+    s = dict(torque=torque, seating=seating, target=target, band=band, started=now,
              ended=None, state=RUNNING, note="", n=0, test=None, phase=WAIT, phase_t0=now,
              hist=deque(maxlen=int((max(PRESSURE_BASE_WINDOW_S, BATCH_SETTLE_WINDOW_S) + 10)
                                    * LABJACK_SAMPLE_HZ * 2)),
@@ -506,7 +506,7 @@ def result_row(s, test, slope, time_iso, trace="", converged=False):
         corr = t_min + (slope * (s['target'] - test['up_open'])
                         if test['up_open'] is not None and s['target'] is not None else 0.0)
     return dict(
-        time=time_iso, setting=s['setting'], torque_Nm=s['torque'],
+        time=time_iso, seating=s['seating'], torque_Nm=s['torque'],
         upstream_target_bar=s['target'], band_bar=s['band'], outcome=test['outcome'],
         start_degC=test['start_c'], step_degC=test['sp'] if not test['scout'] else
         (round(test['sp'], 2) if test['sp'] is not None else None),

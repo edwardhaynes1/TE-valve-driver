@@ -512,7 +512,7 @@ TMIN_UP_CHART_WEIGHT    = 2        # the upstream chart's share of height in t-m
 TMIN_STEP_K             = 1.0      # setpoint step
 TMIN_DWELL_S            = 300.0    # time at each step (2-3 thermal time constants)
 TMIN_STEP_BAND_K        = 0.5      # a step's dwell starts once the TC is this close to it
-TMIN_MARGIN_NEW_K       = 10.0     # start this far below the estimate: no result yet at this setting
+TMIN_MARGIN_NEW_K       = 10.0     # start this far below the estimate: no result yet at this seating
 TMIN_MARGIN_ONE_K       = 5.0      # … one result (no scatter yet)
 TMIN_MARGIN_MIN_K       = 3.0      # from two results: 2 × their scatter + TMIN_STEP_K, within
 TMIN_MARGIN_MAX_K       = 10.0     # these limits
@@ -526,24 +526,24 @@ TMIN_CLOSED_DEC         = 0.02     # closed: chamber within +5 % of the baseline
 TMIN_CLOSE_MAX_S        = 1800.0   # not closed within this long: stop
 TMIN_CONVERGE_N         = 3        # stop when the last N counted results, each corrected to
 TMIN_CONVERGE_K         = 1.0      # the target, all lie within ± this of their mean
-TMIN_ESTIMATE_LAST_N    = 3        # the estimate: the mean of this setting's last N results
+TMIN_ESTIMATE_LAST_N    = 3        # the estimate: the mean of this seating's last N results
 
 # ─── The opening map — every opening, one fit (openmap.py; history 34) ───
 OPENINGS_CSV            = str(Path(__file__).resolve().parent.parent / "logs" / "openings.csv")
 MAP_FIGURE              = str(Path(__file__).resolve().parent.parent / "logs"
                               / "opening-map.png")      # redrawn after every opening
-MAP_REF_BAR             = 3.0      # offsets (a setting's T_open) are given at this upstream
+MAP_REF_BAR             = 3.0      # offsets (a seating's T_open) are given at this upstream
 MAP_MIN_SPREAD_BAR      = 0.3      # a torque's slope is fitted once its openings span this
                                    # much upstream; below, −PRESSURE_UP_K_PER_BAR (assumed)
 MAP_DEEP_GAP_K          = 15.0     # an imported batch run that started this far below where
                                    # it opened counts as a deep (cold) start
-MAP_DONE_OFFSET_K       = 1.0      # a setting is "done" at offset ± this (95 %)…
+MAP_DONE_OFFSET_K       = 1.0      # a seating is "done" at offset ± this (95 %)…
 MAP_DONE_SLOPE_K_BAR    = 2.0      # …and its torque's slope ± this, K/bar (95 %)
 MAP_P_MIN_BAR           = 1.0      # pressure hints stay within these
 MAP_P_MAX_BAR           = 5.0
 MAP_HINT_STEP_BAR       = 1.0      # …and suggest this far beyond the range covered
 MAP_CONFOUND_R          = 0.8      # two optional terms correlated this much (within the
-                                   # settings) are reported as not separable
+                                   # seatings) are reported as not separable
 
 # LabJack combined sample rate (both vacuum + thermocouple read here)
 LABJACK_SAMPLE_HZ     = 4          # Hz — reads vacuum and TC each cycle

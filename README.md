@@ -50,13 +50,13 @@ seat screw torque and an upstream pressure: set the torque, enter it,
 choose **t-min-tune** (the fourth mode), enter the **upstream target** (bar)
 and its **±** band (default 0.05 bar) and press **start t-min**. If the
 torque has been measured before it asks **has the seat screw been
-re-torqued (or the valve disturbed) since?** *No* continues that setting;
+re-torqued (or the valve disturbed) since?** *No* continues that seating;
 *yes* starts a new one. Hold the upstream inside the band by topping up; the
 upstream chart is taller in this mode, with the band dotted and the trace
 amber outside it. Then, test after test:
 
 1. hold a start temperature below the estimate until the chamber is
-   settled — 10 K below while the setting has no result, 5 K with one, then
+   settled — 10 K below while the seating has no result, 5 K with one, then
    2 × the scatter of its latest results + 1 K (3-10 K);
 2. step the setpoint up 1 K every 5 min (from when the TC is within 0.5 K
    of it) until the valve opens: that step is T_min (the TC at the onset);
@@ -68,14 +68,14 @@ amber outside it. Then, test after test:
 The upstream leaving the band during the hold or a step cuts the heater and
 abandons the test; the next starts afresh once it is back inside. An
 opening during the hold (the start was too high) moves the next start 5 K
-lower. The estimate is this setting's latest results (corrected to the
-target along the opening map's pressure slope), else the other settings at
+lower. The estimate is this seating's latest results (corrected to the
+target along the opening map's pressure slope), else the other seatings at
 this torque, else the opening map; with nothing at all, the first test
 scouts (3 °C/min from 10 K below the torque table). It stops when the last
 3 results lie within ±1 K of their mean, or when you press **stop t-min**
 (or DISARM).
 
-Every test is a row of **`logs/t-min.csv`**: time, setting, torque, target
+Every test is a row of **`logs/t-min.csv`**: time, seating, torque, target
 and band, outcome (t_min, opened at start, aborted: out of band, opened out
 of band, no opening, scout, stopped), start, step, T_min (and corrected to
 the target), T_detect, T_close, upstream at the opening, in band, baseline,
@@ -84,7 +84,7 @@ of its trace. The estimates are recomputed from that file, so it is the one
 record of what has been learned; the code only appends to it, and `logs/`
 is not in git, so no commit or update touches it. A copy goes to the
 *T_min* sheet of the opening-map workbook. Traces:
-`logs/t-min/<setting>/<session>/test001.csv` … and `session.json`.
+`logs/t-min/<seating>/<session>/test001.csv` … and `session.json`.
 Settings: `TMIN_*` in `driver/config.py`.
 
 ### Cycling (history 34-35)
@@ -165,21 +165,21 @@ Every opening that crept onto the valve goes into one table,
 `logs/openings.csv` (copied to the *Openings* sheet of the opening map), and
 one fit over all of it is redone after every opening:
 
-    T_open = offset (per setting) + slope (per torque) × (upstream − 3 bar)
+    T_open = offset (per seating) + slope (per torque) × (upstream − 3 bar)
 
-A *setting* is one tightening of the seat screw (a batch, until cycling
+A *seating* is one tightening of the seat screw (a batch, until cycling
 replaces batches), so a re-torque to the same value may sit higher or lower;
-all settings at one torque share the pressure slope. A torque whose openings
-span under 0.3 bar of upstream within one setting uses −12 K/bar (*assumed*):
-the offsets absorb pressure differences *between* settings, so the slope
+all seatings at one torque share the pressure slope. A torque whose openings
+span under 0.3 bar of upstream within one seating uses −12 K/bar (*assumed*):
+the offsets absorb pressure differences *between* seatings, so the slope
 comes from changing the pressure *without* re-torquing. The fit also
 tries a warm-start term (deep against shallow cycles), drift in time and the
 chamber background, keeps each only if significant at 95 %, and says when
 two can't be told apart (28 Sept: time and a background pumping down moved
-together). After each opening the event log gets the setting's status line —
+together). After each opening the event log gets the seating's status line —
 T_open ± at 3 bar, the slope ±, the pressure range, and **DONE** (±1 K, ±2
 K/bar) or where to take the pressure next — and `logs/opening-map.png` is
-redrawn: T_open against upstream per setting, the map against torque, and
+redrawn: T_open against upstream per seating, the map against torque, and
 the residuals over time — and `logs/opening-map-3d.png`, torque × upstream ×
 T_open in 3D. Old batch folders are imported at start-up, once each. Draw
 them by hand with `py TE_PLOTTER.py --map` (add `--3d` to rotate the 3D

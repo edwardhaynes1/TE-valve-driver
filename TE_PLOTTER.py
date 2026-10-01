@@ -1082,8 +1082,8 @@ def plot_batch(folder, output=None, show=True):
 
 def make_map_figure(rows, torque=None):
     """Three panels from the openings table: T_open against upstream for
-    one torque (each setting in its colour, with its fitted line; hollow =
-    deep cycle), the map (each setting's T_open at MAP_REF_BAR against
+    one torque (each seating in its colour, with its fitted line; hollow =
+    deep cycle), the map (each seating's T_open at MAP_REF_BAR against
     torque, ± 95 %), and the residuals over time. torque: which one the
     first panel shows (default: the newest opening's)."""
     from driver import config, openmap
@@ -1092,20 +1092,20 @@ def make_map_figure(rows, torque=None):
     tk = (f"{torque:.2f}" if torque is not None else f.torque_of.get(newest))
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(19, 6),
                                         gridspec_kw={"width_ratios": [1.2, 1.0, 1.2]})
-    settings = sorted(f.offsets, key=lambda s: min((p["t"] or 0) for p in f.points
-                                                   if p["setting"] == s))
+    seatings = sorted(f.offsets, key=lambda s: min((p["t"] or 0) for p in f.points
+                                                   if p["seating"] == s))
     cyc = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-    colour = {s: cyc[i % len(cyc)] for i, s in enumerate(settings)}
+    colour = {s: cyc[i % len(cyc)] for i, s in enumerate(seatings)}
     ref = config.MAP_REF_BAR
 
     # 1: T_open against upstream, this torque
     if tk is not None:
         k = f.slope(tk)
         lo, hi = f.ranges.get(tk, (ref, ref))
-        for s in settings:
+        for s in seatings:
             if f.torque_of.get(s) != tk:
                 continue
-            pts = [p for p in f.points if p["setting"] == s]
+            pts = [p for p in f.points if p["seating"] == s]
             b = np.array([p["bar"] for p in pts])
             t = np.array([p["T"] for p in pts])
             deep = np.array([bool(p["deep"]) for p in pts])
@@ -1129,19 +1129,19 @@ def make_map_figure(rows, torque=None):
     if ax1.get_legend_handles_labels()[0]:
         ax1.legend(fontsize=7, loc="best")
 
-    # 2: the map — each setting's T_open at the reference pressure
-    for s in settings:
+    # 2: the map — each seating's T_open at the reference pressure
+    for s in seatings:
         off, oh = f.offsets[s]
         x = float(f.torque_of[s])
         ax2.errorbar([x], [off], yerr=[[oh or 0]], fmt="o", color=colour[s], capsize=3)
     ax2.set_xlabel("seat screw torque (N·m)")
     ax2.set_ylabel(f"T_open at {ref:g} bar (°C)")
-    ax2.set_title("the map: each setting, ± 95 %")
+    ax2.set_title("the map: each seating, ± 95 %")
     ax2.grid(True, alpha=0.3)
 
     # 3: residuals over time
-    for s in settings:
-        pts = [p for p in f.points if p["setting"] == s and p["t"] is not None]
+    for s in seatings:
+        pts = [p for p in f.points if p["seating"] == s and p["t"] is not None]
         if not pts:
             continue
         when = pd.to_datetime([p["when"] for p in pts])          # local time, as logged
@@ -1168,8 +1168,8 @@ def make_map_figure(rows, torque=None):
 
 def make_map3d_figure(rows):
     """The map in 3D: every opening at (torque, upstream, T_open), each
-    setting's fitted line across the upstream range at its torque (the fit
-    has a slope per torque and an offset per setting), and, where two or
+    seating's fitted line across the upstream range at its torque (the fit
+    has a slope per torque and an offset per seating), and, where two or
     more torques are fitted, a surface through their lines at the mean
     offset of each torque (linear between torques: a guide, not a model)."""
     from driver import config, openmap
@@ -1177,15 +1177,15 @@ def make_map3d_figure(rows):
     f = openmap.fit(rows)
     fig = plt.figure(figsize=(11, 8))
     ax = fig.add_subplot(111, projection="3d")
-    settings = sorted(f.offsets, key=lambda s: min((p["t"] or 0) for p in f.points
-                                                   if p["setting"] == s))
+    seatings = sorted(f.offsets, key=lambda s: min((p["t"] or 0) for p in f.points
+                                                   if p["seating"] == s))
     cyc = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-    colour = {s: cyc[i % len(cyc)] for i, s in enumerate(settings)}
+    colour = {s: cyc[i % len(cyc)] for i, s in enumerate(seatings)}
     ref = config.MAP_REF_BAR
     all_bars = [p["bar"] for p in f.points] or [ref]
     b_lo, b_hi = min(min(all_bars), ref), max(max(all_bars), ref)
-    for s in settings:
-        pts = [p for p in f.points if p["setting"] == s]
+    for s in seatings:
+        pts = [p for p in f.points if p["seating"] == s]
         tq = float(f.torque_of[s])
         b = np.array([p["bar"] for p in pts])
         t = np.array([p["T"] for p in pts])
@@ -1223,10 +1223,10 @@ def make_map3d_figure(rows):
     if zs:
         ax.set_zlim(min(zs) - 3.0, max(zs) + 3.0)
     ax.view_init(elev=22, azim=-128)
-    ax.set_title(f"opening map: {f.n} openings, {len(settings)} setting"
-                 f"{'s' * (len(settings) != 1)}, {len(torques)} torque"
+    ax.set_title(f"opening map: {f.n} openings, {len(seatings)} seating"
+                 f"{'s' * (len(seatings) != 1)}, {len(torques)} torque"
                  f"{'s' * (len(torques) != 1)}   (hollow = deep cycle; lines: each "
-                 f"setting's fit)", fontsize=10)
+                 f"seating's fit)", fontsize=10)
     ax.legend(fontsize=7, loc="upper left")
     fig.tight_layout()
     return fig

@@ -401,7 +401,7 @@ class TEGui:
 
     def _start_batch(self):
         """Start t-min-tune: ask whether the screw was re-torqued if the
-        torque has a setting already, else confirm the torque; then it arms
+        torque has a seating already, else confirm the torque; then it arms
         the heater itself, test by test."""
         if self.mode_var.get() != BATCH:
             log_event("t-min-tune not started — select t-min-tune first")
@@ -428,16 +428,16 @@ class TEGui:
                   "Every test is a row of logs/t-min.csv.\n"
                   "\nt-min-tune arms the heater itself. SW171 must be on. DISARM or "
                   "'stop t-min' stops it.")
-        old = tminrun.last_setting(torque)
+        old = tminrun.last_seating(torque)
         retorqued = None
         if old is not None:
             answer = self._ask(
                 "Start t-min-tune",
                 f"Seat screw torque: {torque:.2f} N·m\n"
-                f"Latest setting at this torque: {old}\n\n"
+                f"Latest seating at this torque: {old}\n\n"
                 f"Has the seat screw been re-torqued (or the valve disturbed) since?\n\n"
-                f"No: continue that setting (its results so far set the estimate).\n"
-                f"Yes: start a new setting (the estimate comes from the other settings "
+                f"No: continue that seating (its results so far set the estimate).\n"
+                f"Yes: start a new seating (the estimate comes from the other seatings "
                 f"at this torque).\n\n" + common)
             if answer is None:
                 log_event("t-min-tune not started (cancelled)")
@@ -447,7 +447,7 @@ class TEGui:
                 "Start t-min-tune",
                 f"Seat screw torque: {torque:.2f} N·m\n"
                 f"Is that the torque on the valve now?\n\n"
-                "Nothing measured at this torque yet: a new setting; the first test "
+                "Nothing measured at this torque yet: a new seating; the first test "
                 "scouts from the torque table.\n" + common):
             log_event("t-min-tune not started (cancelled)")
             return

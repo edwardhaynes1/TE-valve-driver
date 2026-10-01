@@ -1,9 +1,9 @@
 """t-min-tune: the lowest opening temperature, step by step (history 36).
 
 Agreed behaviour (30 Sept 2026):
-  * the estimate: this setting's results, else the other settings at this
+  * the estimate: this seating's results, else the other seatings at this
     torque (or the opening map); with nothing at all, one scout ramp
-  * start 10 K below it (no result at this setting), 5 K (one), then
+  * start 10 K below it (no result at this seating), 5 K (one), then
     2 × scatter + 1 K within 3-10 K; hold until the chamber is settled
   * step +1 K every 5 min (once the TC is within 0.5 K); the step where it
     opens is T_min
@@ -69,15 +69,15 @@ def test_the_steps_are_1_K_and_5_min_and_dont_overshoot():
         assert max(T for _, T in at) - sp < 0.5
 
 
-def test_other_settings_at_the_torque_give_the_first_estimate():
-    old = [dict(time="t", setting="old", torque_Nm="0.45", outcome=tminlog.T_MIN,
+def test_other_seatings_at_the_torque_give_the_first_estimate():
+    old = [dict(time="t", seating="old", torque_Nm="0.45", outcome=tminlog.T_MIN,
                 counted="1", t_min_degC=str(T), upstream_at_open_bar="3.0")
            for T in (121.0, 122.0)]
     rig, s, rows, msgs = run(rows=list(old), stop_after=1)
     new = rows[len(old):]
     assert new[0]['outcome'] == tminlog.T_MIN          # no scout
     assert float(new[0]['estimate_degC']) == pytest.approx(121.5)
-    assert float(new[0]['start_degC']) == 111.0 and "other setting" in new[0]['estimate_from']
+    assert float(new[0]['start_degC']) == 111.0 and "other seating" in new[0]['estimate_from']
 
 
 def test_results_are_corrected_to_the_target_pressure():
@@ -140,7 +140,7 @@ def test_opening_during_the_hold_starts_the_next_lower():
 
 def test_near_room_temperature_it_starts_where_it_can():
     # T_min 33 °C: 10 K below is 23 °C, which the heater can't cool to
-    old = [dict(time="t", setting="old", torque_Nm="0.45", outcome=tminlog.T_MIN,
+    old = [dict(time="t", seating="old", torque_Nm="0.45", outcome=tminlog.T_MIN,
                 counted="1", t_min_degC="33.0", upstream_at_open_bar="3.0")]
     rig, s, rows, msgs = run(rows=list(old), rig=dict(open_c=33.0, ambient=26.0),
                              stop_after=1)
@@ -150,7 +150,7 @@ def test_near_room_temperature_it_starts_where_it_can():
 
 
 def test_no_opening_by_the_ceiling_stops_it():
-    old = [dict(time="t", setting="s1", torque_Nm="0.45", outcome=tminlog.T_MIN,
+    old = [dict(time="t", seating="s1", torque_Nm="0.45", outcome=tminlog.T_MIN,
                 counted="1", t_min_degC="150.0", upstream_at_open_bar="3.0")]
     rig, s, rows, msgs = run(rows=list(old), rig=dict(open_c=400.0), max_s=12 * 3600)
     assert s['state'] == tmin.STOPPED and rows[-1]['outcome'] == tminlog.NO_OPENING
@@ -159,7 +159,7 @@ def test_no_opening_by_the_ceiling_stops_it():
 
 def test_steps_stop_15_K_above_the_estimate():
     # e.g. a valve already open at the start: nothing to detect
-    old = [dict(time="t", setting="s1", torque_Nm="0.45", outcome=tminlog.T_MIN,
+    old = [dict(time="t", seating="s1", torque_Nm="0.45", outcome=tminlog.T_MIN,
                 counted="1", t_min_degC="100.0", upstream_at_open_bar="3.0")]
     rig, s, rows, msgs = run(rows=list(old), rig=dict(open_c=400.0))
     last = rows[-1]
@@ -185,7 +185,7 @@ def test_disarming_aborts_it():
 
 def test_a_long_test_is_not_cut_by_the_60_min_armed_limit():
     # 10 K below with no result, 5 min per step: over an hour armed
-    old = [dict(time="t", setting="old", torque_Nm="0.45", outcome=tminlog.T_MIN,
+    old = [dict(time="t", seating="old", torque_Nm="0.45", outcome=tminlog.T_MIN,
                 counted="1", t_min_degC="130.0", upstream_at_open_bar="3.0")]
     rig, s, rows, msgs = run(rows=list(old), stop_after=1)
     assert not any("maximum armed time" in m for m in msgs)
@@ -212,11 +212,11 @@ def test_the_file_only_grows_and_gains_new_columns(tmp_path):
         w = csv.writer(f)
         w.writerow(old_cols)
         w.writerow(["2026-09-30T10:00:00", "s0", "0.45", "3.0", "0.05", "t_min"])
-    ok, msg = tminlog.append(dict(time="2026-09-30T11:00:00", setting="s1", torque_Nm=0.45,
+    ok, msg = tminlog.append(dict(time="2026-09-30T11:00:00", seating="s1", torque_Nm=0.45,
                                   outcome="t_min", t_min_degC=120.5), path=str(p), sheet=False)
     assert ok
     rows = tminlog.load(str(p))
-    assert [r['setting'] for r in rows] == ["s0", "s1"]
+    assert [r['seating'] for r in rows] == ["s0", "s1"]
     assert rows[0]['outcome'] == "t_min" and rows[0]['t_min_degC'] == ""
     assert rows[1]['t_min_degC'] == "120.5"
     header = next(csv.reader(open(p, encoding="utf-8")))
@@ -277,7 +277,7 @@ def test_tminrun_writes_the_central_file_and_the_traces(clock):
     rows = tminlog.load()
     assert rows and rows[0]['outcome'] == tminlog.SCOUT
     assert any(r['outcome'] == tminlog.T_MIN and r['counted'] == '1' for r in rows)
-    assert {r['setting'] for r in rows} == {name}
+    assert {r['seating'] for r in rows} == {name}
     trace = Path(config.TMIN_CSV).parent / rows[1]['trace']
     lines = list(csv.DictReader(open(trace, encoding="utf-8")))
     assert {'hold', 'step', 'cool'} <= {r['batch_phase'] for r in lines}
@@ -285,11 +285,11 @@ def test_tminrun_writes_the_central_file_and_the_traces(clock):
     assert info['upstream_target_bar'] == 3.0 and info['band_bar'] == 0.05
     events = " | ".join(t for _, t in shared.recent_events())
     assert "file error" not in events and "T_min estimate at 3 bar" in events
-    # a later run at this torque continues the setting from the file
-    assert tminrun.last_setting(0.45) == name
+    # a later run at this torque continues the seating from the file
+    assert tminrun.last_seating(0.45) == name
     ok, again = tminrun.start(retorqued=False, target=3.0, band=0.05, start_thread=False)
     assert ok and again == name
-    assert "this setting" in tminrun._estimate(3.0)['how']
+    assert "this seating" in tminrun._estimate(3.0)['how']
 
 
 def test_start_needs_the_torque_the_target_and_a_disarmed_heater(clock):
@@ -312,9 +312,9 @@ def test_the_band_can_change_while_it_runs(clock):
 
 
 @pytest.mark.parametrize("runner", ["tminrun", "cyclerun"])
-def test_a_new_setting_in_the_same_second_gets_its_own_name(clock, monkeypatch, runner):
-    # setting names are to the second; a re-torque started within the same
-    # second as the last setting (fast test machines) must not reuse its name
+def test_a_new_seating_in_the_same_second_gets_its_own_name(clock, monkeypatch, runner):
+    # seating names are to the second; a re-torque started within the same
+    # second as the last seating (fast test machines) must not reuse its name
     import datetime as dt
     from driver import cyclerun
     mod = {"tminrun": tminrun, "cyclerun": cyclerun}[runner]
@@ -330,11 +330,11 @@ def test_a_new_setting_in_the_same_second_gets_its_own_name(clock, monkeypatch, 
     ok, first = mod.start(start_thread=False, **kw)
     mod.stop("test")
     if runner == "tminrun":
-        tminlog.append(dict(time="2026-10-01T08:14:48", setting=first, torque_Nm=0.45,
+        tminlog.append(dict(time="2026-10-01T08:14:48", seating=first, torque_Nm=0.45,
                             outcome="stopped"), sheet=False)
     else:
         from driver import openmap
-        openmap.append(dict(time="2026-10-01T08:14:48", setting=first, torque_Nm=0.45,
+        openmap.append(dict(time="2026-10-01T08:14:48", seating=first, torque_Nm=0.45,
                             upstream_bar=3.0, t_open_degC=128.0, deep=1), sheet=False)
     ok, second = mod.start(retorqued=True, start_thread=False, **kw)
     assert ok and second != first and second.endswith("_0.45Nm")

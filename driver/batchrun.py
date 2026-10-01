@@ -284,7 +284,7 @@ def _to_map(summary):
     try:
         rows = openmap.load()
         f = openmap.fit(rows)
-        log_event(f.status_text(row['setting']))
+        log_event(f.status_text(row['seating']))
         terms = f.terms_text()
         if terms:
             log_event(f"Opening map terms: {terms}")

@@ -7,29 +7,29 @@ over all of it (context.md, "Mapping the opening point"; history 34).
     import_batches(folder=None, path=None) -> msg
                                           old batch folders into the table (once
                                           each): their creeping openings, one
-                                          setting per batch
+                                          seating per batch
     rows_from_batch(folder) -> [row]      those rows for one batch folder
     fit(rows) -> Fit                      the opening-point fit (below)
-    Fit.status(setting) -> dict           the status line's numbers for a setting
-    Fit.status_text(setting) -> str       the status line
-    Fit.predict(setting, torque, bar, deep=False) -> (°C, how) or None
-    latest(rows) -> setting               the setting of the newest opening
-    summary(path=None) -> str             the status line of the newest setting,
+    Fit.status(seating) -> dict           the status line's numbers for a seating
+    Fit.status_text(seating) -> str       the status line
+    Fit.predict(seating, torque, bar, deep=False) -> (°C, how) or None
+    latest(rows) -> seating               the seating of the newest opening
+    summary(path=None) -> str             the status line of the newest seating,
                                           and the optional terms (event log)
 
 The fit, by least squares over every opening with an upstream reading:
 
-    T_open = offset[setting] + slope[torque] × (upstream − MAP_REF_BAR)
+    T_open = offset[seating] + slope[torque] × (upstream − MAP_REF_BAR)
              [+ warm-start × deep] [+ drift × hours] [+ background × Δlog10 p]
 
-One offset per setting (one tightening of the seat screw), one pressure
-slope per torque (shared by its settings). A torque whose openings span
+One offset per seating (one tightening of the seat screw), one pressure
+slope per torque (shared by its seatings). A torque whose openings span
 less than MAP_MIN_SPREAD_BAR uses −PRESSURE_UP_K_PER_BAR ("assumed"). Each
 optional term is tried on its own and kept only if significant at 95 %;
 the ones not kept are still reported (with their ±) for information.
 
 Pure Python (the driver doesn't need numpy): the systems are small (a
-parameter per setting and per torque).
+parameter per seating and per torque).
 """
 
 import csv
@@ -53,15 +53,37 @@ def load(path=None):
     p = _path(path)
     try:
         with open(p, newline="", encoding="utf-8") as f:
-            return list(csv.DictReader(f))
+            return [schema.upgrade_row(r) for r in csv.DictReader(f)]
     except FileNotFoundError:
         return []
+
+
+def rename_header(p):
+    """Give an existing CSV's renamed columns their new names (only the
+    header line changes; the rows stay as they are)."""
+    try:
+        with open(p, newline="", encoding="utf-8") as f:
+            text = f.read()
+    except FileNotFoundError:
+        return
+    first, sep, rest = text.partition("\n")
+    header = next(csv.reader([first.rstrip("\r")]), [])
+    new, changed = schema.upgrade_header(header)
+    if not changed:
+        return
+    tmp = p + ".tmp"
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f, lineterminator="\r\n" if first.endswith("\r") else "\n").writerow(new)
+        f.write(rest)
+    os.replace(tmp, p)
 
 
 def _write_rows(rows, path=None):
     p = _path(path)
     os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
     new = not os.path.exists(p) or os.path.getsize(p) == 0
+    if not new:
+        rename_header(p)
     with open(p, "a", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         if new:
@@ -121,7 +143,7 @@ def _detect_rule(settings):
 def rows_from_batch(folder):
     """The openings of one batch folder: every run that opened while
     creeping (scouts included — a creeping scout is as good an opening as
-    any; a scout heated fast is not). One setting per batch. Cold starts
+    any; a scout heated fast is not). One seating per batch. Cold starts
     (at least MAP_DEEP_GAP_K below where it opened) count as deep."""
     name = os.path.basename(os.path.normpath(folder))
     try:
@@ -156,7 +178,7 @@ def row_from_run(r, name, rule, note="imported from a batch"):
     gap = _num(r.get('hold_gap_K'))
     return {
         'time': r.get('onset_time') or r.get('start_time') or '',
-        'setting': name,
+        'seating': name,
         'torque_Nm': _num(r.get('seat_screw_torque_Nm')),
         'upstream_bar': _num(r.get('upstream_at_open_bar')),
         't_open_degC': t_open,
@@ -290,10 +312,10 @@ _UNITS = {'warm-start': 'K (deep − shallow)', 'drift': 'K/h', 'background': 'K
 
 class Fit:
     """The result of fit(rows). Attributes: n, sd (residual std, K), dof,
-    offsets {setting: (°C at MAP_REF_BAR, ±95 %)}, slopes {torque key:
+    offsets {seating: (°C at MAP_REF_BAR, ±95 %)}, slopes {torque key:
     (K/bar, ±95 % or None, 'fit'|'assumed')}, terms {name: (value, ±95 %,
-    kept)}, torque_of {setting: torque key}, ranges {torque key: (min bar,
-    max bar)}, points [(row index, setting, bar, T_open, residual, hours,
+    kept)}, torque_of {seating: torque key}, ranges {torque key: (min bar,
+    max bar)}, points [(row index, seating, bar, T_open, residual, hours,
     deep)], excluded (openings without an upstream reading)."""
 
     def __init__(self):
@@ -302,27 +324,27 @@ class Fit:
         self.torque_of, self.ranges, self.counts = {}, {}, {}
         self.points, self.excluded = [], 0
         self.confounded = []             # (term, term, correlation) that move together
-        self.spread = {}                 # torque key: the widest upstream span of one setting
+        self.spread = {}                 # torque key: the widest upstream span of one seating
 
     # prediction ---------------------------------------------------------
     def slope(self, tkey):
         s = self.slopes.get(tkey)
         return s[0] if s else -config.PRESSURE_UP_K_PER_BAR
 
-    def predict(self, setting, torque, bar, deep=False):
+    def predict(self, seating, torque, bar, deep=False):
         """(T_open °C, how) at this upstream pressure, or None: from the
-        setting's offset, else the mean offset of its torque's other
-        settings. Drift and background terms are left out (they describe
+        seating's offset, else the mean offset of its torque's other
+        seatings. Drift and background terms are left out (they describe
         the past); the warm-start term applies to deep cycles."""
         tk = _tkey(torque)
-        if setting in self.offsets:
-            off, how = self.offsets[setting][0], "this setting's fit"
+        if seating in self.offsets:
+            off, how = self.offsets[seating][0], "this seating's fit"
         else:
             others = [o for s, (o, _) in self.offsets.items() if self.torque_of.get(s) == tk]
             if not others:
                 return None
             off = statistics.mean(others)
-            how = f"the mean of {len(others)} other setting{'s' * (len(others) > 1)} at " \
+            how = f"the mean of {len(others)} other seating{'s' * (len(others) > 1)} at " \
                   f"{float(tk):.2f} N·m"
         t = off + self.slope(tk) * ((bar if bar is not None else config.MAP_REF_BAR)
                                     - config.MAP_REF_BAR)
@@ -332,9 +354,9 @@ class Fit:
         return t, how
 
     # status -------------------------------------------------------------
-    def status(self, setting):
-        tk = self.torque_of.get(setting)
-        off = self.offsets.get(setting)
+    def status(self, seating):
+        tk = self.torque_of.get(seating)
+        off = self.offsets.get(seating)
         slope = self.slopes.get(tk) if tk else None
         rng = self.ranges.get(tk) if tk else None
         done = bool(off and off[1] is not None and off[1] <= config.MAP_DONE_OFFSET_K
@@ -344,19 +366,19 @@ class Fit:
         if not done:
             if not (slope and slope[2] == 'fit' and slope[1] is not None
                     and slope[1] <= config.MAP_DONE_SLOPE_K_BAR):
-                own = [p['bar'] for p in self.points if p['setting'] == setting]
+                own = [p['bar'] for p in self.points if p['seating'] == seating]
                 hint = _pressure_hint((min(own), max(own)) if own else rng)
             else:
                 hint = "more openings at any pressure"
-        return dict(setting=setting, torque=tk, n=self.counts.get(setting, 0),
+        return dict(seating=seating, torque=tk, n=self.counts.get(seating, 0),
                     offset=off, slope=slope, range=rng, done=done, hint=hint)
 
-    def status_text(self, setting):
-        s = self.status(setting)
+    def status_text(self, seating):
+        s = self.status(seating)
         if s['offset'] is None:
-            return f"map: {setting} — no openings yet"
+            return f"map: {seating} — no openings yet"
         o, oh = s['offset']
-        parts = [f"{setting}", f"{s['n']} opening{'s' * (s['n'] != 1)}",
+        parts = [f"{seating}", f"{s['n']} opening{'s' * (s['n'] != 1)}",
                  f"T_open {o:.1f} °C" + (f" ± {oh:.1f} K" if oh is not None else "")
                  + f" at {config.MAP_REF_BAR:g} bar"]
         if s['slope']:
@@ -389,9 +411,9 @@ class Fit:
 
 def _pressure_hint(rng):
     """Where to take the upstream pressure next to pin the slope: beyond
-    the end of this setting's range with more room, within
-    MAP_P_MIN/MAX_BAR. Within the setting: the offsets absorb pressure
-    changes between settings."""
+    the end of this seating's range with more room, within
+    MAP_P_MIN/MAX_BAR. Within the seating: the offsets absorb pressure
+    changes between seatings."""
     lo_lim, hi_lim, step = config.MAP_P_MIN_BAR, config.MAP_P_MAX_BAR, config.MAP_HINT_STEP_BAR
     if rng is None:
         return "take upstream pressure readings (Keller)"
@@ -404,20 +426,20 @@ def _pressure_hint(rng):
     return f"slope needs a wider range: try ~{target:.1f} bar (without re-torquing)"
 
 
-def _design(pts, settings, torques_fit, extra):
-    """Rows of regressors: one column per setting (its offset), one per
+def _design(pts, seatings, torques_fit, extra):
+    """Rows of regressors: one column per seating (its offset), one per
     fitted torque (its slope × (bar − ref)), then the extra columns."""
-    si = {s: i for i, s in enumerate(settings)}
-    ti = {t: len(settings) + i for i, t in enumerate(torques_fit)}
-    p = len(settings) + len(torques_fit) + len(extra)
+    si = {s: i for i, s in enumerate(seatings)}
+    ti = {t: len(seatings) + i for i, t in enumerate(torques_fit)}
+    p = len(seatings) + len(torques_fit) + len(extra)
     x = []
     for q in pts:
         r = [0.0] * p
-        r[si[q['setting']]] = 1.0
+        r[si[q['seating']]] = 1.0
         if q['tk'] in ti:
             r[ti[q['tk']]] = q['bar'] - config.MAP_REF_BAR
         for j, name in enumerate(extra):
-            r[len(settings) + len(torques_fit) + j] = q[name]
+            r[len(seatings) + len(torques_fit) + j] = q[name]
         x.append(r)
     return x
 
@@ -430,33 +452,33 @@ def fit(rows):
     for i, r in enumerate(rows):
         T, bar, tq = _num(r.get('t_open_degC')), _num(r.get('upstream_bar')), \
             _num(r.get('torque_Nm'))
-        s = r.get('setting') or ''
+        s = r.get('seating') or ''
         if T is None or tq is None or not s:
             continue
         if bar is None:
             f.excluded += 1
             continue
         base = _num(r.get('baseline_mbar'))
-        pts.append(dict(i=i, setting=s, tk=_tkey(tq), bar=bar, T=T,
+        pts.append(dict(i=i, seating=s, tk=_tkey(tq), bar=bar, T=T,
                         t=_time(r.get('time')), when=r.get('time') or '', deep=1.0 if _num(r.get('deep')) else 0.0,
                         lgb=math.log10(base) if base and base > 0 else None))
     if not pts:
         return f
-    settings = sorted({q['setting'] for q in pts})
+    seatings = sorted({q['seating'] for q in pts})
     for q in pts:
-        f.torque_of[q['setting']] = q['tk']
-        f.counts[q['setting']] = f.counts.get(q['setting'], 0) + 1
+        f.torque_of[q['seating']] = q['tk']
+        f.counts[q['seating']] = f.counts.get(q['seating'], 0) + 1
     torques = sorted({q['tk'] for q in pts})
     for tk in torques:
         bars = [q['bar'] for q in pts if q['tk'] == tk]
         f.ranges[tk] = (min(bars), max(bars))
-    # Each setting has its own offset, so a slope can only be learned from
-    # pressure changes WITHIN a setting (between settings the offsets absorb
-    # it): a torque's slope is fitted once one of its settings spans
+    # Each seating has its own offset, so a slope can only be learned from
+    # pressure changes WITHIN a seating (between seatings the offsets absorb
+    # it): a torque's slope is fitted once one of its seatings spans
     # MAP_MIN_SPREAD_BAR, else assumed.
     spread = {}
-    for s in settings:
-        bars = [q['bar'] for q in pts if q['setting'] == s]
+    for s in seatings:
+        bars = [q['bar'] for q in pts if q['seating'] == s]
         tk = f.torque_of[s]
         spread[tk] = max(spread.get(tk, 0.0), max(bars) - min(bars))
     torques_fit = [tk for tk in torques if spread.get(tk, 0.0) >= config.MAP_MIN_SPREAD_BAR]
@@ -469,44 +491,44 @@ def fit(rows):
     first = {}
     for q in pts:
         if q['t'] is not None:
-            first[q['setting']] = min(first.get(q['setting'], q['t']), q['t'])
+            first[q['seating']] = min(first.get(q['seating'], q['t']), q['t'])
     for q in pts:
-        q['drift'] = ((q['t'] - first[q['setting']]) / 3600.0) if q['t'] is not None else 0.0
+        q['drift'] = ((q['t'] - first[q['seating']]) / 3600.0) if q['t'] is not None else 0.0
         q['hours'] = q['drift']
         q['warm-start'] = q['deep']
-    # drift centred within each setting, so an offset stays the setting's
+    # drift centred within each seating, so an offset stays the seating's
     # average, not its value at the first opening
     by_s = {}
     for q in pts:
-        by_s.setdefault(q['setting'], []).append(q['drift'])
+        by_s.setdefault(q['seating'], []).append(q['drift'])
     for q in pts:
-        q['drift'] -= statistics.mean(by_s[q['setting']])
+        q['drift'] -= statistics.mean(by_s[q['seating']])
     lgbs = [q['lgb'] for q in pts if q['lgb'] is not None]
     mlg = statistics.mean(lgbs) if lgbs else 0.0
     for q in pts:
         q['background'] = (q['lgb'] - mlg) if q['lgb'] is not None else 0.0
 
     def run(extra):
-        x = _design(pts, settings, torques_fit, extra)
+        x = _design(pts, seatings, torques_fit, extra)
         return lstsq(x, [q['y'] for q in pts])
 
     # each optional term on its own: estimable, and significant?
     kept, tried = [], {}
     for name in OPTIONAL:
-        if not _varies_within_setting(pts, name):
+        if not _varies_within_seating(pts, name):
             continue
         out = run([name])
         if out is None:
             continue
         beta, cov, _, sd, dof = out
-        j = len(settings) + len(torques_fit)
+        j = len(seatings) + len(torques_fit)
         tq_ = t975(dof)
         half = tq_ * math.sqrt(cov[j][j]) if (tq_ and sd is not None) else None
         sig = half is not None and abs(beta[j]) > half
         tried[name] = (beta[j], half, sig)
         if sig:
             kept.append(name)
-    # Terms that move together within the settings (time and a background
+    # Terms that move together within the seatings (time and a background
     # still pumping down) can't be told apart: neither is used to correct —
     # attributing the trend to one of them would be arbitrary — and it's said.
     names = list(tried)
@@ -534,22 +556,22 @@ def fit(rows):
     def half(j):
         return tq_ * math.sqrt(cov[j][j]) if (tq_ and sd is not None) else None
 
-    for i, s in enumerate(settings):
+    for i, s in enumerate(seatings):
         f.offsets[s] = (beta[i], half(i))
     for i, tk in enumerate(torques_fit):
-        j = len(settings) + i
+        j = len(seatings) + i
         f.slopes[tk] = (beta[j], half(j), 'fit')
     for tk in torques:
         if tk not in f.slopes:
             f.slopes[tk] = (-config.PRESSURE_UP_K_PER_BAR, None, 'assumed')
     for j, name in enumerate(kept):
-        k = len(settings) + len(torques_fit) + j
+        k = len(seatings) + len(torques_fit) + j
         f.terms[name] = (beta[k], half(k), True)
     for name, v in tried.items():
         if name not in f.terms:
             f.terms[name] = (v[0], v[1], False)
     for q, e in zip(pts, res):
-        f.points.append(dict(i=q['i'], setting=q['setting'], tk=q['tk'], bar=q['bar'],
+        f.points.append(dict(i=q['i'], seating=q['seating'], tk=q['tk'], bar=q['bar'],
                              T=q['T'], residual=e, t=q['t'], when=q['when'],
                              deep=q['deep'],
                              hours=q['hours']))
@@ -558,16 +580,16 @@ def fit(rows):
 
 def _within_corr(pts, a, b):
     """How far two regressors move together where they vary: the
-    correlation (after removing each setting's mean) within the settings
+    correlation (after removing each seating's mean) within the seatings
     that carry most of their variation. Pooling alone would dilute it: a
     batch where time and background fell together, fitted with sessions
     whose background was steady, still can't tell them apart. Returns the
-    correlation of the settings carrying ≥ half of either term's variation
+    correlation of the seatings carrying ≥ half of either term's variation
     (the strongest such), or None."""
     by = {}
     for q in pts:
-        by.setdefault(q['setting'], []).append((q[a], q[b]))
-    per = []                           # (sxx, syy, sxy) per setting
+        by.setdefault(q['seating'], []).append((q[a], q[b]))
+    per = []                           # (sxx, syy, sxy) per seating
     for v in by.values():
         ma = statistics.mean(x for x, _ in v)
         mb = statistics.mean(y for _, y in v)
@@ -579,7 +601,7 @@ def _within_corr(pts, a, b):
     if tx <= 0 or ty <= 0:
         return None
     best = None
-    for share_of in (0, 1):            # the settings carrying a's (then b's) variation
+    for share_of in (0, 1):            # the seatings carrying a's (then b's) variation
         tot = (tx, ty)[share_of]
         ranked = sorted(per, key=lambda p: -p[share_of])
         acc, sxx, syy, sxy = 0.0, 0.0, 0.0, 0.0
@@ -596,17 +618,17 @@ def _within_corr(pts, a, b):
 
 
 def latest(rows):
-    """The setting of the newest opening (by time), or None."""
+    """The seating of the newest opening (by time), or None."""
     best = None
     for r in rows:
         t = _time(r.get('time'))
-        if r.get('setting') and t is not None and (best is None or t > best[0]):
-            best = (t, r['setting'])
+        if r.get('seating') and t is not None and (best is None or t > best[0]):
+            best = (t, r['seating'])
     return best[1] if best else None
 
 
 def summary(path=None):
-    """The newest setting's status line and the optional terms, for the
+    """The newest seating's status line and the optional terms, for the
     event log; '' with an empty table."""
     rows = load(path)
     if not rows:
@@ -616,14 +638,14 @@ def summary(path=None):
     line = f.status_text(s) if s else ""
     terms = f.terms_text()
     extra = f" ({f.excluded} without an upstream reading, not fitted)" if f.excluded else ""
-    return (f"Opening map: {f.n} openings, {len(f.offsets)} setting"
+    return (f"Opening map: {f.n} openings, {len(f.offsets)} seating"
             f"{'s' * (len(f.offsets) != 1)}{extra}; {line}" + (f"; {terms}" if terms else ""))
 
 
-def _varies_within_setting(pts, name):
-    """A term is only estimable if it varies within at least one setting
-    (between settings the offsets absorb it) — and with at least 3 openings."""
+def _varies_within_seating(pts, name):
+    """A term is only estimable if it varies within at least one seating
+    (between seatings the offsets absorb it) — and with at least 3 openings."""
     by = {}
     for q in pts:
-        by.setdefault(q['setting'], []).append(q[name])
+        by.setdefault(q['seating'], []).append(q[name])
     return any(len(v) >= 3 and max(v) - min(v) > 1e-9 for v in by.values())

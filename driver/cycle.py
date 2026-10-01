@@ -2,12 +2,12 @@
 threads, clock, files or hardware (like batch.py, whose detection it uses).
 See context.md, "Cycling", and history entry 34.
 
-    new_cycling(torque, setting, now, history=(), deep_every=CYCLE_DEEP_EVERY)
+    new_cycling(torque, seating, now, history=(), deep_every=CYCLE_DEEP_EVERY)
     step(c, now, temp, vac, vac_status, heater, p_up, p_up_t, predict)
         -> (commands, msgs, events)     one step, ~4 Hz. predict(bar, deep)
                                         -> (°C, how, scatter K or None) or
                                         None: the opening-map fit's prediction
-                                        for this setting (cyclerun supplies it).
+                                        for this seating (cyclerun supplies it).
                                         events: ('cycle_start', cyc),
                                         ('cycle_end', cyc), ('opening', row),
                                         ('end', c)
@@ -63,13 +63,13 @@ def cycle_name(n):
     return f"cycle{n:03d}"
 
 
-def new_cycling(torque, setting, now, history=(), deep_every=CYCLE_DEEP_EVERY):
+def new_cycling(torque, seating, now, history=(), deep_every=CYCLE_DEEP_EVERY):
     """history: [(time, mbar)] recent chamber readings, so a settled chamber
     needs no waiting."""
     if torque is None:
         raise ValueError("cycling needs the seat screw torque")
     c = dict(
-        torque=torque, setting=setting, started=now, ended=None, state=RUNNING, note="",
+        torque=torque, seating=seating, started=now, ended=None, state=RUNNING, note="",
         deep_every=max(1, int(deep_every)), n=0, cyc=None, phase=COOLDOWN, phase_t0=now,
         begun=False, openings=0, fails_in_row=0, extra=0.0, guess=None,
         hist=deque(maxlen=int((max(PRESSURE_BASE_WINDOW_S, BATCH_SETTLE_WINDOW_S) + 10)
@@ -546,7 +546,7 @@ def opening_row(c, cyc, rule="", source=""):
     if cyc['status'] != batch.OPENED or cyc['opened_during'] != CREEP or cyc['fast']:
         return None
     return dict(
-        time=_iso(cyc['t_onset']), setting=c['setting'], torque_Nm=c['torque'],
+        time=_iso(cyc['t_onset']), seating=c['seating'], torque_Nm=c['torque'],
         upstream_bar=cyc['up_open'], t_open_degC=round(cyc['T_onset'], 3),
         t_detect_degC=round(cyc['T_detect'], 3) if cyc['T_detect'] is not None else None,
         baseline_mbar=10 ** cyc['base'] if cyc['base'] is not None else None,

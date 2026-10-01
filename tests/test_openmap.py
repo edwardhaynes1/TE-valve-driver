@@ -68,7 +68,7 @@ def test_the_28_sept_batch_imports_its_creeping_openings(tmp_path):
     rows = openmap.load(tmp_path / "o.csv")
     assert [r['source'].split('/')[-1] for r in rows] == [
         'scout1', 'testrun01', 'testrun02', 'testrun03b', 'testrun04', 'testrun05', 'testrun06']
-    assert {r['setting'] for r in rows} == {REAL_NAME}
+    assert {r['seating'] for r in rows} == {REAL_NAME}
     assert all(r['deep'] == '1' for r in rows)              # every batch run started cold
     assert rows[0]['detect_rule'].startswith("old")         # no batch.json: the old rule
     # once only
@@ -110,7 +110,7 @@ def test_the_28_sept_fit(tmp_path):
     assert how == 'fit' and k == pytest.approx(-12.01, abs=0.01) and kh == pytest.approx(3.51, abs=0.01)
     assert f.sd == pytest.approx(1.14, abs=0.01) and f.n == 7
     t, how = f.predict(REAL_NAME, 0.45, 2.5)
-    assert t == pytest.approx(127.96, abs=0.01) and how == "this setting's fit"
+    assert t == pytest.approx(127.96, abs=0.01) and how == "this seating's fit"
     # drift and background moved together (pump-down over the batch): not
     # separable, so neither corrects the fit — and it says so
     assert f.confounded and {f.confounded[0][0], f.confounded[0][1]} == {'drift', 'background'}
@@ -122,14 +122,14 @@ def test_the_28_sept_fit(tmp_path):
     assert "7 openings" in f.status_text(REAL_NAME)
 
 
-def synthetic(settings, n=12, noise=0.3, seed=1, deep_every=0, drift_k_h=0.0,
+def synthetic(seatings, n=12, noise=0.3, seed=1, deep_every=0, drift_k_h=0.0,
               warm=0.0, bars=(1.5, 4.5), bg_k_dec=0.0, bg=(4e-7, 4e-7)):
-    """Openings from known truths: settings = [(name, torque, T at 3 bar,
+    """Openings from known truths: seatings = [(name, torque, T at 3 bar,
     K/bar)]."""
     rng = random.Random(seed)
     t0 = datetime(2026, 10, 1, 9, 0, 0)
     rows = []
-    for si, (name, tq, off, k) in enumerate(settings):
+    for si, (name, tq, off, k) in enumerate(seatings):
         for i in range(n):
             bar = bars[0] + (bars[1] - bars[0]) * rng.random()
             deep = 1 if deep_every and i % deep_every == 0 else 0
@@ -139,12 +139,12 @@ def synthetic(settings, n=12, noise=0.3, seed=1, deep_every=0, drift_k_h=0.0,
                  + bg_k_dec * (__import__('math').log10(base) - __import__('math').log10(4e-7))
                  + rng.gauss(0, noise))
             rows.append(dict(time=(t0 + timedelta(days=si, hours=hours)).isoformat(),
-                             setting=name, torque_Nm=tq, upstream_bar=bar, t_open_degC=T,
+                             seating=name, torque_Nm=tq, upstream_bar=bar, t_open_degC=T,
                              baseline_mbar=base, deep=deep))
     return rows
 
 
-def test_offsets_per_setting_and_slope_per_torque_are_recovered():
+def test_offsets_per_seating_and_slope_per_torque_are_recovered():
     truth = [("a1", 0.45, 128.0, -12.0), ("a2", 0.45, 131.0, -12.0),      # a re-torque: +3 K
              ("b1", 0.30, 92.0, -6.0)]
     f = openmap.fit(synthetic(truth, n=15))
@@ -158,10 +158,10 @@ def test_offsets_per_setting_and_slope_per_torque_are_recovered():
     assert "DONE" in f.status_text('a1')
 
 
-def test_a_new_setting_is_predicted_from_its_torques_others():
+def test_a_new_seating_is_predicted_from_its_torques_others():
     f = openmap.fit(synthetic([("a1", 0.45, 128.0, -12.0), ("a2", 0.45, 130.0, -12.0)]))
     t, how = f.predict("new", 0.45, 2.0)
-    assert t == pytest.approx(129.0 + 12.0, abs=0.5) and "2 other settings" in how
+    assert t == pytest.approx(129.0 + 12.0, abs=0.5) and "2 other seatings" in how
     assert f.predict("new", 0.30, 2.0) is None                # nothing at that torque
 
 
@@ -173,8 +173,8 @@ def test_too_little_pressure_spread_assumes_the_slope():
     assert not st['done'] and "try ~" in st['hint'] and "(assumed)" in f.status_text('a1')
 
 
-def test_the_slope_is_learned_only_within_a_setting():
-    # Two settings at 0.40 N·m, each held at one pressure (2 and 4 bar): the
+def test_the_slope_is_learned_only_within_a_seating():
+    # Two seatings at 0.40 N·m, each held at one pressure (2 and 4 bar): the
     # offsets absorb the difference, so there's nothing to fit a slope from
     # (it was unsolvable before) — assumed, and the hint says: don't re-torque.
     rows = (synthetic([("a", 0.40, 90.0, -8.0)], bars=(2.0, 2.0), seed=1)
@@ -182,7 +182,7 @@ def test_the_slope_is_learned_only_within_a_setting():
     f = openmap.fit(rows)
     assert f.n == len(rows) and f.slopes['0.40'][2] == 'assumed'
     assert "without re-torquing" in f.status('a')['hint']
-    # one of them swept 1 bar: now it's fitted, from that setting
+    # one of them swept 1 bar: now it's fitted, from that seating
     rows += synthetic([("a", 0.40, 90.0, -8.0)], bars=(2.0, 3.0), seed=3)
     k, kh, how = openmap.fit(rows).slopes['0.40']
     assert how == 'fit' and k == pytest.approx(-8.0, abs=1.0)
@@ -203,7 +203,7 @@ def test_no_warm_start_effect_is_reported_as_not_significant():
     assert not kept and abs(v) < half
 
 
-def test_drift_is_found_and_the_offset_stays_the_settings_average():
+def test_drift_is_found_and_the_offset_stays_the_seatings_average():
     f = openmap.fit(synthetic([("a1", 0.45, 128.0, -12.0)], n=30, drift_k_h=1.5))
     v, half, kept = f.terms['drift']
     assert kept and v == pytest.approx(1.5, abs=0.4)
@@ -238,11 +238,11 @@ def test_an_empty_table():
 
 # ── the driver: startup import, batches feed the table, the figure ─────────
 
-def test_the_startup_summary_names_the_newest_setting(tmp_path):
+def test_the_startup_summary_names_the_newest_seating(tmp_path):
     write_batch(Path(config.BATCH_DIR).parent / "batches", REAL_NAME, REAL)
     assert "imported 7" in openmap.import_batches()
     line = openmap.summary()
-    assert line.startswith("Opening map: 7 openings, 1 setting;") and REAL_NAME in line
+    assert line.startswith("Opening map: 7 openings, 1 seating;") and REAL_NAME in line
 
 
 def test_a_batch_feeds_the_openings_table(clock, monkeypatch):
@@ -256,7 +256,7 @@ def test_a_batch_feeds_the_openings_table(clock, monkeypatch):
     rows = openmap.load()
     creeping = [s for s in batchrun._summaries
                 if s['status'] == 'opened' and s['opened_during'] == 'creep']
-    assert len(rows) == len(creeping) >= 4 and {r['setting'] for r in rows} == {name}
+    assert len(rows) == len(creeping) >= 4 and {r['seating'] for r in rows} == {name}
     assert all(r['detect_rule'] == "+5e-08 mbar" for r in rows)
     events = " | ".join(t for _, t in shared.recent_events())
     assert "map: " in events
@@ -279,3 +279,48 @@ def test_the_map_figures_draw_2d_and_3d(tmp_path):
     out = plotter.plot_map(path, str(tmp_path / "map.png"), show=False)
     assert Path(out).stat().st_size > 20_000
     assert (tmp_path / "map-3d.png").stat().st_size > 20_000
+
+
+def test_files_from_before_the_rename_are_read_and_upgraded(tmp_path):
+    # Until 1 Oct 2026 the column was "setting"; it is now "seating" (history 37).
+    import openpyxl
+    from driver import config, schema, tminlog, workbook
+    old_cols = [("setting" if c == "seating" else c) for c in schema.OPENINGS]
+    p = tmp_path / "openings.csv"
+    with open(p, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(old_cols)
+        w.writerow(["2026-09-28T13:10:49", "old_one", "0.45", "3.0", "125.5"]
+                   + [""] * (len(old_cols) - 5))
+    rows = openmap.load(str(p))
+    assert rows[0]['seating'] == "old_one" and 'setting' not in rows[0]
+    ok, _ = openmap.append(dict(time="2026-10-01T09:00:00", seating="new_one", torque_Nm=0.45,
+                                upstream_bar=3.0, t_open_degC=126.0), path=str(p), sheet=False)
+    header = next(csv.reader(open(p, encoding="utf-8")))
+    assert header == list(schema.OPENINGS)
+    assert [r['seating'] for r in openmap.load(str(p))] == ["old_one", "new_one"]
+    # t-min.csv
+    q = tmp_path / "t-min.csv"
+    with open(q, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["time", "setting", "torque_Nm"])
+        w.writerow(["2026-09-30T10:00:00", "s0", "0.45"])
+    assert tminlog.load(str(q))[0]['seating'] == "s0"
+    tminlog.append(dict(time="2026-10-01", seating="s1", torque_Nm=0.45), path=str(q), sheet=False)
+    header = next(csv.reader(open(q, encoding="utf-8")))
+    assert header[:3] == ["time", "seating", "torque_Nm"] and "setting" not in header
+    assert [r['seating'] for r in tminlog.load(str(q))] == ["s0", "s1"]
+    # the workbook's sheet
+    x = tmp_path / "map.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Openings"
+    ws.append(old_cols)
+    ws.append(["2026-09-28T13:10:49", "old_one"])
+    wb.save(x)
+    workbook.append(str(x), "Openings", schema.OPENINGS, dict(time="t", seating="new_one"))
+    ws = openpyxl.load_workbook(x)["Openings"]
+    head = [c.value for c in ws[1]]
+    assert head.count("seating") == 1 and "setting" not in head
+    col = head.index("seating")
+    assert [r[col].value for r in ws.iter_rows(min_row=2)] == ["old_one", "new_one"]

@@ -4,13 +4,13 @@ logic is in cycle.py; this module adds the clock, the thread and the I/O
 
     start(main_log="", retorqued=None, deep_every=CYCLE_DEEP_EVERY)
         -> (ok, message)                    GUI: start cycling
-    last_setting(torque) -> name or None    the newest setting at this torque
+    last_seating(torque) -> name or None    the newest seating at this torque
     stop(reason)                            GUI: stop cycling, DISARM, closing
     running() / status() / labels()         for the window and the log rows
     record_row(row)                         logger: a main-log row was written
     tick()                                  one step (the thread; tests)
 
-Files, in logs/cycles/<setting>/<session>/: cycle001.csv … (the cycle's
+Files, in logs/cycles/<seating>/<session>/: cycle001.csv … (the cycle's
 rows, main-log columns, from its hold to the end of its cooldown) and
 session.json (settings). Every creeping opening becomes a row of the
 openings table (openmap.py); the fit is redone, its status line logged,
@@ -52,7 +52,7 @@ def status():
             return None
         line = cycle.status_text(_c)
         if _fit is not None and _fit.n:
-            line += "\n" + _fit.status_text(_c['setting'])
+            line += "\n" + _fit.status_text(_c['seating'])
         return line
 
 
@@ -66,13 +66,13 @@ def folder():
         return _folder
 
 
-def setting():
+def seating():
     with _lock:
-        return _c['setting'] if _c is not None else None
+        return _c['seating'] if _c is not None else None
 
 
-def last_setting(torque):
-    """The newest setting in the openings table at this torque (within
+def last_seating(torque):
+    """The newest seating in the openings table at this torque (within
     SEAT_SCREW_TOL_NM), or None."""
     best = None
     for r in openmap.load():
@@ -84,7 +84,7 @@ def last_setting(torque):
             continue
         t = openmap.parse_time(r.get('time'))
         if t is not None and (best is None or t > best[0]):
-            best = (t, r.get('setting'))
+            best = (t, r.get('seating'))
     return best[1] if best else None
 
 
@@ -113,7 +113,7 @@ def _settings():
 
 def start(main_log="", retorqued=None, deep_every=None, start_thread=True):
     """Start cycling at the torque entered. retorqued False continues the
-    newest setting at this torque; True (or None, or no setting yet)
+    newest seating at this torque; True (or None, or no seating yet)
     starts a new one."""
     global _c, _folder, _fit, _thread
     problem = start_problem()
@@ -121,21 +121,21 @@ def start(main_log="", retorqued=None, deep_every=None, start_thread=True):
         return False, f"Cycling not started — {problem}"
     torque = shared.seat_screw_torque()
     deep_every = deep_every or config.CYCLE_DEEP_EVERY
-    old = last_setting(torque)
+    old = last_seating(torque)
     now_dt = datetime.now()
     if retorqued is False and old is not None:
-        name, how = old, f"continuing setting {old}"
+        name, how = old, f"continuing seating {old}"
     else:
         name = f"{now_dt:%Y%m%d_%H%M%S}_{torque:.2f}Nm"
         while name == old:              # started within the same second: a later name
             now_dt += timedelta(seconds=1)
             name = f"{now_dt:%Y%m%d_%H%M%S}_{torque:.2f}Nm"
-        how = f"new setting {name}" + (" (re-torqued)" if retorqued else "")
+        how = f"new seating {name}" + (" (re-torqued)" if retorqued else "")
     path = os.path.join(config.CYCLE_DIR, name, f"{now_dt:%Y%m%d_%H%M%S}")
     try:
         os.makedirs(path, exist_ok=True)
         with open(os.path.join(path, "session.json"), "w", encoding="utf-8") as f:
-            json.dump(dict(setting=name, started=now_dt.isoformat(timespec='seconds'),
+            json.dump(dict(seating=name, started=now_dt.isoformat(timespec='seconds'),
                            seat_screw_torque_Nm=torque, retorqued=retorqued,
                            continued=(name == old), deep_every=deep_every,
                            main_log=main_log, detect_rule=openmap.current_rule(),
@@ -169,11 +169,11 @@ def _refit():
 
 
 def _predict(bar, deep):
-    """The fit's prediction for the current setting (cycle.step calls it)."""
+    """The fit's prediction for the current seating (cycle.step calls it)."""
     f, c = _fit, _c
     if f is None or c is None:
         return None
-    p = f.predict(c['setting'], c['torque'], bar, deep)
+    p = f.predict(c['seating'], c['torque'], bar, deep)
     return None if p is None else (p[0], p[1], f.sd)
 
 
@@ -284,7 +284,7 @@ def _opening(cyc):
     f = _refit()
     with _lock:
         _fit = f
-        name = _c['setting']
+        name = _c['seating']
     if f is not None:
         log_event(f.status_text(name))
         terms = f.terms_text()

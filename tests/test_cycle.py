@@ -36,7 +36,7 @@ def test_a_session_of_openings():
     assert [r['deep'] for r in rows[:11]] == [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
     assert all(127.0 <= r['t_open_degC'] <= 131.0 for r in rows)
     assert all(r['upstream_bar'] == pytest.approx(3.0) for r in rows)
-    assert all(r['detect_rule'] == "sim" and r['setting'] == "s1" for r in rows)
+    assert all(r['detect_rule'] == "sim" and r['seating'] == "s1" for r in rows)
     s = f.status("s1")
     assert s['offset'][0] == pytest.approx(128.8, abs=1.0) and s['n'] == len(rows)
 
@@ -66,13 +66,13 @@ def test_deep_every_is_settable():
 
 
 def test_with_a_prediction_it_doesnt_scout():
-    rows0 = [dict(time=f"2026-09-28T13:{10 + i}:00", setting="s1", torque_Nm=0.45,
+    rows0 = [dict(time=f"2026-09-28T13:{10 + i}:00", seating="s1", torque_Nm=0.45,
                   upstream_bar=u, t_open_degC=128.0 - 12.0 * (u - 3.0), deep=1)
              for i, u in enumerate((2.0, 2.5, 3.0, 3.5))]
     rig, c, rows, f, msgs = session(max_s=900, rows=list(rows0))
     new = rows[len(rows0):]
     assert new and not new[0]['note']
-    assert any("this setting's fit" in m for m in msgs)
+    assert any("this seating's fit" in m for m in msgs)
 
 
 def test_a_valve_that_moved_down_is_caught_in_the_hold_then_followed():
@@ -197,7 +197,7 @@ def test_cyclerun_writes_its_files_and_the_openings(clock, monkeypatch):
     shared.store_vacuum(4e-7, None, 1.7)
     shared.store_keller(3.0, None, clock.t)
     ok, name = cyclerun.start(start_thread=False)
-    assert ok and name.endswith("_0.45Nm") and cyclerun.last_setting(0.45) is None
+    assert ok and name.endswith("_0.45Nm") and cyclerun.last_seating(0.45) is None
     drive(clock, Rig(**VALVE), max_s=1800)
     assert cyclerun.running()
     status = cyclerun.status()
@@ -205,9 +205,9 @@ def test_cyclerun_writes_its_files_and_the_openings(clock, monkeypatch):
     cyclerun.stop("test")
     folder = Path(cyclerun.folder())
     info = json.load(open(folder / "session.json", encoding="utf-8"))
-    assert info['setting'] == name and info['deep_every'] == config.CYCLE_DEEP_EVERY
+    assert info['seating'] == name and info['deep_every'] == config.CYCLE_DEEP_EVERY
     rows = openmap.load()
-    assert len(rows) >= 6 and {r['setting'] for r in rows} == {name}
+    assert len(rows) >= 6 and {r['seating'] for r in rows} == {name}
     assert all(r['detect_rule'] == "+5e-08 mbar" for r in rows)
     trace = Path(config.OPENINGS_CSV).parent / rows[1]['source']   # (absolute stays absolute)
     lines = list(csv.DictReader(open(trace, encoding="utf-8")))
@@ -215,8 +215,8 @@ def test_cyclerun_writes_its_files_and_the_openings(clock, monkeypatch):
     events = " | ".join(t for _, t in shared.recent_events())
     assert "map: " + name in events and "Cycling stopped: test" in events
     assert "file error" not in events
-    # the next start at this torque can continue the setting
-    assert cyclerun.last_setting(0.45) == name
+    # the next start at this torque can continue the seating
+    assert cyclerun.last_seating(0.45) == name
     ok, again = cyclerun.start(retorqued=False, start_thread=False)
     assert ok and again == name
     cyclerun.stop("test")

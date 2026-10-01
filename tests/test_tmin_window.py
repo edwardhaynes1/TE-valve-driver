@@ -1,7 +1,7 @@
 """The t-min-tune controls in the window (history 36; they replaced the
 cycling controls): its row (upstream target and ± band) shows only in
 t-min-tune; start needs a torque, a target and a disarmed heater and asks
-for confirmation — and, if the torque has a setting already, whether the
+for confirmation — and, if the torque has a seating already, whether the
 screw was re-torqued; while it runs it owns the heater (the heater controls
 and the torque are locked, the band stays editable); stop and DISARM end it."""
 import time
@@ -144,13 +144,13 @@ def test_disarm_stops_and_arm_is_refused_while_running(gui):
     assert not control.snapshot()['armed'] and not tminrun.running()
 
 
-# ── the re-torque question (the torque has a setting already) ──────────────
+# ── the re-torque question (the torque has a seating already) ──────────────
 
 OLD = "20260930_110000_0.30Nm"
 
 
 def asked(gui, answer):
-    tminlog.append(dict(time="2026-09-30T11:30:00", setting=OLD, torque_Nm=0.30,
+    tminlog.append(dict(time="2026-09-30T11:30:00", seating=OLD, torque_Nm=0.30,
                         upstream_target_bar=3.0, outcome="t_min", t_min_degC=61.2,
                         upstream_at_open_bar=3.0, counted=1), sheet=False)
     enter_torque(gui)
@@ -161,16 +161,16 @@ def asked(gui, answer):
     return seen[0] if seen else ""
 
 
-def test_not_retorqued_continues_the_setting(gui):
+def test_not_retorqued_continues_the_seating(gui):
     text = asked(gui, False)
     assert "Has the seat screw been re-torqued" in text and OLD in text
-    assert tminrun.running() and tminrun.setting() == OLD
+    assert tminrun.running() and tminrun.seating() == OLD
 
 
-def test_retorqued_starts_a_new_setting(gui):
+def test_retorqued_starts_a_new_seating(gui):
     asked(gui, True)
-    assert tminrun.running() and tminrun.setting() != OLD
-    assert tminrun.setting().endswith("_0.30Nm")
+    assert tminrun.running() and tminrun.seating() != OLD
+    assert tminrun.seating().endswith("_0.30Nm")
 
 
 def test_cancel_at_the_question_starts_nothing(gui):
@@ -178,8 +178,8 @@ def test_cancel_at_the_question_starts_nothing(gui):
     assert not tminrun.running()
 
 
-def test_a_setting_in_the_openings_table_also_asks(gui):
-    openmap.append(dict(time="2026-09-28T13:10:49", setting="old_cycling", torque_Nm=0.30,
+def test_a_seating_in_the_openings_table_also_asks(gui):
+    openmap.append(dict(time="2026-09-28T13:10:49", seating="old_cycling", torque_Nm=0.30,
                         upstream_bar=3.0, t_open_degC=61.2, deep=1), sheet=False)
     enter_torque(gui)
     seen = []
@@ -188,10 +188,10 @@ def test_a_setting_in_the_openings_table_also_asks(gui):
     assert seen and "old_cycling" in seen[0]
 
 
-def test_no_question_without_a_setting_at_that_torque(gui):
+def test_no_question_without_a_seating_at_that_torque(gui):
     enter_torque(gui)
     seen = []
-    gui._ask = lambda *a: pytest.fail("no re-torque question without a setting")
+    gui._ask = lambda *a: pytest.fail("no re-torque question without a seating")
     gui._confirm = lambda title, text: seen.append(text) or True
     gui._start_batch()
     assert "Nothing measured at this torque yet" in seen[0] and tminrun.running()

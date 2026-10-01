@@ -164,18 +164,18 @@ class Rig:
     def rows_of(self, run_name):
         return [(t, r) for t, r in self.rows if r['batch_run'] == run_name]
 
-    def run_cycling(self, torque=0.45, setting="s1", max_s=3600, rows=None, hook=None,
+    def run_cycling(self, torque=0.45, seating="s1", max_s=3600, rows=None, hook=None,
                     deep_every=5, dt=0.25, stop_after=None, idle_s=60):
         """Cycle until max_s (or stop_after openings); the fit is redone
         after every opening, as cyclerun does. Returns (c, rows, fit, msgs).
         rows: openings already in the table (they are appended to)."""
         rows = [] if rows is None else rows
-        c = cycle.new_cycling(torque, setting, self.now, self.idle(idle_s),
+        c = cycle.new_cycling(torque, seating, self.now, self.idle(idle_s),
                               deep_every=deep_every)
         fit = [openmap.fit(rows)]
 
         def predict(bar, deep):
-            p = fit[0].predict(setting, torque, bar, deep)
+            p = fit[0].predict(seating, torque, bar, deep)
             return None if p is None else (p[0], p[1], fit[0].sd)
         msgs, self.events = [], []
         while c['state'] == cycle.RUNNING and self.now - c['started'] < max_s:
@@ -202,16 +202,16 @@ class Rig:
             self.advance(dt)
         return c, rows, fit[0], msgs
 
-    def run_tmin(self, torque=0.45, setting="s1", target=3.0, band=0.05, max_s=6 * 3600,
+    def run_tmin(self, torque=0.45, seating="s1", target=3.0, band=0.05, max_s=6 * 3600,
                  rows=None, fit=None, hook=None, dt=0.25, idle_s=60, stop_after=None):
         """t-min-tune until it ends or max_s; every finished test is a row of
         `rows` (the t-min.csv stand-in) and the estimate is recomputed from
         them, as tminrun does. Returns (s, rows, msgs)."""
         rows = [] if rows is None else rows
-        s = tmin.new_session(torque, setting, target, band, self.now, self.idle(idle_s))
+        s = tmin.new_session(torque, seating, target, band, self.now, self.idle(idle_s))
 
         def estimate(tgt):
-            return tminlog.estimate(rows, setting, torque, tgt, fit)
+            return tminlog.estimate(rows, seating, torque, tgt, fit)
         msgs, self.events = [], []
         while s['state'] == tmin.RUNNING and self.now - s['started'] < max_s:
             vac, st = self.vac()

@@ -25,6 +25,11 @@ SHEETS = ('Runs', 'Batches')
 _FONT = "Arial"
 
 
+# Columns renamed since (as schema.RENAMED_COLUMNS; this module imports no
+# other): an older sheet's header cell, or side file's column, is renamed.
+_RENAMED = {"setting": "seating"}
+
+
 def pending_path(path, sheet):
     stem = path[:-5] if path.endswith('.xlsx') else path
     return f"{stem}.pending-{sheet.lower()}.csv"
@@ -45,7 +50,12 @@ def _read_pending(path, sheet, columns):
     if not os.path.exists(p):
         return []
     with open(p, newline='', encoding='utf-8') as f:
-        return [[r.get(c, '') for c in columns] for r in csv.DictReader(f)]
+        rows = list(csv.DictReader(f))
+    for r in rows:
+        for old, new in _RENAMED.items():
+            if old in r and new not in r:
+                r[new] = r.pop(old)
+    return [[r.get(c, '') for c in columns] for r in rows]
 
 
 def _to_pending(path, sheet, columns, row):
@@ -87,6 +97,10 @@ def append(path, sheet, columns, row):
         wb = _open(path, {sheet: columns})
         ws = wb[sheet]
         header = [c.value for c in ws[1]]
+        for i, h in enumerate(header):          # renamed columns: the cell takes the new name
+            if h in _RENAMED and _RENAMED[h] not in header:
+                ws.cell(row=1, column=i + 1, value=_RENAMED[h])
+                header[i] = _RENAMED[h]
         missing = [c for c in columns if c not in header]
         for c in missing:                       # columns added since: append them
             ws.cell(row=1, column=len(header) + 1, value=c).font = Font(name=_FONT, bold=True)
