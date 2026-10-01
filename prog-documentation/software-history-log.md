@@ -4,6 +4,14 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 41. A scout also remembers openings at the start from earlier sessions — 1 Oct 2026
+History 40 lowered the next scout within a session; a new session at 0.20
+N·m still scouted from 40 °C (the torque table) after the valve had opened
+at 24-26 °C in the last one. Now a session starts knowing the lowest
+"opened at start" temperature at its torque in `logs/t-min.csv`, and a
+scout starts at least 10 K below it (near room temperature: where the valve
+is).
+
 ## 40. A new seating's first estimate uses each other seating's latest results; a scout that opens at its start goes lower — 1 Oct 2026
 The first estimate at a new seating averaged *all* counted results of the
 other seatings at the torque. The 0.50 N·m seating (1 Oct) walked down from

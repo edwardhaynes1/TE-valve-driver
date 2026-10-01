@@ -166,6 +166,19 @@ def test_a_scout_that_opens_at_the_start_starts_lower_next_time():
     assert results(rows)
 
 
+def test_a_scout_remembers_openings_at_the_start_from_earlier_sessions():
+    # 1 Oct, 0.20 N·m: the next session scouted from 40 °C again although the
+    # valve had opened at 24-26 °C in the one before
+    rows = [dict(time="t", seating="a", torque_Nm="0.20", outcome=tminlog.OPENED_AT_START,
+                 t_min_degC=str(T)) for T in (25.344, 24.38)]
+    rows.append(dict(time="t", seating="b", torque_Nm="0.45", outcome=tminlog.OPENED_AT_START,
+                     t_min_degC="10"))
+    assert tminlog.opened_low(rows, 0.2) == pytest.approx(24.38)
+    assert tminlog.opened_low(rows, 0.3) is None
+    s = tmin.new_session(0.2, "c", 0.959, 0.05, 0.0, opened_low=24.38)
+    assert s['opened_low'] == pytest.approx(24.38)
+
+
 def test_near_room_temperature_it_starts_where_it_can():
     # T_min 33 °C: 10 K below is 23 °C, which the heater can't cool to
     old = [dict(time="t", seating="old", torque_Nm="0.45", outcome=tminlog.T_MIN,

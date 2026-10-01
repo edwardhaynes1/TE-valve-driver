@@ -171,8 +171,12 @@ def start(main_log="", retorqued=None, target=None, band=None, start_thread=True
         log_event(message)
     fit = _refit()
     with _lock:
+        try:
+            low = tminlog.opened_low(tminlog.load(), torque)
+        except Exception:                            # a bad file must not stop the start
+            low = None
         _s = tmin.new_session(torque, name, target, band, control.clock(),
-                              shared.vacuum_history())
+                              shared.vacuum_history(), opened_low=low)
         _folder, _fit = path, fit
         _files.clear()
     est = _estimate(target)

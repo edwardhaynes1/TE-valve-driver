@@ -186,6 +186,15 @@ def _counted(r):
     return r.get('outcome') == T_MIN and str(r.get('counted')) in ('1', 'True', '1.0')
 
 
+def opened_low(rows, torque):
+    """The lowest temperature any test at this torque opened at while
+    holding its start ('opened at start' rows), or None (history 41)."""
+    vals = [_num(r.get('t_min_degC')) for r in rows
+            if r.get('outcome') == OPENED_AT_START and _same_torque(_num(r.get('torque_Nm')), torque)]
+    vals = [v for v in vals if v is not None]
+    return min(vals) if vals else None
+
+
 def estimate(rows, seating, torque, target, fit=None):
     """The T_min expected at the target for this seating, as a dict
     (T, how, n, sd, values), or None. In order: this seating's counted
