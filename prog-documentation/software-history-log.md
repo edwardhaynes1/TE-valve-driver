@@ -4,6 +4,22 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 40. A new seating's first estimate uses each other seating's latest results; a scout that opens at its start goes lower — 1 Oct 2026
+The first estimate at a new seating averaged *all* counted results of the
+other seatings at the torque. The 0.50 N·m seating (1 Oct) walked down from
+a high start: 135, 130, 125, 122, 120, 120 °C — its early tests opened on
+their first step, so they are only upper bounds, and the old rule gave
+125.5 °C. Now each other seating counts with the mean of its latest 3
+(`TMIN_ESTIMATE_LAST_N`), as its own estimate does: 120.8 °C. The margin
+for a new seating stays 10 K.
+
+At 0.20 N·m (1 Oct) the torque table gave 40 °C (+10 K for the pressure:
+a 40 °C scout start). The valve opened at 26 °C while heating to it, and
+the next scout held 40 °C again: a scout ignored the "start lower" after an
+opening at the start, so it would have repeated indefinitely. Now a scout
+starts lower by that amount, and at least 10 K below where any test opened
+during its hold (near room temperature it then starts where it is).
+
 ## 39. The driver closes itself once t-min-tune has converged — 1 Oct 2026
 Edward wants the driver to close by itself when a session is done, after
 the valve has closed. Convergence is only checked once the last test's

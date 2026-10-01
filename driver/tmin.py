@@ -113,6 +113,7 @@ def new_session(torque, seating, target, band, now, history=()):
                                    * LABJACK_SAMPLE_HZ * 2)),
              y_filt=None, last_t=None, base=None, bad_vac=0, up=None, trend=None,
              extra=0.0, results=0, est=None, waiting_note=False, cool_since=None, last_close=None,
+             opened_low=None,
              room=[])
     for t, mbar in history:
         if mbar and mbar > 0 and t <= now:
@@ -268,10 +269,17 @@ def _begin_test(s, now, temp, est, cmds, msgs, events):
     test = s['test'] = _new_test(s, now)
     if est is None:
         guess, how = _table_guess(s)
-        test.update(scout=True, est=guess, how=how, margin=SCOUT_BELOW_K,
-                    start_c=math.floor(min(BATCH_CEILING_C - 5.0, guess - SCOUT_BELOW_K)))
+        # a scout that opened during its hold (history 40): the next one
+        # starts lower — by the extra, and 10 K below where it opened
+        start = guess - SCOUT_BELOW_K - s['extra']
+        if s['opened_low'] is not None:
+            start = min(start, s['opened_low'] - SCOUT_BELOW_K)
+        test.update(scout=True, est=guess, how=how, margin=round(guess - start, 2),
+                    start_c=math.floor(min(BATCH_CEILING_C - 5.0, start)))
         why = (f"scouting (nothing measured at this torque): {SCOUT_BELOW_K:g} K below "
-               f"{how}, then {BATCH_CREEP_C_MIN:g} °C/min until it opens")
+               f"{how}" + (f", lowered after opening at the start" if guess - start >
+                           SCOUT_BELOW_K + 1e-9 else "")
+               + f", then {BATCH_CREEP_C_MIN:g} °C/min until it opens")
     else:
         m = round(margin(est) + s['extra'], 2)
         start = math.floor(min(BATCH_CEILING_C - 5.0, est['T'] - m))
@@ -428,6 +436,8 @@ def _detected(s, now, temp, cmds, msgs, keep_outcome=False):
     o = test['outcome']
     if o == OPENED_AT_START:
         s['extra'] += TMIN_OPENED_AT_START_K
+        if T_on is not None:
+            s['opened_low'] = T_on if s['opened_low'] is None else min(s['opened_low'], T_on)
         test['note'] = (f"opened while holding {test['start_c']:.1f} °C: the start was too "
                         f"high; the next starts {s['extra']:g} K lower")
     elif o == T_MIN:

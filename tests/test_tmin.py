@@ -84,6 +84,17 @@ def test_other_seatings_at_the_torque_give_the_first_estimate():
     assert float(new[0]['start_degC']) == 111.0 and "other seating" in new[0]['estimate_from']
 
 
+def test_other_seatings_count_with_their_latest_results_only():
+    # 1 Oct, 0.50 N·m: the first tests walked down from a high start (upper
+    # bounds); a new seating starts from that seating's last 3, not all six
+    rows = [dict(time=f"t{i}", seating="old", torque_Nm="0.5", outcome=tminlog.T_MIN,
+                 counted="1", t_min_degC=str(T), upstream_at_open_bar="0.952")
+            for i, T in enumerate((134.97, 130.26, 125.16, 122.16, 120.08, 120.20))]
+    est = tminlog.estimate(rows, "new", 0.5, 0.952)
+    assert est['T'] == pytest.approx((122.16 + 120.08 + 120.20) / 3) and est['n'] == 0
+    assert math.floor(est['T'] - tminlog.margin(est)) == 110
+
+
 def test_results_are_corrected_to_the_target_pressure():
     row = dict(t_min_degC="100.0", upstream_at_open_bar="3.2")
     assert tminlog.at_target(row, 3.0, -12.0) == pytest.approx(102.4)
@@ -140,6 +151,19 @@ def test_opening_during_the_hold_starts_the_next_lower():
     assert "too high" in at[0]['note']
     later = results(rows[i + 1:])
     assert later and all(107.0 <= float(r['t_min_degC']) <= 109.5 for r in later)
+
+
+def test_a_scout_that_opens_at_the_start_starts_lower_next_time():
+    # 1 Oct, 0.20 N·m: the torque table said 40 °C (+10 K for the pressure);
+    # the valve opened at 26 °C while heating to the 40 °C start, and the
+    # next scout held 40 °C again. Now it starts 10 K below where it opened.
+    rig, s, rows, msgs = run(rig=dict(open_c=72.0), stop_after=1, max_s=6 * 3600)
+    at = [i for i, r in enumerate(rows) if r['outcome'] == tminlog.OPENED_AT_START]
+    assert at
+    for i in at:                                      # each next start: below where it opened
+        assert float(rows[i + 1]['start_degC']) <= float(rows[i]['t_min_degC']) - 9.0
+    assert any(r['outcome'] == tminlog.SCOUT for r in rows)      # it gets there
+    assert results(rows)
 
 
 def test_near_room_temperature_it_starts_where_it_can():

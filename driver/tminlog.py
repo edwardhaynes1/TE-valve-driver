@@ -190,7 +190,8 @@ def estimate(rows, seating, torque, target, fit=None):
     """The T_min expected at the target for this seating, as a dict
     (T, how, n, sd, values), or None. In order: this seating's counted
     results (the mean of the last TMIN_ESTIMATE_LAST_N); this seating's
-    scout; the other seatings at this torque (their counted results); the
+    scout; the other seatings at this torque (the mean, over them, of each
+    one's last TMIN_ESTIMATE_LAST_N counted results — history 40); the
     opening map's prediction for a new seating at this torque. n and sd are
     this seating's own (they set the margin)."""
     k = slope_for(torque, fit)
@@ -215,7 +216,9 @@ def estimate(rows, seating, torque, target, fit=None):
             if v is not None:
                 by_seating.setdefault(r.get('seating'), []).append(v)
     if by_seating:
-        means = [statistics.mean(v) for v in by_seating.values()]
+        # each seating's latest results only: its early tests, walking down
+        # from a high start, are upper bounds (1 Oct, 0.50 N·m: 135 → 120 °C)
+        means = [statistics.mean(v[-config.TMIN_ESTIMATE_LAST_N:]) for v in by_seating.values()]
         m = len(means)
         return dict(T=statistics.mean(means), n=0, sd=None, values=[],
                     how=f"the mean of {m} other seating{'s' * (m > 1)} at {torque:.2f} N·m")

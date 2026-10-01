@@ -71,7 +71,7 @@ abandons the test; the next starts afresh once it is back inside. An
 opening during the hold (the start was too high) moves the next start 5 K
 lower. The estimate is this seating's latest results (corrected to the
 target along the opening map's pressure slope), else the other seatings at
-this torque, else the opening map; with nothing at all, the first test
+this torque (each one's latest 3 results), else the opening map; with nothing at all, the first test
 scouts (3 °C/min from 10 K below the torque table). It stops when the last
 3 results lie within ±1 K of their mean, or when you press **stop t-min**
 (or DISARM). When it converges — the valve has closed by then and the
