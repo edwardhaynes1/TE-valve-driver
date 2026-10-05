@@ -24,19 +24,19 @@ device again; the rest carries on unaffected.
 
 The **seat screw torque** (N·m) is entered by hand in the window. It starts
 blank every session and is logged with every row from the moment it is set.
-The **lock nut torque** (N·m) goes on the line below it in the same way, but
-is optional: blank means not recorded, and it locks nothing. Once a torque
-is entered its line shows the value and a small **update** button, which
+Once entered, the line shows the value and a small **update** button, which
 puts the box back in its place to enter a new value (Return or **set**
-saves, Escape keeps the old one). Both are locked while t-min-tune runs.
-Results pool only at the same seat screw *and* lock nut torque (blank
-counts as its own value), and a lock nut torque different from the latest
-seating's starts a new seating without the re-torque question.
+saves, Escape keeps the old one). It is locked while t-min-tune runs.
+The window has no lock nut torque input (history 45): the seat screw is
+characterised with the lock nut loose, so the `lock_nut_torque_Nm` column
+stays blank. Results pool only at the same seat screw *and* lock nut torque
+(blank counts as its own value), so earlier seatings recorded with a lock
+nut torque do not pool with new ones.
 
 ### The window
 
 One "Live Log" window: device status, live readings, heater voltage /
-current / power, the heater controls, the seat screw and lock nut torque inputs, four strip
+current / power, the heater controls, the seat screw torque input, four strip
 charts (chamber pressure, valve temperature, upstream pressure, heater power
 with the 1 W flight budget dashed) and a scrolling event log.
 

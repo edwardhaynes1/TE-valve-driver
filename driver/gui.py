@@ -86,11 +86,9 @@ class TEGui:
                          padx=8, pady=2)
 
         # The status panel in three parts: the sensor lines, the SEAT SCREW
-        # and LOCK NUT lines (which hold the torque inputs), and the heater
-        # V / I / P lines.
+        # line (which holds the torque input), and the heater V / I / P lines.
         self.status_text = self._status_block(outer, height=8)
         self._build_seat_row(outer)
-        self._build_nut_row(outer)
         self.heater_text = self._status_block(outer, height=3)
 
         self._build_heater_panel(outer)
@@ -150,16 +148,6 @@ class TEGui:
         self._seat_editing = False
         self._seat_shown = None
 
-    def _build_nut_row(self, parent):
-        """The LOCK NUT line (history 43), like the SEAT SCREW line but
-        optional: blank means not recorded, and it locks nothing."""
-        (self.nut_row, self.nut_entry, self.nut_btn, self.nut_value,
-         self.nut_upd_btn) = self._torque_row(parent, "LOCK NUT     ", self._set_lock_nut,
-                                              self._edit_lock_nut, self._cancel_nut_edit)
-        self.nut_hint = tk.Label(self.nut_row, text="(optional)", font=self.f, fg=DIM, bg=BG)
-        self._nut_editing = False
-        self._nut_shown = None
-
     def _torque_row(self, parent, label, set_cmd, edit_cmd, cancel_cmd):
         row = tk.Frame(parent, bg=BG)
         row.pack(fill="x")
@@ -177,14 +165,12 @@ class TEGui:
         return row, entry, btn, value, upd
 
     @staticmethod
-    def _pack_torque(editing, entry, btn, value, upd, extra=()):
-        for w in (entry, btn, value, upd, *extra):
+    def _pack_torque(editing, entry, btn, value, upd):
+        for w in (entry, btn, value, upd):
             w.pack_forget()
         if editing:
             entry.pack(side="left", padx=(2, 12))
             btn.pack(side="left")
-            for w in extra:
-                w.pack(side="left", padx=(8, 0))
         else:
             value.pack(side="left")
             upd.pack(side="left", padx=(12, 0))
@@ -202,18 +188,6 @@ class TEGui:
         self._pack_torque(editing, self.seat_entry, self.seat_btn, self.seat_value,
                           self.seat_upd_btn)
 
-    def _show_nut_row(self):
-        nm = shared.lock_nut_torque()
-        editing = nm is None or self._nut_editing
-        if nm is not None:
-            self.nut_value.configure(text=f"{nm:.2f} N·m")
-        if editing == self._nut_shown:
-            return
-        self._nut_shown = editing
-        self.nut_hint.pack_forget()
-        self._pack_torque(editing, self.nut_entry, self.nut_btn, self.nut_value,
-                          self.nut_upd_btn, extra=() if nm is not None else (self.nut_hint,))
-
     def _edit_seat_screw(self):
         if tminrun.running():
             log_event("t-min-tune is running — the seat screw torque is locked until it stops")
@@ -229,38 +203,6 @@ class TEGui:
         if shared.seat_screw_torque() is not None:
             self._seat_editing = False
             self._show_seat_row()
-
-    def _edit_lock_nut(self):
-        if tminrun.running():
-            log_event("t-min-tune is running — the lock nut torque is locked until it stops")
-            return
-        nm = shared.lock_nut_torque()
-        self._nut_editing = True
-        self._set_entry(self.nut_entry, "" if nm is None else f"{nm:g}")
-        self._show_nut_row()
-        self.nut_entry.focus_set()
-        self.nut_entry.select_range(0, "end")
-
-    def _cancel_nut_edit(self):
-        nm = shared.lock_nut_torque()
-        if nm is None:
-            self._set_entry(self.nut_entry, "")
-        self._nut_editing = False
-        self._show_nut_row()
-
-    def _set_lock_nut(self):
-        """Record the lock nut torque typed in the box."""
-        try:
-            nm = readout.parse_lock_nut_torque(self.nut_entry.get())
-        except ValueError as err:
-            log_event(str(err))
-            current = shared.lock_nut_torque()
-            self._set_entry(self.nut_entry, "" if current is None else f"{current:g}")
-            return
-        shared.set_lock_nut_torque(nm)
-        self._set_entry(self.nut_entry, f"{nm:g}")
-        self._nut_editing = False
-        self._show_nut_row()
 
     # ── heater panel ──────────────────────────────────────────────────────
     def _entry(self, parent, label, initial, width=8):
@@ -397,7 +339,6 @@ class TEGui:
         self._send_update()
         self._apply_gate()
         self._show_seat_row()
-        self._show_nut_row()
 
     def _show_lines(self):
         """Pack the batch / heater / loop status labels that have text, in
@@ -487,9 +428,8 @@ class TEGui:
 
     def _torque_buttons(self):
         """The torque controls t-min-tune locks while it runs, besides the
-        seat screw box and "set": both "update" buttons and the lock nut's
-        box and "set" (history 43)."""
-        return [self.seat_upd_btn, self.nut_upd_btn, self.nut_entry, self.nut_btn]
+        seat screw box and "set": its "update" button (history 43)."""
+        return [self.seat_upd_btn]
 
     def _start_batch(self):
         """Start t-min-tune: ask whether the screw was re-torqued if the
@@ -524,9 +464,6 @@ class TEGui:
                   "Every test is a row of logs/t-min.csv.\n"
                   "\nt-min-tune arms the heater itself. SW171 must be on. DISARM or "
                   "'stop t-min' stops it.")
-        nut = shared.lock_nut_torque()
-        nut_txt = (f"Lock nut torque: {nut:.2f} N·m" if nut is not None
-                   else "Lock nut torque: not entered")
         old = tminrun.last_seating(torque)
         old_nut = tminrun.seating_lock_nut(old) if old is not None else None
         retorqued = None
@@ -541,7 +478,7 @@ class TEGui:
             # history 44: a different lock nut torque is a new seating — no question
             if not self._confirm(
                     "Start t-min-tune",
-                    f"Seat screw torque: {torque:.2f} N·m\n{nut_txt}\n{old_txt}\n\n"
+                    f"Seat screw torque: {torque:.2f} N·m\n{old_txt}\n\n"
                     f"The lock nut torque has changed: this starts a new seating "
                     f"({new_from}).\n\n" + common):
                 log_event("t-min-tune not started (cancelled)")
@@ -550,7 +487,7 @@ class TEGui:
         elif old is not None:
             answer = self._ask(
                 "Start t-min-tune",
-                f"Seat screw torque: {torque:.2f} N·m\n{nut_txt}\n{old_txt}\n\n"
+                f"Seat screw torque: {torque:.2f} N·m\n{old_txt}\n\n"
                 f"Has the seat screw been re-torqued (or the valve disturbed) since?\n\n"
                 f"No: continue that seating (its results so far set the estimate).\n"
                 + (f"Yes: start a new seating ({first}; your estimate also applies "
@@ -562,7 +499,7 @@ class TEGui:
             retorqued = bool(answer)
         elif not self._confirm(
                 "Start t-min-tune",
-                f"Seat screw torque: {torque:.2f} N·m\n{nut_txt}\n"
+                f"Seat screw torque: {torque:.2f} N·m\n"
                 f"Is that what is on the valve now?\n\n"
                 + (f"Nothing measured at this torque yet: a new seating; {first}.\n"
                    if first else "Nothing measured at this torque yet: a new seating; the "
@@ -804,7 +741,6 @@ class TEGui:
         self._fill(self.heater_text,
                    readout.heater_segments(h, shared.heater_output(), health['labjack']))
         self._show_seat_row()
-        self._show_nut_row()
 
         self.arm_btn.configure(text="DISARM" if h['armed'] else "ARM",
                                fg=WARN if h['armed'] else TEXT)

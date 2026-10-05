@@ -1,17 +1,15 @@
-"""Lock nut torque, and the "update" buttons on both torque lines (history
-43); it pools results and a different one is a new seating (history 44).
+"""Lock nut torque (history 43); it pools results and a different one is a
+new seating (history 44). The window no longer has a LOCK NUT line (history
+45): the value stays blank unless set in code, as the tests below do.
 
-Agreed behaviour (1 Oct 2026):
-  * the lock nut torque is entered like the seat screw torque (N·m, point or
-    comma, 0 … LOCK_NUT_TORQUE_MAX_NM) on a LOCK NUT line under SEAT SCREW;
-    optional: blank means not recorded, and it locks nothing
-  * once a torque is entered its line shows the value and a small "update"
-    button; "update" puts the box (holding the value) where the value was;
-    Return or "set" saves, Escape goes back unchanged
-  * both lines are locked while t-min-tune runs
+Agreed behaviour (1 Oct 2026, window part removed 5 Oct 2026):
+  * the lock nut torque is 0 … LOCK_NUT_TORQUE_MAX_NM; blank means not
+    recorded, and it locks nothing
+  * the seat screw line keeps its "update" button, locked while t-min-tune
+    runs
   * every main-log row carries it (lock_nut_torque_Nm, the last column);
     every t-min.csv row and session.json record it; the start dialog shows
-    it, and the latest seating's when that was recorded
+    the latest seating's when that was recorded
   * (history 44) the estimate from other seatings, and a scout's memory of
     openings at the start, count only seatings at the same seat screw and
     lock nut torques (blank = not recorded counts as a value); a lock nut
@@ -49,20 +47,6 @@ def test_values_outside_the_range_are_refused(bad):
     with pytest.raises(ValueError):
         shared.set_lock_nut_torque(bad)
     assert shared.lock_nut_torque() is None
-
-
-def test_typed_numbers_are_understood_and_others_refused():
-    assert readout.parse_lock_nut_torque(" 0,1 ") == 0.1
-    with pytest.raises(ValueError, match="Lock nut torque: 'abc' is not a number"):
-        readout.parse_lock_nut_torque("abc")
-    with pytest.raises(ValueError, match="outside"):
-        readout.parse_lock_nut_torque("9")
-
-
-def test_the_panel_text_has_a_lock_nut_line():
-    text = "".join(t for t, _ in readout.lock_nut_segments(None))
-    assert text.startswith("LOCK NUT     ---")
-    assert "LOCK NUT     0.10 N·m" in "".join(t for t, _ in readout.lock_nut_segments(0.1))
 
 
 # ── in the logs ─────────────────────────────────────────────────────────────
@@ -175,65 +159,20 @@ def set_seat(g, text="0.4"):
 
 
 def set_nut(g, text):
-    g._set_entry(g.nut_entry, text)
-    g._set_lock_nut()
+    """The window has no lock nut box any more (history 45): set it directly."""
+    shared.set_lock_nut_torque(float(text))
 
 
-def test_at_start_the_lock_nut_line_holds_the_box_and_says_optional(gui):
-    assert gui.nut_entry.master is gui.nut_row
-    assert shown(gui.nut_entry) and shown(gui.nut_btn) and shown(gui.nut_hint)
-    assert not shown(gui.nut_value) and not shown(gui.nut_upd_btn)
-    assert state(gui.nut_entry) == "normal"          # usable before the seat screw
+def test_the_window_has_no_lock_nut_line(gui):
+    assert not hasattr(gui, "nut_entry") and not hasattr(gui, "nut_row")
+    text = "".join(t for t, _ in readout.status_segments(
+        shared.latest(), shared.health(), control.snapshot(), shared.heater_output(), True, 0.4))
+    assert "LOCK NUT" not in text
 
 
 def test_it_locks_nothing(gui):
     set_seat(gui)
-    assert str(gui.arm_btn.cget("state")) == "normal"   # no lock nut entered: still unlocked
-
-
-def test_once_entered_each_line_shows_the_value_and_update(gui):
-    set_seat(gui, "0.4")
-    set_nut(gui, "0,1")
-    assert shared.lock_nut_torque() == 0.1
-    for value, upd, entry, btn, text in (
-            (gui.seat_value, gui.seat_upd_btn, gui.seat_entry, gui.seat_btn, "0.40 N·m"),
-            (gui.nut_value, gui.nut_upd_btn, gui.nut_entry, gui.nut_btn, "0.10 N·m")):
-        assert shown(value) and shown(upd) and value.cget("text") == text
-        assert not shown(entry) and not shown(btn)
-        assert upd.cget("text") == "update"
-    assert not shown(gui.nut_hint)
-
-
-def test_update_puts_the_box_where_the_value_was(gui):
-    set_seat(gui, "0.4")
-    set_nut(gui, "0.1")
-    gui.seat_upd_btn.invoke()
-    assert shown(gui.seat_entry) and not shown(gui.seat_value) and not shown(gui.seat_upd_btn)
-    assert gui.seat_entry.get() == "0.4"
-    set_seat(gui, "0.45")
-    assert shared.seat_screw_torque() == 0.45 and shown(gui.seat_value)
-    gui.nut_upd_btn.invoke()
-    assert shown(gui.nut_entry) and not shown(gui.nut_value) and gui.nut_entry.get() == "0.1"
-    set_nut(gui, "0.2")
-    assert shared.lock_nut_torque() == 0.2 and gui.nut_value.cget("text") == "0.20 N·m"
-    assert "Lock nut torque 0.10 → 0.20 N·m" in events()
-
-
-def test_escape_goes_back_unchanged(gui):
-    set_seat(gui)
-    set_nut(gui, "0.1")
-    gui.nut_upd_btn.invoke()
-    gui._set_entry(gui.nut_entry, "0.3")
-    gui._cancel_nut_edit()
-    assert shared.lock_nut_torque() == 0.1 and shown(gui.nut_value)
-
-
-def test_a_bad_entry_changes_nothing(gui):
-    set_seat(gui)
-    set_nut(gui, "0.1")
-    gui.nut_upd_btn.invoke()
-    set_nut(gui, "abc")
-    assert shared.lock_nut_torque() == 0.1 and "not a number" in events()[-1]
+    assert str(gui.arm_btn.cget("state")) == "normal"
 
 
 def start_tmin(g):
@@ -251,27 +190,23 @@ def start_tmin(g):
     return seen
 
 
-def test_both_lines_are_locked_while_t_min_tune_runs(gui):
+def test_the_seat_screw_update_is_locked_while_t_min_tune_runs(gui):
     set_seat(gui)
-    set_nut(gui, "0.1")
     seen = start_tmin(gui)
     assert tminrun.running()
-    assert "Lock nut torque: 0.10 N·m" in seen[0]
-    for w in (gui.seat_upd_btn, gui.nut_upd_btn, gui.nut_btn, gui.nut_entry):
-        assert state(w) == "disabled", w
-    gui._edit_lock_nut()                              # even if called directly
-    assert shown(gui.nut_value) and "lock nut torque is locked" in events()[-1]
+    assert "Lock nut torque" not in seen[0]
+    assert state(gui.seat_upd_btn) == "disabled"
     tminrun.stop("test")
     gui._poll()
-    assert state(gui.seat_upd_btn) == "normal" and state(gui.nut_upd_btn) == "normal"
+    assert state(gui.seat_upd_btn) == "normal"
 
 
-def test_the_dialog_says_when_it_is_not_entered_and_the_latest_seatings(gui):
+def test_the_dialog_shows_the_latest_seatings_lock_nut(gui):
     tminlog.append(dict(time="2026-10-01T11:00:00", seating="20261001_110000_0.40Nm",
                         torque_Nm=0.4, outcome="stopped", lock_nut_torque_Nm=0.2), sheet=False)
     set_seat(gui)
     seen = start_tmin(gui)
-    assert "Lock nut torque: not entered" in seen[0]
+    assert "Lock nut torque" not in seen[0]
     assert "20261001_110000_0.40Nm (lock nut 0.20 N·m)" in seen[0]
 
 

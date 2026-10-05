@@ -4,6 +4,18 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 45. No lock nut torque input in the window — 5 Oct 2026
+Tightening the lock nut with the torque wrench also turns the seat screw,
+so once the nut is on the two torques cannot be told apart. The seat screw
+is therefore characterised with the lock nut loose, and the LOCK NUT line
+(history 43) only took up a row the charts can use. The line, its box,
+"set", "update" and "(optional)" are gone, and the start dialog no longer
+says "Lock nut torque: not entered". Everything behind it stays: the
+`lock_nut_torque_Nm` columns (now blank), the pooling and new-seating rule
+of history 44, and the plotter, so older logs and seatings still read as
+before. A seating last recorded with a lock nut torque is therefore
+followed by a new seating, and the dialog says why.
+
 ## 44. The lock nut torque pools results and starts a new seating; the plotter shows it — 1 Oct 2026
 Edward: history 43 only recorded it. Since tightening the lock nut appears
 to change the seat preload, results at different lock nut torques are not
