@@ -167,3 +167,27 @@ def test_clicking_the_torque_opens_the_box_to_change_it(gui):
     gui._edit_seat_screw()
     gui._cancel_seat_edit()                     # Escape: back to the torque
     assert shared.seat_screw_torque() == 0.3 and shown(gui.seat_value)
+
+
+def test_every_row_above_the_charts_is_one_line_high(gui):
+    """History 46: no padding above or below a row, so the charts get the
+    height. A row of buttons and boxes may add only their 1 px border and
+    the 1 px Tk keeps inside it."""
+    gui._set_entry(gui.seat_entry, "0.4")
+    gui._set_seat_screw()
+    gui.mode_var.set("t-min-tune")
+    gui._on_mode()
+    gui._poll()
+    gui.root.update()
+    line = gui.f.metrics("linespace")
+    rows = {"seat screw": gui.seat_row, "mode": gui.arm_btn.master, "inputs": gui._row2,
+            "upstream target": gui._up_row_frame}
+    for name, row in rows.items():
+        assert row.winfo_reqheight() <= line + 4, name
+        assert row.pack_info().get("pady") in (0, "0"), name
+    lines = [w for w in gui._lines_frame.pack_slaves()]
+    assert lines, "the ARMED / status lines are shown"
+    for w in lines:
+        assert w.winfo_reqheight() == line * w.cget("text").count("\n") + line, w.cget("text")
+    assert gui.status_text.cget("height") == 7
+    assert "\n\n" not in gui.status_text.get("1.0", "end").rstrip("\n")   # no blank line

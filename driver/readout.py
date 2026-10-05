@@ -94,7 +94,7 @@ def sensor_segments(readings, health, labjack_available):
          bool(ok['csv']), True),
     ):
         seg.append((label + "  ", "ok" if healthy else ("dim" if not available else "err")))
-    seg.append(("\n\n", "dim"))
+    seg.append(("\n", "dim"))
 
     seg += [("UPSTREAM P   ", "dim"), (p_s + "\n", "bright" if p is not None else "dim"),
             ("KELLER T     ", "dim"), (t_s + "\n", "bright" if t is not None else "dim"),

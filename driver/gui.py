@@ -83,11 +83,15 @@ class TEGui:
         self._btn = dict(bg=FIELD, fg=TEXT, activebackground=FIELD_HOT,
                          activeforeground=BRIGHT, font=self.f, bd=0,
                          highlightthickness=1, highlightbackground=BORDER,
-                         padx=8, pady=2)
+                         padx=8, pady=0)
+        # Every text row above the charts is one line high: no padding or
+        # border above or below a label (Tk's default is 3 px each side),
+        # so the height they don't use goes to the charts.
+        self._lbl = dict(font=self.f, bg=BG, bd=0, padx=1, pady=0)
 
         # The status panel in three parts: the sensor lines, the SEAT SCREW
         # line (which holds the torque input), and the heater V / I / P lines.
-        self.status_text = self._status_block(outer, height=8)
+        self.status_text = self._status_block(outer, height=7)
         self._build_seat_row(outer)
         self.heater_text = self._status_block(outer, height=3)
 
@@ -95,13 +99,13 @@ class TEGui:
 
         # Bottom block is packed BEFORE the graphs so it always keeps its space.
         tk.Label(outer, text=f"─── log: {logfile.LOG_FILE}",
-                 font=self.f, fg=DIM, bg=BG, anchor="w").pack(side="bottom", fill="x")
+                 fg=DIM, anchor="w", **self._lbl).pack(side="bottom", fill="x")
         self.logtext = tk.Text(outer, bg=BG, fg=TEXT, font=self.f,
-                               height=4, bd=0, highlightthickness=0,
+                               height=4, bd=0, highlightthickness=0, padx=0, pady=0,
                                state="disabled", wrap="word", cursor="arrow")
         self.logtext.pack(side="bottom", fill="x")
         tk.Label(outer, text="─── event log",
-                 font=self.f, fg=DIM, bg=BG, anchor="w").pack(side="bottom", fill="x")
+                 fg=DIM, anchor="w", **self._lbl).pack(side="bottom", fill="x")
 
         charts = tk.Frame(outer, bg=BG)
         charts.pack(fill="both", expand=True)
@@ -120,7 +124,7 @@ class TEGui:
 
     def _status_block(self, parent, height):
         t = tk.Text(parent, bg=BG, fg=TEXT, font=self.f,
-                    height=height, bd=0, highlightthickness=0,
+                    height=height, bd=0, highlightthickness=0, padx=0, pady=0,
                     state="disabled", wrap="none", cursor="arrow")
         t.pack(fill="x")
         for tag in ("bright", "dim", "ok", "err", "prompt"):
@@ -206,7 +210,7 @@ class TEGui:
 
     # ── heater panel ──────────────────────────────────────────────────────
     def _entry(self, parent, label, initial, width=8):
-        lbl = tk.Label(parent, text=label, font=self.f, fg=DIM, bg=BG)
+        lbl = tk.Label(parent, text=label, fg=DIM, **self._lbl)
         lbl.pack(side="left")
         e = tk.Entry(parent, width=width, font=self.f, bg=FIELD,
                      fg=BRIGHT, insertbackground=BRIGHT, bd=0,
@@ -263,7 +267,7 @@ class TEGui:
         if batch:
             self.batch_btn.pack(side="left", padx=(0, 6))
             self.abort_btn.pack(side="left")
-            self._up_row_frame.pack(fill="x", pady=(0, 4), after=self._row2)
+            self._up_row_frame.pack(fill="x", after=self._row2)
         else:
             self.update_btn.pack(side="left")
 
@@ -271,7 +275,7 @@ class TEGui:
         btn = self._btn
 
         row1 = tk.Frame(parent, bg=BG)
-        row1.pack(fill="x", pady=(2, 2))
+        row1.pack(fill="x")
         self.arm_btn = tk.Button(row1, text="ARM", width=7,
                                  command=self._toggle_arm, **btn)
         self.arm_btn.pack(side="left", padx=(0, 10))
@@ -282,13 +286,13 @@ class TEGui:
             rb = tk.Radiobutton(row1, text=mode, value=mode, variable=self.mode_var,
                                 command=self._on_mode, font=self.f, fg=TEXT, bg=BG,
                                 selectcolor=BG, activebackground=BG,
-                                activeforeground=BRIGHT, bd=0,
+                                activeforeground=BRIGHT, bd=0, pady=0,
                                 highlightthickness=0)
             rb.pack(side="left", padx=(0, 6))
             self.mode_buttons.append(rb)
 
         row2 = tk.Frame(parent, bg=BG)
-        row2.pack(fill="x", pady=(0, 4))
+        row2.pack(fill="x")
         self.duty_entry = self._entry(row2, "duty %", "0", width=6)
         self.sp_entry   = self._entry(row2, "setpoint °C", f"{PID_SETPOINT_DEFAULT:g}", width=6)
         self.p_entry    = self._entry(row2, "target mbar", f"{PRESSURE_TARGET_DEFAULT:.1e}", width=9)
@@ -304,8 +308,8 @@ class TEGui:
         self._up_row_frame = tk.Frame(parent, bg=BG)
         self.up_entry = self._entry(self._up_row_frame, "upstream target bar", "", width=6)
         self.band_entry = self._entry(self._up_row_frame, "±", f"{TMIN_BAND_BAR:g}", width=5)
-        tk.Label(self._up_row_frame, text="bar  (hold it there by topping up)", font=self.f,
-                 fg=DIM, bg=BG).pack(side="left", padx=(0, 12))
+        tk.Label(self._up_row_frame, text="bar  (hold it there by topping up)",
+                 fg=DIM, **self._lbl).pack(side="left", padx=(0, 12))
         # optional: the T_min expected at a new seating (history 42); read
         # at the start only, so locked while it runs, and cleared once used
         self.est_entry = self._entry(self._up_row_frame, "estimate °C", "", width=6)
@@ -323,17 +327,17 @@ class TEGui:
         # (_show_lines), so empty ones don't eat into the charts.
         self._lines_frame = tk.Frame(parent, bg=BG)
         self._lines_frame.pack(fill="x")
-        self.batch_status = tk.Label(self._lines_frame, text="", font=self.f, fg=DIM,
-                                     bg=BG, anchor="w", justify="left")
+        self.batch_status = tk.Label(self._lines_frame, text="", fg=DIM, anchor="w",
+                                     justify="left", **self._lbl)
         self._batch_running = False
         self._quit_at = self._quit_for = None   # auto-close after convergence (history 39)
         self._confirm = messagebox.askokcancel      # tests replace these two
         self._ask = messagebox.askyesnocancel
 
-        self.heater_status = tk.Label(self._lines_frame, text="", font=self.f, fg=DIM,
-                                      bg=BG, anchor="w")
-        self.loop_status = tk.Label(self._lines_frame, text="", font=self.f, fg=DIM,
-                                    bg=BG, anchor="w")
+        self.heater_status = tk.Label(self._lines_frame, text="", fg=DIM, anchor="w",
+                                      **self._lbl)
+        self.loop_status = tk.Label(self._lines_frame, text="", fg=DIM, anchor="w",
+                                    **self._lbl)
         self._shown_lines = None
         self._update_inputs()
         self._send_update()

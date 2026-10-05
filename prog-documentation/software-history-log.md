@@ -4,6 +4,15 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 46. Every row above the charts is one line high — 5 Oct 2026
+Edward: the mode line, the ARMED line and "─── event log" each had a gap
+above and below, and the charts are what he watches. Tk gives a label 3 px
+above and below by default and the rows were packed with extra padding;
+buttons had 2 px more inside. All of that is gone (labels, rows, buttons,
+radio buttons and the text panels), as is the blank line under the device
+flags. Buttons and boxes keep their 1 px border. The height freed goes to
+the charts.
+
 ## 45. No lock nut torque input in the window — 5 Oct 2026
 Tightening the lock nut with the torque wrench also turns the seat screw,
 so once the nut is on the two torques cannot be told apart. The seat screw
