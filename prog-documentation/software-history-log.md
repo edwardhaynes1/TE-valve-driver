@@ -4,6 +4,16 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 47. The event log says what settled, and logs every step — 5 Oct 2026
+Edward could not read "chamber settled at 62.0 °C; stepping: 63.0 °C": the
+62.0 °C is the valve's hold temperature (what settles is the chamber
+pressure), and the line was the only one until the valve opened, so it
+still said 63 °C with the valve at 66 °C. The first line now reads "valve
+held at 62.0 °C, chamber pressure settled (+0.004 decades/min); step
+increase from 63.0 °C, +1 K every 5 min until the valve opens", and every
+later step adds "no opening at 63.0 °C after 5 min; next step 64.0 °C".
+The scout's line says the same about the hold.
+
 ## 46. Every row above the charts is one line high — 5 Oct 2026
 Edward: the mode line, the ARMED line and "─── event log" each had a gap
 above and below, and the charts are what he watches. Tk gives a label 3 px

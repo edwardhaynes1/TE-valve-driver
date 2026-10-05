@@ -74,6 +74,19 @@ def test_the_steps_are_1_K_and_5_min_and_dont_overshoot():
         assert max(T for _, T in at) - sp < 0.5
 
 
+def test_the_event_log_says_what_settled_and_names_every_step():
+    """History 47: the hold is the valve's temperature, what settles is the
+    chamber pressure, and each step is logged, so the last line is current."""
+    rig, s, rows, msgs = run(stop_after=2)
+    msgs = [m if isinstance(m, str) else m[-1] for m in msgs]
+    first = [m for m in msgs if "step increase from" in m]
+    assert first and "valve held at" in first[0] and "chamber pressure settled (" in first[0]
+    assert "+1 K every 5 min until the valve opens" in first[0]
+    later = [m for m in msgs if "no opening at" in m and "next step" in m]
+    assert later, "every step after the first is logged"
+    assert not any("stepping:" in m for m in msgs)
+
+
 def test_other_seatings_at_the_torque_give_the_first_estimate():
     old = [dict(time="t", seating="old", torque_Nm="0.45", outcome=tminlog.T_MIN,
                 counted="1", t_min_degC=str(T), upstream_at_open_bar="3.0")

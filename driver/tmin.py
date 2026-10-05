@@ -335,8 +335,8 @@ def _hold(s, now, temp, cmds, msgs, events):
         if test['scout']:
             test['sp'] = test['start_c']
             test['step_since'] = now
-            msgs.append(f"t-min-tune: {test['name']} — chamber settled at "
-                        f"{test['start_c']:.1f} °C; scouting up at {BATCH_CREEP_C_MIN:g} °C/min")
+            msgs.append(f"t-min-tune: {test['name']} — {_settled_text(s)}; scouting up "
+                        f"at {BATCH_CREEP_C_MIN:g} °C/min until the valve opens")
             _enter(s, SCOUT, now)
         else:
             _next_step(s, now, cmds, msgs, first=True)
@@ -360,11 +360,24 @@ def _next_step(s, now, cmds, msgs, first=False):
         return None
     test['sp'], test['step_since'] = sp, None
     cmds += [dict(setpoint_C=float(sp)), dict(renew=True)]
+    dwell = f"{TMIN_DWELL_S / 60:g} min"
     if first:
-        msgs.append(f"t-min-tune: {test['name']} — chamber settled at {test['start_c']:.1f} °C;"
-                    f" stepping: {sp:.1f} °C")
+        msgs.append(f"t-min-tune: {test['name']} — {_settled_text(s)}; step increase from "
+                    f"{sp:.1f} °C, +{TMIN_STEP_K:g} K every {dwell} until the valve opens")
+    else:
+        msgs.append(f"t-min-tune: {test['name']} — no opening at {sp - TMIN_STEP_K:.1f} °C "
+                    f"after {dwell}; next step {sp:.1f} °C")
     _enter(s, STEP, now)
     return sp
+
+
+def _settled_text(s):
+    """'valve held at 62.0 °C, chamber pressure settled (+0.004 decades/min)':
+    the hold before the steps is the valve's temperature; what settles is
+    the vacuum chamber's pressure trend."""
+    trend = (f" ({s['trend']:+.3f} decades/min)" if s['trend'] is not None else "")
+    return (f"valve held at {s['test']['start_c']:.1f} °C, chamber pressure "
+            f"settled{trend}")
 
 
 def _step(s, now, temp, cmds, msgs, events):
