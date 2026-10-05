@@ -136,33 +136,31 @@ def test_auto_t_burst_and_coast(h, stage, expected):
 def test_auto_p_idle_explains_what_arming_will_do(h):
     h.update(mode=controller.AUTO_P, p_target_mbar=1e-6)
     text, tag = readout.loop_status(h)
-    assert "auto-p idle" in text and "until the valve opens" in text and tag == "dim"
+    assert "auto-p idle" in text and "creep up slowly" in text
+    assert "heater off above 7.00e-07 mbar" in text and tag == "dim"
 
 
-def test_auto_p_seeking(h):
-    h.update(armed=True, mode=controller.AUTO_P, p_init=False, p_filt=-6.8,
-             p_phase='seek', p_base=-6.82, p_goal=40.3, p_shift=0.0, p_ramping=True,
+def test_auto_p_creeping(h):
+    h.update(armed=True, mode=controller.AUTO_P, p_init=False, p_raw=-6.8,
+             p_phase='seek', p_base=-6.82, p_rate_c_min=0.5, p_up_bar=1.0,
              setpoint_C=40.1, p_target_mbar=1e-6)
     text, tag = readout.loop_status(h)
-    assert "auto-p seeking · valve shut" in text and "creeping" in text
-    assert "baseline 1.51e-07 mbar" in text and tag == "bright"
+    assert "valve shut · creeping 0.50 °C/min" in text
+    assert "baseline 1.51e-07" in text and "P_up 1.00 bar" in text and tag == "bright"
 
 
-def test_auto_p_tracking(h):
-    h.update(armed=True, mode=controller.AUTO_P, p_init=False, p_filt=-6.0,
-             p_phase='track', p_base=-6.82, p_err=0.05, p_shift=1.2,
-             setpoint_C=41.0, p_target_mbar=1e-6)
+def test_auto_p_cut_warns(h):
+    h.update(armed=True, mode=controller.AUTO_P, p_init=False, p_raw=-6.1,
+             p_phase='cut', p_base=-6.82, setpoint_C=40.0, p_target_mbar=1e-6)
     text, tag = readout.loop_status(h)
-    assert "auto-p · target 1.00e-06" in text and "err +0.05 dec" in text
-    assert "upstream shift +1.2 K" in text and tag == "bright"
+    assert "HEATER OFF" in text and "cut 7.00e-07 mbar" in text and tag == "warn"
 
 
-def test_a_target_below_the_baseline_warns(h):
-    h.update(armed=True, mode=controller.AUTO_P, p_init=False, p_filt=-6.8,
-             p_phase='track', p_base=-6.82, p_err=0.0, p_shift=0.0,
-             setpoint_C=40.0, p_target_mbar=1.6e-7)
+def test_auto_p_parked_warns(h):
+    h.update(armed=True, mode=controller.AUTO_P, p_init=False, p_raw=-6.8,
+             p_phase='park', p_base=-6.82, setpoint_C=40.0, p_target_mbar=2.2e-7)
     text, tag = readout.loop_status(h)
-    assert "BELOW the lowest holdable" in text and tag == "warn"
+    assert "target too low" in text and "P_up not read" in text and tag == "warn"
 
 
 # ── the settings summary in the event log ───────────────────────────────────

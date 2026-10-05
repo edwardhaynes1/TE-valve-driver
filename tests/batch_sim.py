@@ -146,8 +146,7 @@ class Rig:
                 hook(self, b)
             self.duty, cmsgs = controller.step(self.h, self.now, dt, self.T, True,
                                                vac=vac, vac_status=status,
-                                               p_up=self.upstream, p_up_t=self.now,
-                                               seat_nm=torque)
+                                               p_up=self.upstream, p_up_t=self.now)
             msgs_all += cmsgs
             self._row_on += self.duty * dt
             self.advance(dt)
@@ -198,7 +197,7 @@ class Rig:
                 break
             self.duty, _ = controller.step(self.h, self.now, dt, self.T, True, vac=vac,
                                            vac_status=st, p_up=self.upstream,
-                                           p_up_t=self.now, seat_nm=torque)
+                                           p_up_t=self.now)
             self.advance(dt)
         return c, rows, fit[0], msgs
 
@@ -236,7 +235,7 @@ class Rig:
                 break
             self.duty, cm = controller.step(self.h, self.now, dt, self.T, True, vac=vac,
                                             vac_status=st, p_up=self.upstream,
-                                            p_up_t=self.now, seat_nm=torque)
+                                            p_up_t=self.now)
             msgs += cm
             self.advance(dt)
         return s, rows, msgs

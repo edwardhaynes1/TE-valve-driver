@@ -71,7 +71,7 @@ def folder():
 
 def _settings():
     names = [n for n in dir(config) if n.startswith("BATCH_") and not n.endswith(("_DIR", "WORKBOOK"))]
-    names += ["PRESSURE_OPEN_DEC", "PRESSURE_BASE_WINDOW_S", "PRESSURE_BASE_GUARD_S",
+    names += ["PRESSURE_BASE_WINDOW_S", "PRESSURE_BASE_GUARD_S",
               "PRESSURE_FILTER_S", "HEATER_MAX_RUN_S", "TEMP_TRIP_C"]
     return {n: getattr(config, n) for n in sorted(names)}
 

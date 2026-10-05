@@ -4,11 +4,11 @@
 These pin down the redesign's purpose:
   * auto-t: no overshoot after a burst (the old hold rule overshot 5-8 K,
     reaching 159.5 °C against a 160 °C trip)
-  * auto-p: works for every calibrated seat screw torque, finds a valve
-    that opens away from the table, and follows upstream pressure changes
+  * auto-p (history 50): told nothing about where the valve opens, it never
+    lets P_vacuum past P_vacuum_target, settles with the valve open, and
+    cuts the heater at once when a refill pushes P_vacuum up
 Each fitted thermal model is used only within the range of its run.
 """
-import math
 
 import pytest
 
@@ -87,15 +87,18 @@ VALVES = {   # torque: (thermal fit, true opening point, at bar, e-fold, rise at
     0.40: ("152054", 88.0, 2.38, 7.5, 1.6e-7, 4.5e-7),
     0.45: ("173217", 150.0, 1.02, 12.0, 4.8e-6, 2.7e-7),
 }
+TARGETS = {0.25: 1.2e-6, 0.40: 1.5e-6, 0.45: 8e-6}
 
 
-def run_p(torque, target, seconds, opens_off_table=0.0, hyst=10.0, upstream=None):
+def run_p(torque, seconds, hyst=10.0, upstream=None, below=3.0):
+    """auto-p from `below` K under the valve's (unknown to it) opening point.
+    Returns [(t, P_vacuum, duty)], messages, final state."""
     fit, open_c, bar, efold, rise, base = VALVES[torque]
     upstream = upstream or (lambda t: bar)
-    th = Thermal(fit)
-    valve = Valve(open_c + opens_off_table, bar, efold, rise_open=rise, hyst=hyst, base=base)
+    th = Thermal(fit, t0=open_c - below)
+    valve = Valve(open_c, bar, efold, rise_open=rise, hyst=hyst, base=base)
     h, now = controller.new_state(), 1000.0
-    controller.command(h, now, mode='auto-p', p_target_mbar=target, armed=True)
+    controller.command(h, now, mode='auto-p', p_target_mbar=TARGETS[torque], armed=True)
     out, msgs = [], []
     for k in range(int(seconds / DT)):
         t = k * DT
@@ -103,60 +106,37 @@ def run_p(torque, target, seconds, opens_off_table=0.0, hyst=10.0, upstream=None
         valve.step(th.t, up, DT)
         vac = valve.vac()
         duty, m = controller.step(h, now + t, DT, th.temp(), True, vac=vac,
-                                  p_up=up, p_up_t=now + t, seat_nm=torque)
+                                  p_up=up, p_up_t=now + t)
         msgs += m
         th.step(duty, DT)
-        out.append((t, vac))
+        out.append((t, vac, duty))
     return out, msgs, h
 
 
-def reached(out, target, tol_dec=0.08):
-    return next((t for t, p in out if abs(math.log10(p / target)) < tol_dec), None)
-
-
-def worst_after(out, target, t_from):
-    return max(abs(math.log10(p / target)) for t, p in out if t >= t_from)
-
-
-@pytest.mark.parametrize("torque, target", [(0.25, 1.2e-6), (0.40, 1.5e-6), (0.45, 8e-6)])
-def test_every_calibrated_torque_reaches_its_target(torque, target):
-    out, msgs, h = run_p(torque, target, 1200)
-    t = reached(out, target)
-    assert t is not None and t < 600
-    assert worst_after(out, target, t + 120) < 0.1          # then stays within ~±25 %
+@pytest.mark.parametrize("hyst", [10.0, 1.0])
+@pytest.mark.parametrize("torque", sorted(VALVES))
+def test_p_vacuum_never_passes_the_target(torque, hyst):
+    out, msgs, h = run_p(torque, 1800, hyst=hyst)
+    target = TARGETS[torque]
+    assert max(p for _, p, _ in out) < target
+    assert any("moved" in m for m in msgs)                     # it did open
     assert h['trip_reason'] is None
 
 
-def test_a_valve_opening_higher_than_the_table_is_found_and_learned():
-    out, msgs, h = run_p(0.40, 1.5e-6, 1500, opens_off_table=+8.0)
-    assert reached(out, 1.5e-6) is not None
-    assert h['p_ref_how'] == 'learned'
-    assert any("this session's opening point for 0.40 N·m is now" in m for m in msgs)
-    assert h['p_ref'] == pytest.approx(88.0 + 8.0, abs=3.0)
+@pytest.mark.parametrize("torque", sorted(VALVES))
+def test_a_valve_with_wide_hysteresis_settles_open_below_the_cut_line(torque):
+    out, _, h = run_p(torque, 1800)
+    base, cut = VALVES[torque][5], 0.7 * TARGETS[torque]
+    tail = [p for t, p, _ in out if t > 1500]
+    assert min(tail) > 1.05 * base and max(tail) < cut
 
 
-def test_a_valve_opening_lower_than_the_table_opens_early_without_a_big_overshoot():
-    out, msgs, h = run_p(0.40, 1.5e-6, 1500, opens_off_table=-8.0)
-    t = reached(out, 1.5e-6)
-    assert t is not None and t < 400
-    assert max(p for s, p in out) < 1.5e-6 * 1.3
-
-
-def test_a_snap_valve_does_not_hunt():
-    # 1 K hysteresis (the 16 Sept valve) at 0.45 N·m gains: at worst pinned
-    # a little above target at the floor, not cycling open/shut
-    out, _, _ = run_p(0.45, 4e-6, 1500, opens_off_table=-8.0, hyst=1.0)
-    tail = [math.log10(p / 4e-6) for t, p in out if t > 1200]
-    assert max(tail) - min(tail) < 0.1
-
-
-def test_upstream_leak_and_refill_are_followed():
-    # like 173217: upstream leaking ~1.5 mbar/s, then a refill back to 5.2 bar
-    def upstream(t):
-        return 5.2 - 0.0015 * (t if t < 900 else t - 900)
-    out, msgs, h = run_p(0.45, 5e-5, 1500, upstream=upstream)
-    t = reached(out, 5e-5)
-    assert t is not None and t < 400
-    assert max(abs(math.log10(p / 5e-5)) for s, p in out if t + 120 <= s < 900) < 0.1
-    assert reached([(s, p) for s, p in out if s > 1000], 5e-5) is not None
-    assert h['p_up_ff'] != 0.0 and h['trip_reason'] is None
+def test_a_refill_cuts_the_heater_on_the_first_reading_over_the_line():
+    # 0.25 N·m, open and settled; then the upstream is refilled 2.1 → 4 bar,
+    # which multiplies the flow by ~2.6 at a fixed opening
+    out, msgs, h = run_p(0.25, 1800, upstream=lambda t: 2.1 if t < 1500 else 4.0)
+    cut = 0.7 * TARGETS[0.25]
+    after = [(t, p, d) for t, p, d in out if t >= 1500]
+    first = next(i for i, (_, p, _) in enumerate(after) if p > cut)
+    assert all(d == 0.0 for _, _, d in after[first:first + 8])
+    assert any("heater OFF" in m for m in msgs)

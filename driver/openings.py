@@ -1,14 +1,12 @@
 """Remembered opening points: the result of the last batch at each seat screw
 torque, kept in config.OPENINGS_FILE (logs/opening-points.json) so the next
-batch can skip its scouts and auto-p can seek from a measured value instead
-of the SEAT_SCREW_VALVE guesses. See context.md, "Remembered opening point".
+batch can skip its scouts. auto-p does not use them (history 50). See
+context.md, "Remembered opening point".
 
     load(path=None) -> message     read the file (start-up); a missing file is
                                    simply no remembered points
     lookup(torque_nm) -> entry     the entry for this torque (within
                                    SEAT_SCREW_TOL_NM), or None
-    for_controller(torque_nm)      (opening °C, upstream bar or None, detail)
-                                   for controller.opening_point, or None
     remember(entry, path=None)     store an entry (replacing the one for its
         -> (ok, message)           torque) and write the file
     entries()                      a copy of everything
@@ -97,14 +95,6 @@ def describe(entry):
         src.append(entry["date"])
     tail = "; ".join(x for x in (", ".join(prec), ", ".join(src)) if x)
     return f"{entry['t_open_C']:.1f} °C{at}" + (f" ({tail})" if tail else "")
-
-
-def for_controller(torque_nm):
-    """(opening °C, upstream bar or None, detail) for auto-p, or None."""
-    e = lookup(torque_nm)
-    if e is None:
-        return None
-    return (e["t_open_C"], e.get("upstream_bar"), f"remembered: {describe(e)}")
 
 
 def entries():

@@ -7,8 +7,8 @@ Used two ways:
     reproduce that record exactly.
 
 The plant is deliberately simple. It is not a model of the real valve; it
-only has to exercise every branch (burst, coast, seek, creep, opening,
-tracking, trips) in a repeatable way.
+only has to exercise every branch (burst, coast, baseline, creep, movement,
+cut, trips) in a repeatable way.
 
 An adapter hides where the code lives. It must provide:
     command(**kw)                  heater_command
@@ -28,8 +28,8 @@ DT = 0.25                     # control period (LABJACK_SAMPLE_HZ = 4)
 P_FULL = 24.0 ** 2 / 88.0     # W at 100 % duty
 
 # Heater state keys recorded at every step
-TRACE_KEYS = ("setpoint_C", "p_phase", "p_burst", "t_burst", "trip_reason",
-              "armed", "p_override", "p_ramping", "p_goal", "t_tau")
+TRACE_KEYS = ("setpoint_C", "p_phase", "t_burst", "trip_reason",
+              "armed", "p_override", "t_tau")
 
 
 class Plant:

@@ -1,5 +1,7 @@
 """controller.py on its own: the interlock and command rules, stated as
 small examples. No threads, clock or shared state are involved."""
+import math
+
 import pytest
 
 from driver import config, controller
@@ -99,19 +101,20 @@ def test_pressure_mode_needs_a_live_gauge(h):
     assert "needs a live gauge" in h['trip_reason']
 
 
-def test_a_cold_start_in_pressure_mode_bursts_at_full_power(h):
+def test_auto_p_starts_by_holding_where_the_valve_is_never_a_burst(h):
     armed(h, mode='auto-p', p_target_mbar=1e-6)
-    duty, msgs = step(h, temp=25.0, vac=1.5e-7, p_up=2.76, p_up_t=T0)
-    assert duty == config.HEATER_MAX_DUTY
-    assert h['p_phase'] == 'seek' and h['p_burst'] == 'burst'
-    assert any("full power" in m for m in msgs)
+    duty, msgs = step(h, temp=25.0, vac=1.5e-7, p_up=1.0, p_up_t=T0)
+    assert h['p_phase'] == 'baseline' and h['setpoint_C'] == 25.0
+    assert duty < config.HEATER_MAX_DUTY
+    assert any("no opening point assumed" in m for m in msgs)
 
 
 def test_stale_upstream_readings_are_ignored(h):
     armed(h, mode='auto-p', p_target_mbar=1e-6)
     old = T0 - config.PRESSURE_UP_MAX_AGE_S - 1
-    step(h, temp=25.0, vac=1.5e-7, p_up=1.0, p_up_t=old)
-    assert h['p_up_bar'] is None and h['p_shift'] == 0.0
+    _, msgs = step(h, temp=25.0, vac=1.5e-7, p_up=1.0, p_up_t=old)
+    assert h['p_up_bar'] is None
+    assert any("not read — slowest creep" in m for m in msgs)
 
 
 def test_gate_edges_account_for_on_time(h):
@@ -158,28 +161,20 @@ def test_the_state_holds_no_measured_readout():
     assert not [k for k in h if 'meas' in k or k in ('out_high', 'v_now', 'i_now')]
 
 
-# ── where the valve opens: seat screw torque and upstream pressure ──────────
-
-def arm_pressure(h, target=1e-6, seat_nm=None, **kw):
-    armed(h, mode=controller.AUTO_P, p_target_mbar=target)
-    return step(h, temp=25.0, vac=1.5e-7, seat_nm=seat_nm, **kw)
-
+# ── the torque table's guess (batches and t-min-tune; not auto-p) ──────────
 
 @pytest.mark.parametrize("torque", sorted(config.SEAT_SCREW_VALVE))
-def test_a_calibrated_torque_sets_the_opening_point(h, torque):
+def test_a_calibrated_torque_gives_its_table_entry(torque):
     open_c, bar, _ = config.SEAT_SCREW_VALVE[torque]
-    duty, msgs = arm_pressure(h, seat_nm=torque, p_up=bar, p_up_t=T0)
-    # at the calibration's own upstream pressure: no further shift
-    assert h['p_ref'] == pytest.approx(open_c) and h['p_ref_how'] == 'calibrated'
-    assert h['setpoint_C'] == pytest.approx(open_c)
-    assert any(f"{torque:.2f} N·m calibrated" in m for m in msgs)
-    assert duty == config.HEATER_MAX_DUTY          # cold start, far below: burst
+    c, at_bar, _, how, detail = controller.opening_point(torque)
+    assert (c, at_bar, how) == (open_c, bar, 'calibrated')
+    assert f"{torque:.2f} N·m calibrated" in detail
 
 
-def test_within_tolerance_still_matches(h):
-    open_c, bar, _ = config.SEAT_SCREW_VALVE[0.40]
-    arm_pressure(h, seat_nm=0.40 + config.SEAT_SCREW_TOL_NM / 2, p_up=bar, p_up_t=T0)
-    assert h['p_ref'] == pytest.approx(open_c) and h['p_ref_how'] == 'calibrated'
+def test_within_tolerance_still_matches():
+    open_c, _, _ = config.SEAT_SCREW_VALVE[0.40]
+    c, _, _, how, _ = controller.opening_point(0.40 + config.SEAT_SCREW_TOL_NM / 2)
+    assert c == pytest.approx(open_c) and how == 'calibrated'
 
 
 def test_between_entries_is_interpolated_at_a_common_upstream_pressure():
@@ -199,51 +194,173 @@ def test_a_missing_efold_is_interpolated_from_its_neighbours():
 
 
 @pytest.mark.parametrize("torque, nearest", [(0.75, 0.45), (0.10, 0.25)])
-def test_outside_the_table_uses_the_nearest_entry_flagged(h, torque, nearest):
-    _, msgs = arm_pressure(h, seat_nm=torque, p_up=2.76, p_up_t=T0)
-    assert h['p_ref_how'] == 'nearest'
-    assert any("outside the calibrated" in m and "UNVERIFIED" in m for m in msgs)
-    c, bar, _ = config.SEAT_SCREW_VALVE[nearest]
-    assert h['p_ref'] == pytest.approx(c + controller._upstream_shift(2.76, bar))
+def test_outside_the_table_uses_the_nearest_entry_flagged(torque, nearest):
+    c, _, _, how, detail = controller.opening_point(torque)
+    assert how == 'nearest' and "outside the calibrated" in detail and "UNVERIFIED" in detail
+    assert c == config.SEAT_SCREW_VALVE[nearest][0]
 
 
-def test_no_torque_uses_the_16_sept_reference(h):
-    _, msgs = arm_pressure(h, seat_nm=None, p_up=config.PRESSURE_UP_REF_BAR, p_up_t=T0)
-    assert h['p_ref'] == config.PRESSURE_SEEK_START_C and h['p_ref_how'] == 'no torque'
-    assert any("no seat screw torque entered" in m for m in msgs)
+def test_no_torque_uses_the_16_sept_reference():
+    c, bar, _, how, _ = controller.opening_point(None)
+    assert (c, bar, how) == (config.PRESSURE_SEEK_START_C, config.PRESSURE_UP_REF_BAR,
+                             'no torque')
 
 
-def test_more_upstream_pressure_lowers_the_opening_point(h):
-    open_c, bar, _ = config.SEAT_SCREW_VALVE[0.40]
-    arm_pressure(h, seat_nm=0.40, p_up=bar + 1.0, p_up_t=T0)
-    assert h['p_ref'] == pytest.approx(open_c - config.PRESSURE_UP_K_PER_BAR)
+# ── auto-p (history 50): no opening point, creep, back off, cut ─────────────
+
+BASE = 1.5e-7
+TARGET = 1.5e-6          # cut line 1.05e-6, resume below 0.84e-6
 
 
-def test_the_upstream_shift_is_limited_more_upwards_than_downwards():
-    # far above the calibration pressure: the opening point goes down, a lot
-    assert controller._upstream_shift(11.0, 1.0) == -config.PRESSURE_UP_MAX_DOWN_K
-    # far below it: up, but only a little
-    assert controller._upstream_shift(1.0, 11.0) == config.PRESSURE_UP_MAX_SHIFT_K
-    assert config.PRESSURE_UP_MAX_SHIFT_K < config.PRESSURE_UP_MAX_DOWN_K
+def run_p(h, vacs, temp=40.0, p_up=1.0, start=T0, armed_now=True):
+    """Step auto-p through raw readings vacs (one per 0.25 s, temp fixed or a
+    function of the step). Returns (duties, messages, next time)."""
+    if armed_now:
+        armed(h, mode=controller.AUTO_P, p_target_mbar=TARGET)
+    duties, msgs, now = [], [], start
+    for k, vac in enumerate(vacs):
+        tc = temp(k) if callable(temp) else temp
+        d, m = controller.step(h, now, 0.25, tc, True, vac=vac, p_up=p_up, p_up_t=now)
+        duties.append(d)
+        msgs += m
+        now += 0.25
+    return duties, msgs, now
 
 
-def test_a_stale_upstream_reading_gives_no_shift(h):
-    open_c, _, _ = config.SEAT_SCREW_VALVE[0.40]
-    arm_pressure(h, seat_nm=0.40, p_up=5.0, p_up_t=T0 - config.PRESSURE_UP_MAX_AGE_S - 1)
-    assert h['p_ref'] == pytest.approx(open_c) and h['p_up_bar'] is None
+def creeping(h, temp=40.0, p_up=1.0, seconds=20):
+    """Armed, baseline measured, creeping with the valve shut."""
+    _, msgs, now = run_p(h, [BASE] * int(seconds * 4), temp=temp, p_up=p_up)
+    assert h['p_phase'] == 'seek'
+    return msgs, now
 
 
-def test_the_burst_is_decided_by_distance_to_the_goal_not_absolute_temperature(h):
-    # 60 °C is a warm start, but 90 K below the 0.45 N·m opening point
-    open_c, bar, _ = config.SEAT_SCREW_VALVE[0.45]
-    armed(h, mode=controller.AUTO_P, p_target_mbar=5e-6)
-    duty, _ = step(h, temp=60.0, vac=2.7e-7, seat_nm=0.45, p_up=bar, p_up_t=T0)
-    assert h['p_burst'] == 'burst' and duty == config.HEATER_MAX_DUTY
+@pytest.mark.parametrize("p_up, rate", [
+    (1.0, 0.5), (2.0, 0.5 / 2 ** 1.5), (0.5, 1.0),   # 0.5 bar: 1.41, kept at the fastest
+    (5.0, 0.1), (None, 0.1),                         # slowest: high P_up, or not read
+])
+def test_the_creep_rate_follows_only_the_upstream_pressure(p_up, rate):
+    assert controller._creep_rate(p_up) == pytest.approx(rate)
+
+
+def test_it_creeps_once_the_baseline_is_measured(h):
+    msgs, _ = creeping(h)
+    assert any("baseline 1.50e-07 mbar" in m and "creeping 0.50 °C/min" in m for m in msgs)
+    # 0.5 °C/min from 40 °C, for the seconds after the baseline was known
+    assert 40.0 < h['setpoint_C'] < 40.0 + 0.5 * 20 / 60
+
+
+def test_one_raw_sample_above_baseline_plus_margin_stops_the_creep(h):
+    _, now = creeping(h, temp=40.0)
+    moved = BASE * 10 ** (config.PRESSURE_MOVE_MIN_DEC + 0.005)
+    _, msgs, now = run_p(h, [moved], temp=40.0, start=now, armed_now=False)
+    assert h['p_phase'] == 'hold'
+    assert h['setpoint_C'] == pytest.approx(40.0 - config.PRESSURE_FREEZE_BELOW_K)
+    assert any("moved" in m and "creep stopped" in m for m in msgs)
+    # no creep while P_vacuum is still rising, nor for 30 s after
+    sp = h['setpoint_C']
+    run_p(h, [moved * 1.05 ** (k / 40) for k in range(100)], temp=40.0, start=now,
+          armed_now=False)
+    assert h['setpoint_C'] == sp and h['p_phase'] == 'hold'
+
+
+def test_above_the_cut_line_the_heater_is_off_at_once(h):
+    _, now = creeping(h)
+    duties, msgs, _ = run_p(h, [0.71 * TARGET], start=now, armed_now=False)
+    assert duties == [0.0] and h['p_phase'] == 'cut'
+    assert any("heater OFF" in m and "1.05e-06" in m for m in msgs)
+
+
+def test_a_fast_rise_cuts_before_it_reaches_the_line(h):
+    _, now = creeping(h)
+    # ×1.5 per sample: still below 0.7 × target when the heater goes off
+    rise = [BASE * 1.5 ** k for k in range(1, 8)]
+    duties, msgs, _ = run_p(h, rise, start=now, armed_now=False)
+    first_off = duties.index(0.0)
+    assert rise[first_off] < 0.7 * TARGET
+    assert any("predicted" in m for m in msgs)
+
+
+def test_after_a_cut_it_holds_the_tc_of_that_moment_without_creeping(h):
+    _, now = creeping(h, temp=45.0)
+    _, _, now = run_p(h, [0.8 * TARGET] * 8, temp=45.0, start=now, armed_now=False)
+    duties, _, now = run_p(h, [0.6 * TARGET] * 4, temp=44.0, start=now, armed_now=False)
+    assert duties == [0.0] * 4                  # 0.6 is above 0.8 × 0.7 = 0.56
+    duties, msgs, now = run_p(h, [0.5 * TARGET], temp=43.0, start=now, armed_now=False)
+    assert h['p_phase'] == 'hold' and h['setpoint_C'] == pytest.approx(43.0)
+    assert duties[0] > 0.0 and any("holding 43.0 °C" in m for m in msgs)
+
+
+def test_near_the_cut_line_the_setpoint_never_rises(h):
+    _, now = creeping(h, temp=50.0)
+    near = 10 ** (0.5 * (math.log10(BASE) + math.log10(0.7 * TARGET)) + 0.05)
+    _, _, now = run_p(h, [near] * 40, temp=50.0, start=now, armed_now=False)
+    assert h['p_phase'] == 'near'
+    sp = h['setpoint_C']
+    run_p(h, [near] * 400, temp=50.0, start=now, armed_now=False)    # 100 s, steady
+    assert h['p_phase'] == 'near' and h['setpoint_C'] <= sp
+
+
+def test_steady_and_below_the_near_line_it_creeps_at_a_quarter(h):
+    _, now = creeping(h, temp=50.0)
+    open_a_little = BASE * 1.3
+    _, msgs, now = run_p(h, [open_a_little] * 4 * 35, temp=50.0, start=now,
+                         armed_now=False)
+    assert h['p_phase'] == 'approach' and h['p_rate_c_min'] == pytest.approx(0.125)
+    assert any("steady" in m and "creeping 0.12 °C/min" in m for m in msgs)
+
+
+def test_back_at_baseline_it_creeps_at_the_full_rate_again(h):
+    _, now = creeping(h)
+    _, _, now = run_p(h, [BASE * 1.3] * 8, start=now, armed_now=False)
+    _, msgs, _ = run_p(h, [BASE], start=now, armed_now=False)
+    assert h['p_phase'] == 'seek' and h['p_rate_c_min'] == pytest.approx(0.5)
+    assert any("back at baseline" in m for m in msgs)
+
+
+def test_a_target_within_the_margin_of_the_baseline_parks(h):
+    # 0.7 × target just above the baseline, but below baseline + margin
+    armed(h, mode=controller.AUTO_P, p_target_mbar=1.02 * BASE / 0.7)
+    now = T0
+    for _ in range(80):
+        controller.step(h, now, 0.25, 40.0, True, vac=BASE, p_up=1.0, p_up_t=now)
+        now += 0.25
+    assert h['p_phase'] == 'park' and h['setpoint_C'] <= 40.0
+
+
+def test_a_target_below_the_baseline_keeps_the_heater_off():
     h2 = controller.new_state()
-    armed(h2, mode=controller.AUTO_P, p_target_mbar=5e-6)
-    step(h2, temp=open_c - config.PRESSURE_BURST_MIN_STEP_K + 1, vac=2.7e-7,
-         seat_nm=0.45, p_up=bar, p_up_t=T0)
-    assert h2['p_burst'] is None
+    controller.command(h2, T0, armed=True, mode=controller.AUTO_P, p_target_mbar=BASE)
+    now, d = T0, []
+    for _ in range(80):
+        d.append(controller.step(h2, now, 0.25, 40.0, True, vac=BASE, p_up=1.0,
+                                 p_up_t=now)[0])
+        now += 0.25
+    assert h2['p_phase'] == 'cut' and d[-1] == 0.0
+
+
+def test_started_with_the_valve_open_it_cuts_then_creeps_once_it_shuts(h):
+    # armed with flow already at 0.9 × target: that reading becomes the
+    # "baseline", the heater goes off, and the valve shuts as it cools
+    _, _, now = run_p(h, [0.9 * TARGET] * 60)
+    assert h['p_phase'] == 'cut'
+    run_p(h, [BASE] * 4 * 40, start=now, armed_now=False)
+    assert h['p_phase'] == 'seek' and h['p_base'] == pytest.approx(math.log10(BASE))
+
+
+def test_the_cut_applies_while_the_baseline_is_still_being_measured(h):
+    duties, _, _ = run_p(h, [0.9 * TARGET] * 4)
+    assert h['p_base'] is None and duties[1:] == [0.0] * 3
+
+
+def test_a_noisy_gauge_widens_the_margin(h):
+    noisy = [BASE * 10 ** (0.02 * (-1) ** k) for k in range(80)]      # ±0.02 decades
+    run_p(h, noisy)
+    assert h['p_margin'] > 4 * 0.015
+
+
+def test_the_seat_screw_torque_is_not_an_input():
+    import inspect
+    assert 'seat_nm' not in inspect.signature(controller.step).parameters
 
 
 def test_hold_power_matches_the_measured_holds():

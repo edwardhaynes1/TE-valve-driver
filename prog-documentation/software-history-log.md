@@ -4,6 +4,32 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 50. auto-p is conservative and assumes no opening point — 5 Oct 2026
+Between two seatings (KW40 → KW41) the torque needed to seal moved by
+~0.17 N·m and T_min at a given torque by ~50 K, so neither the seat screw
+torque nor any opening point can be trusted; only the upstream pressure
+P_up is known. The old auto-p (opening point from the torque table, full
+power burst, creep, then a PI on log10 pressure with feedforward) is
+deleted. Edward asked for: no assumed T_min, torque unknown, heat slowly,
+back right off when P_vacuum moves, more or less caution from P_up.
+
+auto-p now holds the valve where it is while it measures the baseline,
+then creeps at 0.5 °C/min × (1 bar / P_up)^1.5 (0.1-1 °C/min; flow grows as
+P_up^1.5). On one RAW reading above baseline + 4σ (≥ 0.02 decades) the
+creep stops and the setpoint freezes 1 K below the TC; it creeps again, at
+a quarter, only after 30 s without a rise, and past halfway (log) to the
+cut line the setpoint may only hold or fall. The heater is OFF while
+P_vacuum is above 0.7 × P_vacuum_target or predicted above it within 3 s,
+until it is below 0.56 × the target. The numbers come from 33 t-min-tune
+openings (1-5 Oct): the TC rose ≤ 1.4 K after a cut, P_vacuum peaked within
+3 s in 79 %, and crept up ×1.4 at most (soak) — hence 0.7.
+
+In simulation (21 Sept rig models, 0.25-0.45 N·m, 1 K and 10 K hysteresis)
+P_vacuum never passed the target; it settles at ~0.4-0.55 × the target, and
+a 1 K-hysteresis valve cycles open and shut instead of holding. The seat
+screw torque, remembered opening points and the torque table are no longer
+inputs to auto-p (batches and t-min-tune still use the table).
+
 ## 49. The plot title gives M_screw and P_up — 5 Oct 2026
 The title read "te-sensor_20261001_144601.csv · seat screw torque not
 recorded → 0.40 N·m at 4.5 s": the torque is typed in a few seconds after
