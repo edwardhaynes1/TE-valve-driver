@@ -35,6 +35,8 @@ differently from this page, fix one of them. Add terms as they appear.
 | **Soak** | Flow keeps rising for minutes at a constant TC once the valve is hot (0.45 N·m, 145 °C: ×6 over 3 min). |
 | **Closing hysteresis** | The valve closes below where it opened: ~1 K on 16 Sept, 10-35 K on 21 Sept. |
 | **Baseline** | Chamber pressure with the valve shut. auto-p measures it before it creeps and while the valve stays shut (it may fall, never rise), from readings since the valve last shut. |
+| **P_vacuum** | Chamber pressure (Pfeiffer IKR 270), mbar. The symbol for *chamber pressure* in equations, plots and the auto-p code. |
+| **P_vacuum_target** | The chamber pressure auto-p is given, mbar (default 1.5 × 10⁻⁶). auto-p keeps P_vacuum below it: the heater goes off above 0.7 × P_vacuum_target (the *cut line*), or when P_vacuum is predicted to cross that within 3 s. |
 | **Hold power** | Power that holds a valve temperature, lab ~23 °C (21 Sept 2026, 9 holds): 0.47 W at 40 °C, 2.0 W at 90 °C, 4.1 W at 150 °C (`HEATER_HOLD_*`). Only up to ~58 °C fits the 1 W flight budget (in the lab). |
 
 ## Known rig behaviour
