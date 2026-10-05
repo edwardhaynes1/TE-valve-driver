@@ -4,6 +4,17 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 52. UPSTREAM P shows the latest reading; no P20, no value on the chart — 5 Oct 2026
+Edward: the upstream chart printed 0.9568 bar while UPSTREAM P at the top
+left said "---". The readout showed the mean of the Keller samples since the
+last log row, and the logger empties those every 0.5 s; the Keller gives
+only 1-2 per row (~2.6 Hz, 5 Oct log), so the window often caught the list
+empty. UPSTREAM P and KELLER T now show the latest reading, as the chart and
+auto-p do ("---" only when the Keller is lost); the log still averages per
+row. The UPSTREAM P20 line and P20_REF_K are gone (not needed), and so is
+the latest value printed on the upstream chart (history 48): the readout
+line has it.
+
 ## 51. auto-p aims at 5e-7 mbar and never exceeds 9e-7 — 5 Oct 2026
 Edward: P_vacuum should reach the target, which can always be ~5e-7 mbar;
 what matters is that gas flows and P_vacuum never exceeds 9e-7. So the

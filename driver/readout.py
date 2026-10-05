@@ -18,15 +18,11 @@ A tag names a colour, which gui.py looks up in the palette: 'bright', 'dim',
 import time
 
 from .config import (
-    HEATER_MAX_RUN_S, HEATER_R_OHM, P20_REF_K, PRESSURE_MAX_MBAR, PRESSURE_SOAK_FACTOR,
+    HEATER_MAX_RUN_S, HEATER_R_OHM, PRESSURE_MAX_MBAR, PRESSURE_SOAK_FACTOR,
     SEAT_SCREW_TORQUE_MAX_NM, heater_current_a, heater_power_w, heater_voltage_v,
 )
 from .control import AUTO_P, AUTO_T, MANUAL
 from .thermocouple import FAULT_BITS
-
-
-def _mean(values):
-    return (sum(values) / len(values)) if values else None
 
 
 def status_segments(readings, health, heater, output, labjack_available,
@@ -59,10 +55,13 @@ def heater_segments(heater, output, labjack_ok):
 
 
 def sensor_segments(readings, health, labjack_available):
-    """Title, health flags and the sensor readings, down to VALVE T."""
+    """Title, health flags and the sensor readings, down to VALVE T. The
+    Keller lines show its latest reading, like the chart and auto-p: the
+    per-row samples are emptied by the logger every row, and the Keller
+    gives only 1-2 per row, so their mean was often blank (history 52)."""
     r, ok = readings, health
-    p = _mean(r['keller_pressure_samples'])
-    t = _mean(r['keller_temperature_samples'])
+    p = r['keller_pressure_bar']
+    t = r['keller_temperature_degC']
     vac, vac_st, vac_u = (r['vacuum_chamber_mbar'], r['vacuum_status'],
                           r['vacuum_gauge_V'])
     te_temp, fault = r['te_temperature_degC'], r['tc_fault']
@@ -71,8 +70,6 @@ def sensor_segments(readings, health, labjack_available):
     t_s  = f"{t:.1f} °C"       if t       is not None else "---"
     v_s  = f"{vac:.2e} mbar"   if vac     is not None else "---"
     te_s = f"{te_temp:.2f} °C" if te_temp is not None else "---"
-    p20  = p * P20_REF_K / (t + 273.15) if (p is not None and t is not None) else None
-    p20_s = f"{p20:.4f} bar" if p20 is not None else "---"
     vac_note = f"  [{vac_st}]" if (vac is None and vac_st) else ""
     vac_volt = f"  ({vac_u:.2f} V at gauge)" if vac_u is not None else ""
 
@@ -95,8 +92,6 @@ def sensor_segments(readings, health, labjack_available):
 
     seg += [("UPSTREAM P   ", "dim"), (p_s + "\n", "bright" if p is not None else "dim"),
             ("KELLER T     ", "dim"), (t_s + "\n", "bright" if t is not None else "dim"),
-            ("UPSTREAM P20 ", "dim"), (p20_s, "bright" if p20 is not None else "dim"),
-            ("  (at 20 °C, uses Keller chip T — not the gas T)\n", "dim"),
             ("VACUUM       ", "dim"), (v_s, "bright" if vac is not None else "dim"),
             (vac_note, "err"), (vac_volt + "\n", "dim"),
             ("VALVE T      ", "dim"), (te_s, "bright" if te_temp is not None else "dim"),

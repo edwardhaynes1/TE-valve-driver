@@ -22,7 +22,7 @@ def text_of(segments):
 
 def readings(**kw):
     r = dict(keller_pressure_samples=[1.19], keller_temperature_samples=[22.5],
-             keller_pressure_bar=1.19, keller_pressure_t=0.0,
+             keller_pressure_bar=1.19, keller_pressure_t=0.0, keller_temperature_degC=22.5,
              vacuum_chamber_mbar=1.5e-7, vacuum_status=None, vacuum_gauge_V=5.7,
              te_temperature_degC=41.9, tc_fault=0)
     r.update(kw)
@@ -46,11 +46,12 @@ def test_status_panel_shows_the_readings(h, out):
 
 def test_missing_readings_show_dashes_not_stale_values(h, out):
     r = readings(keller_pressure_samples=[], keller_temperature_samples=[],
+                 keller_pressure_bar=None, keller_temperature_degC=None,
                  vacuum_chamber_mbar=None, te_temperature_degC=None, tc_fault=None)
     segs = readout.status_segments(r, dict(HEALTHY, keller=False), h, out, True)
     text = text_of(segs)
     assert "[KELLER:--]" in text
-    for line in ("UPSTREAM P   ---", "KELLER T     ---", "UPSTREAM P20 ---",
+    for line in ("UPSTREAM P   ---", "KELLER T     ---",
                  "VACUUM       ---", "VALVE T      ---"):
         assert line in text, line
 
@@ -64,10 +65,16 @@ def test_gauge_and_thermocouple_faults_are_shown_in_red(h, out):
     assert any(tag == "err" and "open circuit" in t for t, tag in segs)
 
 
-def test_p20_is_computed_from_the_keller_chip_temperature(h, out):
-    r = readings(keller_pressure_samples=[1.2], keller_temperature_samples=[20.0])
-    assert "UPSTREAM P20 1.2000 bar" in text_of(
-        readout.status_segments(r, HEALTHY, h, out, True))
+def test_upstream_shows_the_latest_reading_even_just_after_a_log_row(h, out):
+    # the logger has just emptied the per-row samples (history 52)
+    r = readings(keller_pressure_samples=[], keller_temperature_samples=[],
+                 keller_pressure_bar=0.9568, keller_temperature_degC=23.4)
+    text = text_of(readout.status_segments(r, HEALTHY, h, out, True))
+    assert "UPSTREAM P   0.9568 bar" in text and "KELLER T     23.4 °C" in text
+
+
+def test_there_is_no_p20_line(h, out):
+    assert "P20" not in text_of(readout.status_segments(readings(), HEALTHY, h, out, True))
 
 
 # ── heater V / I / P lines ──────────────────────────────────────────────────

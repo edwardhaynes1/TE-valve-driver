@@ -21,6 +21,14 @@ def test_keller_samples_are_averaged_and_cleared_for_each_row():
     assert row['p_mean'] == pytest.approx(1.2) and row['n_keller'] == 3
     assert shared.take_log_readings()['n_keller'] == 0          # taken once
     assert shared.latest()['keller_pressure_bar'] == 1.4        # latest value stays
+    assert shared.latest()['keller_temperature_degC'] == 22.0
+
+
+def test_losing_the_keller_blanks_its_latest_readings():
+    shared.store_keller(1.2, 22.5, 100.0)
+    shared.clear_keller()
+    r = shared.latest()
+    assert r['keller_pressure_bar'] is None and r['keller_temperature_degC'] is None
 
 
 def test_heater_output_record():

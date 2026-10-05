@@ -29,8 +29,7 @@ def make_chart(parent, title):
 
 def draw_chart(canvas, data, font, fmt="{:.3f}", log=False,
            ref=None, floor=None, min_span=None,
-           color=BRIGHT, width=1, band=None, band_color=None, out_color=None,
-           show_last=False):
+           color=BRIGHT, width=1, band=None, band_color=None, out_color=None):
     """Draw a strip chart on *canvas*.
 
     data  : sequence of values (oldest → newest)
@@ -48,8 +47,6 @@ def draw_chart(canvas, data, font, fmt="{:.3f}", log=False,
     band  : optional (lo, hi) tolerance band, edges drawn dashed and kept in range
     band_color : colour of the band edges
     out_color  : colour of the curve where it lies outside the band
-    show_last  : print the latest value (in fmt) at the right end of the
-            curve, so it reads against the axis labels at a glance
     """
     c = canvas
     c.delete("all")
@@ -151,11 +148,4 @@ def draw_chart(canvas, data, font, fmt="{:.3f}", log=False,
                 i = j + 1
             else:
                 i += 1
-    if show_last:
-        last = plot_vals[-1]
-        y = ypix(last)
-        above = y - pad_y > 18                      # room above the curve, else below
-        c.create_text(w - pad_r - 4, y - 3 if above else y + 3,
-                      text=fmt.format(10 ** last if log else last), fill=color, font=font,
-                      anchor="se" if above else "ne")
     c.tag_raise("title")

@@ -1,11 +1,11 @@
-"""Strip charts: up the screen is up the axis, and the upstream chart says
-its latest value (history 48).
+"""Strip charts: up the screen is up the axis (history 48).
 
 Agreed behaviour (5 Oct 2026):
   * a higher value is drawn higher, against the axis labels; a pressure
     above the target is drawn above the dashed target line
-  * the upstream chart labels its axis with 4 decimals, like the readout,
-    and prints the latest value at the right end of the trace
+  * the upstream chart labels its axis with 4 decimals, like the readout
+  * it doesn't print the latest value on the trace: the readout's UPSTREAM P
+    line has it (history 52)
 """
 from driver import charts
 from driver.palette import REF
@@ -67,8 +67,8 @@ def test_above_the_target_is_drawn_above_the_target_line():
     assert data_ys(c)[-1] > target_y(c)
 
 
-def test_the_axis_and_the_latest_value_have_4_decimals():
-    c = draw([0.9601] * 50, show_last=True)
+def test_the_axis_has_4_decimals_and_no_latest_value_label():
+    c = draw([0.9601] * 50)
     texts = [kw["text"] for kind, _, kw in c.items if kind == "text" and kw.get("text")]
     assert "0.9526" in texts                   # the target's tick, not 0.953
-    assert "0.9601" in texts                   # the latest value, on the chart
+    assert "0.9601" not in texts

@@ -43,6 +43,7 @@ def _fresh_readings():
         keller_temperature_samples  = [],    # accumulated between log rows, then averaged
         keller_pressure_bar         = None,  # latest single upstream reading (absolute)
         keller_pressure_t           = None,  # time of that reading
+        keller_temperature_degC     = None,  # latest Keller chip temperature
         vacuum_chamber_mbar         = None,  # latest reading, None if invalid
         vacuum_status               = None,  # None = valid, else a VAC_* reason string
         vacuum_gauge_V              = None,  # gauge-side signal voltage, V
@@ -102,6 +103,7 @@ def store_keller(p_bar, t_chip, when):
             _charts['upstream'].append(p_bar)
         if t_chip is not None:
             _readings['keller_temperature_samples'].append(round(t_chip, 2))
+            _readings['keller_temperature_degC'] = t_chip
 
 
 def clear_keller():
@@ -110,6 +112,7 @@ def clear_keller():
         _readings['keller_pressure_samples'] = []
         _readings['keller_temperature_samples'] = []
         _readings['keller_pressure_bar'] = None
+        _readings['keller_temperature_degC'] = None
 
 
 def store_vacuum(mbar, status, gauge_v, when=None):

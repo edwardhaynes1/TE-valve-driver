@@ -519,9 +519,6 @@ KELLER_PORT        = None       # None = auto-detect
 KELLER_TIMEOUT     = 0.3
 KELLER_ECHO        = True       # K-114 adapter echoes TX
 KELLER_POLL_HZ     = 4          # Keller read rate
-P20_REF_K          = 293.15     # P20 = P * P20_REF_K / T_keller — text readout only.
-                                # T_keller is the sensor-chip temperature, not the gas
-                                # temperature, so P20 is not charted (17 Sept 2026).
 
 LOG_INTERVAL_S     = 0.5        # seconds between logged rows (drift-free)
 CHART_SECONDS      = 300        # strip-chart window for all live graphs (s)
