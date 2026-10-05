@@ -4,6 +4,15 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 48. The upstream chart prints its latest value, axis to 4 decimals — 5 Oct 2026
+Edward read the upstream trace as drawn the wrong way up. It was not: at
+10:31 the pressure was 0.9601 bar against a target of 0.9526 bar, and the
+trace sat just above the dashed target line, as it should. But the axis
+rounded the target to "0.953", the whitish trace all but covered the grey
+target line, and nothing on the chart said what the trace was at. The
+axis now has 4 decimals like the readout, and the latest value is printed
+at the right end of the trace. tests/test_charts.py pins the direction.
+
 ## 47. The event log says what settled, and logs every step — 5 Oct 2026
 Edward could not read "chamber settled at 62.0 °C; stepping: 63.0 °C": the
 62.0 °C is the valve's hold temperature (what settles is the chamber

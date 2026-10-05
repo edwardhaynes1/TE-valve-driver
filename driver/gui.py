@@ -796,13 +796,13 @@ class TEGui:
         if band:
             t, lo_b, hi_b = band
             self.up_canvas.title = (f"upstream (bar abs)   dotted = target {t:g} ± {hi_b - t:g}   amber = outside")
-            draw_chart(self.up_canvas, up_chart, self.f, fmt="{:.3f}", min_span=6 * (hi_b - t),
+            draw_chart(self.up_canvas, up_chart, self.f, fmt="{:.4f}", min_span=6 * (hi_b - t),
                        ref=t, band=(lo_b, hi_b), band_color=UP_BAND, out_color=UP_OUT,
-                       color=UP_LINE, width=2)
+                       color=UP_LINE, width=2, show_last=True)
         else:
             self.up_canvas.title = f"upstream pressure (bar abs, Keller raw)  ·  last {CHART_SECONDS}s"
-            draw_chart(self.up_canvas,   up_chart, self.f,   fmt="{:.3f}", min_span=0.005,
-                             color=UP_LINE, width=1)
+            draw_chart(self.up_canvas,   up_chart, self.f,   fmt="{:.4f}", min_span=0.005,
+                             color=UP_LINE, width=1, show_last=True)
         draw_chart(self.heat_canvas, heat_chart, self.f, fmt="{:.2f}",
                          ref=FLIGHT_POWER_BUDGET_W, floor=(0.0, 1.05 * p_full),
                          color=PWR_LINE, width=1)
