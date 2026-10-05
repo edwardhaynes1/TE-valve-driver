@@ -9,7 +9,7 @@ Run te-sensor_20261005_162143 (0.50 N·m, P_up 0.96 bar): at 0.53 °C/min
 the valve went 30 → 56 °C before the 60 min arming limit ended it; at
 0.50 N·m it opened at ~92 °C in KW41. Four single-reading spikes
 (2.2 → 3.4e-7 mbar and straight back) each made it back off 1.5-2 K.
-Edward agreed: creep 1.5 °C/min at 1 bar (0.3-2 °C/min); the freeze below
+Agreed: creep 1.5 °C/min at 1 bar (0.3-2 °C/min); the freeze below
 the TC grows with the rate, by the valve body's lag (TC leads it ~8.5 K at
 3 °C/min, ~170 s): 4.25 K at 1.5 °C/min, at least 1 K; movement and the
 rate of rise for the prediction use the lower of each two readings, so a
@@ -24,7 +24,7 @@ hysteresis hold 4.4-5.3e-7 mbar; 1 K-hysteresis valves shut again after
 each freeze and cycle.
 
 ## 52. UPSTREAM P shows the latest reading; no P20, no value on the chart — 5 Oct 2026
-Edward: the upstream chart printed 0.9568 bar while UPSTREAM P at the top
+The upstream chart printed 0.9568 bar while UPSTREAM P at the top
 left said "---". The readout showed the mean of the Keller samples since the
 last log row, and the logger empties those every 0.5 s; the Keller gives
 only 1-2 per row (~2.6 Hz, 5 Oct log), so the window often caught the list
@@ -35,7 +35,7 @@ the latest value printed on the upstream chart (history 48): the readout
 line has it.
 
 ## 51. auto-p aims at 5e-7 mbar and never exceeds 9e-7 — 5 Oct 2026
-Edward: P_vacuum should reach the target, which can always be ~5e-7 mbar;
+Requirement: P_vacuum should reach the target, which can always be ~5e-7 mbar;
 what matters is that gas flows and P_vacuum never exceeds 9e-7. So the
 target is now only an aim, and a fixed P_vacuum_max (PRESSURE_MAX_MBAR)
 sets the cut line at 9e-7 ÷ 1.4 = 6.4e-7 (1.4: the largest rise after a
@@ -59,7 +59,7 @@ Between two seatings (KW40 → KW41) the torque needed to seal moved by
 torque nor any opening point can be trusted; only the upstream pressure
 P_up is known. The old auto-p (opening point from the torque table, full
 power burst, creep, then a PI on log10 pressure with feedforward) is
-deleted. Edward asked for: no assumed T_min, torque unknown, heat slowly,
+deleted. Asked for: no assumed T_min, torque unknown, heat slowly,
 back right off when P_vacuum moves, more or less caution from P_up.
 
 auto-p now holds the valve where it is while it measures the baseline,
@@ -90,7 +90,7 @@ small grey. The lock nut is left out of the title (it is characterised
 loose; history 45) but stays in the terminal summary and its markers.
 
 ## 48. The upstream chart prints its latest value, axis to 4 decimals — 5 Oct 2026
-Edward read the upstream trace as drawn the wrong way up. It was not: at
+The upstream trace was read as drawn the wrong way up. It was not: at
 10:31 the pressure was 0.9601 bar against a target of 0.9526 bar, and the
 trace sat just above the dashed target line, as it should. But the axis
 rounded the target to "0.953", the whitish trace all but covered the grey
@@ -99,7 +99,7 @@ axis now has 4 decimals like the readout, and the latest value is printed
 at the right end of the trace. tests/test_charts.py pins the direction.
 
 ## 47. The event log says what settled, and logs every step — 5 Oct 2026
-Edward could not read "chamber settled at 62.0 °C; stepping: 63.0 °C": the
+The operator could not read "chamber settled at 62.0 °C; stepping: 63.0 °C": the
 62.0 °C is the valve's hold temperature (what settles is the chamber
 pressure), and the line was the only one until the valve opened, so it
 still said 63 °C with the valve at 66 °C. The first line now reads "valve
@@ -109,8 +109,8 @@ later step adds "no opening at 63.0 °C after 5 min; next step 64.0 °C".
 The scout's line says the same about the hold.
 
 ## 46. Every row above the charts is one line high — 5 Oct 2026
-Edward: the mode line, the ARMED line and "─── event log" each had a gap
-above and below, and the charts are what he watches. Tk gives a label 3 px
+The mode line, the ARMED line and "─── event log" each had a gap
+above and below, and the charts are what the operator watches. Tk gives a label 3 px
 above and below by default and the rows were packed with extra padding;
 buttons had 2 px more inside. All of that is gone (labels, rows, buttons,
 radio buttons and the text panels), as is the blank line under the device
@@ -130,7 +130,7 @@ before. A seating last recorded with a lock nut torque is therefore
 followed by a new seating, and the dialog says why.
 
 ## 44. The lock nut torque pools results and starts a new seating; the plotter shows it — 1 Oct 2026
-Edward: history 43 only recorded it. Since tightening the lock nut appears
+History 43 only recorded it. Since tightening the lock nut appears
 to change the seat preload, results at different lock nut torques are not
 the same experiment.
 * **Pooling.** A new seating's estimate from the other seatings, and a
@@ -167,9 +167,9 @@ puts the box, holding the current value, where the value was. Return or
 "set" saves, Escape keeps the old value; clicking the value still works.
 Both lines are locked while t-min-tune runs, as the seat screw already was.
 
-## 42. An optional "estimate °C" starts a new seating from the value Edward expects — 1 Oct 2026
+## 42. An optional "estimate °C" starts a new seating from the value the operator expects — 1 Oct 2026
 The lock-nut seatings at 0.40 N·m gave 102.3, 87.8 and ≫ 92 °C: the other
-seatings' mean says little about the next one, and Edward often has a
+seatings' mean says little about the next one, and the operator often has a
 better guess. The t-min-tune row now has an **estimate °C** box (optional,
 20-155 °C). Filled in at the start, it is the estimate until the seating has
 a result of its own (a counted result or its scout); it comes before the
@@ -206,7 +206,7 @@ starts lower by that amount, and at least 10 K below where any test opened
 during its hold (near room temperature it then starts where it is).
 
 ## 39. The driver closes itself once t-min-tune has converged — 1 Oct 2026
-Edward wants the driver to close by itself when a session is done, after
+The driver should close by itself when a session is done, after
 the valve has closed. Convergence is only checked once the last test's
 valve has closed (chamber back at its baseline), and the heater is already
 disarmed, so the window closes the driver `TMIN_QUIT_DELAY_S` (60 s) after
@@ -228,7 +228,7 @@ inflated the scatter, and with it the old margin (2 × scatter + 1 K).
   instead of 62 °C. Step (1 K) and dwell (5 min) unchanged: the openings
   came 43-159 s into their step, too few to shorten it yet.
 * **Optional cap at the previous T_close + K** (`TMIN_START_ABOVE_CLOSE_K`),
-  Edward's idea for high upstream pressure. Off by default: whether the
+  An idea for high upstream pressure. Off by default: whether the
   valve has closed is already judged by the chamber before the next test,
   and the cap starts tests lower exactly when the valve closes far below
   T_min (1 Oct, +3 K: 58-59 °C instead of 64-65, ~30 min more per test).
@@ -239,7 +239,7 @@ inflated the scatter, and with it the old margin (2 × scatter + 1 K).
   the file changes.
 
 ## 37. "Setting" is now "seating" — 1 Oct 2026
-Edward didn't like "setting" (nor "tightening") for one tightening of the
+"Setting" didn't fit (nor "tightening") for one tightening of the
 seat screw; "seating" names what changes — how the valve is seated and
 preloaded — and doesn't clash with configuration settings. Renamed
 throughout: code, messages, the `seating` column of `logs/openings.csv`,
@@ -250,7 +250,7 @@ added (only the header line changes; `schema.RENAMED_COLUMNS`). The seat
 screw's tightening torque may be written M_A (VDI 2230).
 
 ## 36. t-min-tune replaces cycling: the lowest opening temperature, step by step — 30 Sept 2026
-Edward wants the *minimum* T_open for each upstream pressure and screw
+The aim is the *minimum* T_open for each upstream pressure and screw
 torque, found experimentally, rather than the creep's T_open. Agreed one
 question at a time:
 * **Step and dwell, not a creep.** A 3 °C/min ramp reads T_open high (the
@@ -258,26 +258,26 @@ question at a time:
   below the estimate until the chamber is settled, then raises the setpoint
   1 K and holds each step 5 min (2-3 time constants) until it opens.
 * **Start well below, narrowing with results:** 10 K below the estimate
-  with no result at the seating (Edward: 3 K isn't enough; at least 5-10 K
+  with no result at the seating (3 K isn't enough; at least 5-10 K
   and reduce as the estimate improves), 5 K with one, then 2 × scatter +
   1 K (3-10 K). The estimate updates after every test.
 * **The upstream is held by hand in a band** (target ± 0.05 bar by
-  default: ≈ ±0.5 K of T_min; 30 Sept Edward held ±0.015 bar for 4 min).
+  default: ≈ ±0.5 K of T_min; 30 Sept the operator held ±0.015 bar for 4 min).
   Leaving it during the hold or a step cuts the heater and abandons the test
-  (Edward's rule); the next starts afresh inside the band. The window gets
+  (the operator's rule); the next starts afresh inside the band. The window gets
   a taller upstream chart with the band dotted and the trace amber outside.
 * **The valve must close before the next test**, judged by the chamber:
   within +0.02 decades of its baseline before the opening, and settled.
-  Edward: T_open ≠ T_close — once open it must cool further to close
+  T_open ≠ T_close — once open it must cool further to close
   (28 Sept: 10-25 K). T_close is logged with every test.
 * **Stop when repeatable:** the last 3 results within ±1 K, or when stopped.
 * **One central results file**, `logs/t-min.csv`, a row per test including
   the failed ones, never rewritten except to add new columns at the end;
   the estimates are recomputed from it, and `logs/` is outside git, so
-  program updates can't touch what has been learned (Edward's requirement).
+  program updates can't touch what has been learned (a requirement).
 * **The first estimate** at a new seating comes from the other seatings at
   the same torque (t-min results, else the opening map); only a torque with
-  nothing measured scouts first (Edward chose this over a scout at every
+  nothing measured scouts first (chosen over a scout at every
   new tightening).
 * **"deep every" is gone** with cycling. `cycle.py`, `cyclerun.py` and their
   tests remain; the window and logger use `tmin.py` / `tminrun.py`.
@@ -293,7 +293,7 @@ shows no rise to detect: the steps stop 15 K above the estimate
 rather than climbing to 155 °C with the valve open.
 
 ## 35. auto-t lands within 0.5 °C, faster — 30 Sept 2026
-Edward: the feed-forward (the burst) must not overshoot the setpoint by more
+Requirement: the feed-forward (the burst) must not overshoot the setpoint by more
 than 0.5 °C, and a D term should get the loop there faster. On the rig the
 coasts ran 0.6-2.5 K past the setpoint (28-30 Sept, 16-38 K steps; 30 Sept
 60 °C: +2 K), and the step-and-dwell search for the lowest opening point
@@ -319,7 +319,7 @@ seed changed from 2 to 8: with the new tuning seed 2's draws ended at 10
 runs 0.08 K short of precise, a different random outcome, not a fault.
 
 ## 34. Map the opening point by cycling, not by batches — 28 Sept 2026
-Edward: waiting for cooldowns and discarding runs slowed testing down, and
+Waiting for cooldowns and discarding runs slowed testing down, and
 the upstream pressure can't be controlled — testing should go on regardless
 and the analysis deal with it. Then: the aim is to capture as much data as
 efficiently as possible, to tie down seat screw torque, upstream pressure
@@ -412,8 +412,8 @@ Found while building (simulation, tests/batch_sim.py `run_cycling`):
 
 ## 33. Top-up pause removed — 28 Sept 2026
 Entry 28 added an optional pause before a run once upstream had fallen a
-set amount (default 0.3 bar), and a "continue" button. Edward didn't want
-the seating: the batch should just account for the changing upstream
+set amount (default 0.3 bar), and a "continue" button. The pause wasn't
+wanted: the batch should just account for the changing upstream
 pressure, which it already does (each run's upstream is logged; starts are
 shifted for it; the stopping rule corrects to the mean; T_open is fitted
 against it and stored at the mean). The pre-filled 0.3 also read as unclear
@@ -462,7 +462,7 @@ lab (~27 °C at the Keller head). 28 °C could take far longer than the 30 min
 cooldown limit. Agreed one question at a time:
 * **Adaptive cooling.** A cooldown ends at the target (35 °C or T_open −
   20 K), or once the valve cools slower than 1 K/min — if it is already
-  ≥ 5 K below the best guess of T_open. Edward chose 1 K/min (proposed:
+  ≥ 5 K below the best guess of T_open. 1 K/min was chosen (proposed:
   0.15 K/min); alone it would stop near 37-38 °C, a 2-3 K gap at 0.25 N·m,
   so it applies only once the gap is secured. The 28 °C floor is gone.
 * **Minimum gap 5 K** between the hold temperature and a test run's
@@ -737,7 +737,7 @@ at 92.67 °C, upstream 4.49 bar — over 50 K above the 16 Sept reference
 (40.5 °C, at an unrecorded torque, since the input didn't exist then).
 Separately, `te-sensor_20260921_144015.csv` shows auto-p itself computing a
 seek goal of only 31.8 °C under the old model and creeping from there —
-Edward disarmed it after 68 s rather than let it run. Two compounding
+The operator disarmed it after 68 s rather than let it run. Two compounding
 causes, both now fixed: (1) nothing in the seek/goal logic used seat screw
 torque at all; (2) `PRESSURE_FF_MAX_C`, an absolute 55 °C ceiling, would
 have capped the goal there regardless, since it didn't move with the

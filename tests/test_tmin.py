@@ -110,7 +110,7 @@ def test_other_seatings_count_with_their_latest_results_only():
 
 
 def test_the_operators_estimate_comes_before_the_other_seatings():
-    # history 42: a seating started from the value Edward expects (the
+    # history 42: a seating started from the value the operator expects (the
     # lock-nut seatings), with the usual 10 K margin; no scout
     old = [dict(time="t", seating="old", torque_Nm="0.45", outcome=tminlog.T_MIN,
                 counted="1", t_min_degC=str(T), upstream_at_open_bar="3.0")

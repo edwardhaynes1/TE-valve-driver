@@ -224,7 +224,7 @@ PID_SETPOINT_DEFAULT  = 60.0       # °C
 # crept up for 5 s-2 min by ≤ 0.15 decades (×1.4: soak); the valve closed
 # ~10 K below where it was cut (0-27 K).
 PRESSURE_TARGET_DEFAULT = 5e-7     # mbar, P_vacuum_target: where to aim. Any flow near
-                                   # it will do (Edward, 5 Oct 2026); what matters is that
+                                   # it will do (5 Oct 2026); what matters is that
                                    # gas flows and P_vacuum never exceeds PRESSURE_MAX_MBAR
 PRESSURE_MAX_MBAR       = 9e-7     # mbar, P_vacuum_max: never to be exceeded
 PRESSURE_TARGET_MIN     = 5e-11    # mbar, IKR 270 lower measuring limit
