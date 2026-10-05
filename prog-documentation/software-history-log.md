@@ -4,6 +4,25 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 51. auto-p aims at 5e-7 mbar and never exceeds 9e-7 — 5 Oct 2026
+Edward: P_vacuum should reach the target, which can always be ~5e-7 mbar;
+what matters is that gas flows and P_vacuum never exceeds 9e-7. So the
+target is now only an aim, and a fixed P_vacuum_max (PRESSURE_MAX_MBAR)
+sets the cut line at 9e-7 ÷ 1.4 = 6.4e-7 (1.4: the largest rise after a
+cut, 1 of 33 openings). Below the aim auto-p creeps (the full rate more
+than 0.1 decades below it, a quarter closer in); above it the setpoint
+eases down; the halfway "near line" of history 50 is gone. With a high
+baseline the aim rises to baseline + 2 margins so the flow shows.
+
+Two changes came from simulation. Heating resumes at 0.95 × the cut line,
+not 0.8: waiting let the TC fall ~15 K, the valve shut, and creeping back
+took over an hour. And a reading above P_vacuum_max stops auto-p until it
+is restarted: the 0.45 N·m valve of 21 Sept opens straight to ~4e-6 mbar,
+which no heater cut can prevent, and it would otherwise reopen and
+overshoot again. In simulation (0.25 and 0.40 N·m, 1 and 10 K hysteresis,
+baselines 1.7e-7 and 4.5e-7) P_vacuum stayed under 6e-7; with the KW40
+baseline it came within 0.1 decades of the aim after ~25-30 min of flow.
+
 ## 50. auto-p is conservative and assumes no opening point — 5 Oct 2026
 Between two seatings (KW40 → KW41) the torque needed to seal moved by
 ~0.17 N·m and T_min at a given torque by ~50 K, so neither the seat screw

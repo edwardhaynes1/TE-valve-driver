@@ -137,7 +137,7 @@ def test_auto_p_idle_explains_what_arming_will_do(h):
     h.update(mode=controller.AUTO_P, p_target_mbar=1e-6)
     text, tag = readout.loop_status(h)
     assert "auto-p idle" in text and "creep up slowly" in text
-    assert "heater off above 7.00e-07 mbar" in text and tag == "dim"
+    assert "heater off above 6.43e-07" in text and "under 9.0e-07" in text and tag == "dim"
 
 
 def test_auto_p_creeping(h):
@@ -153,14 +153,14 @@ def test_auto_p_cut_warns(h):
     h.update(armed=True, mode=controller.AUTO_P, p_init=False, p_raw=-6.1,
              p_phase='cut', p_base=-6.82, setpoint_C=40.0, p_target_mbar=1e-6)
     text, tag = readout.loop_status(h)
-    assert "HEATER OFF" in text and "cut 7.00e-07 mbar" in text and tag == "warn"
+    assert "HEATER OFF" in text and "cut 6.43e-07 mbar" in text and tag == "warn"
 
 
 def test_auto_p_parked_warns(h):
     h.update(armed=True, mode=controller.AUTO_P, p_init=False, p_raw=-6.8,
              p_phase='park', p_base=-6.82, setpoint_C=40.0, p_target_mbar=2.2e-7)
     text, tag = readout.loop_status(h)
-    assert "target too low" in text and "P_up not read" in text and tag == "warn"
+    assert "no room for flow" in text and "P_up not read" in text and tag == "warn"
 
 
 # ── the settings summary in the event log ───────────────────────────────────

@@ -33,11 +33,13 @@ from .config import (
     PRESSURE_BAD_READS_TO_TRIP, PRESSURE_BASE_GUARD_S, PRESSURE_BASE_MIN_S,
     PRESSURE_BASE_WINDOW_S, PRESSURE_CREEP_C_MIN, PRESSURE_CREEP_MAX_C_MIN,
     PRESSURE_CREEP_MIN_C_MIN, PRESSURE_CREEP_REF_BAR, PRESSURE_CREEP_UP_EXP,
-    PRESSURE_CUT_FRACTION, PRESSURE_EFOLD_REF_K, PRESSURE_FILTER_S,
-    PRESSURE_FREEZE_BELOW_K, PRESSURE_MOVE_MIN_DEC, PRESSURE_MOVE_SIGMAS,
-    PRESSURE_PREDICT_S, PRESSURE_RESUME_FRACTION, PRESSURE_SEEK_START_C,
-    PRESSURE_SLOPE_WINDOW_S, PRESSURE_STEADY_S, PRESSURE_TARGET_DEFAULT,
-    PRESSURE_TRIP_ALL_MODES, PRESSURE_TRIP_MBAR, PRESSURE_TSP_MAX_C,
+    PRESSURE_EFOLD_REF_K, PRESSURE_FILTER_S, PRESSURE_FLOW_MARGINS,
+    PRESSURE_FREEZE_BELOW_K, PRESSURE_MAX_MBAR, PRESSURE_MOVE_MIN_DEC,
+    PRESSURE_MOVE_SIGMAS, PRESSURE_NEAR_AIM_DEC, PRESSURE_PREDICT_S,
+    PRESSURE_RESUME_FRACTION, PRESSURE_SEEK_START_C, PRESSURE_SLOPE_WINDOW_S,
+    PRESSURE_SOAK_FACTOR, PRESSURE_STEADY_S, PRESSURE_TARGET_DEFAULT,
+    PRESSURE_TRIM_BELOW_K, PRESSURE_TRIP_ALL_MODES, PRESSURE_TRIP_MBAR,
+    PRESSURE_TSP_MAX_C,
     PRESSURE_UP_K_PER_BAR, PRESSURE_UP_MAX_AGE_S, PRESSURE_UP_REF_BAR,
     SEAT_SCREW_TOL_NM, SEAT_SCREW_VALVE, TC_MAX_RATE_K_S, TC_RESPONSE_DUTY,
     TC_RESPONSE_MIN_K, TC_RESPONSE_S, TEMP_BURST_ENABLE, TEMP_BURST_LEARN,
@@ -119,6 +121,7 @@ def new_state():
         p_rate_c_min    = 0.0,     # creep rate now, °C/min (0 while not creeping)
         p_override      = None,    # 0.0 while the outer loop has cut the heater
         p_capped        = False,   # creep reached the setpoint limit
+        p_aim           = None,    # log10 of where auto-p aims, mbar (≥ the target)
         t_check         = False,   # auto-t: re-evaluate a burst (armed / setpoint changed)
         t_burst         = None,    # auto-t: None, 'burst', 'coast'
         t_burst_t0      = None,
@@ -484,11 +487,12 @@ def opening_point(seat_nm):
 #   seek      valve shut: creep up at the P_up rate
 #   hold      P_vacuum moved: setpoint frozen 1 K below the TC, no creep
 #             until P_vacuum has not risen for 30 s
-#   approach  open and steady, below the near line: creep at ¼ rate
-#   near      past halfway (log scale) from baseline to the cut line:
-#             the setpoint may hold or fall, never rise
-#   cut       P_vacuum above, or predicted within 3 s to go above,
-#             0.7 × P_vacuum_target: heater off until it is below 0.8 × that
+#   approach  open and steady, below the aim: creep at ¼ rate
+#   trim      above the aim (P_vacuum_target, or more if the baseline is
+#             high): the setpoint eases down at ¼ rate
+#   cut       P_vacuum above, or predicted within 3 s to go above, the cut
+#             line P_vacuum_max ÷ 1.4: heater off until below 0.95 × that
+#   stopped   P_vacuum went above P_vacuum_max: heater off until restarted
 #   park      the cut line is at or below baseline + margin: no heating up
 
 def _creep_rate(p_up):
@@ -539,11 +543,20 @@ def _update_baseline(h, now):
     h['p_margin'] = max(PRESSURE_MOVE_MIN_DEC, PRESSURE_MOVE_SIGMAS * sd)
 
 
-def _cut_lines(h):
+def _cut_lines():
     """log10 of the cut line and the resume line (mbar). They don't need the
     baseline, so they apply from the first reading."""
-    cut = math.log10(PRESSURE_CUT_FRACTION * h['p_target_mbar'])
+    cut = math.log10(PRESSURE_MAX_MBAR / PRESSURE_SOAK_FACTOR)
     return cut, cut + math.log10(PRESSURE_RESUME_FRACTION)
+
+
+def _aim(h, moving_line, cut):
+    """log10 of where to aim: P_vacuum_target, raised to the baseline +
+    PRESSURE_FLOW_MARGINS margins so that gas visibly flows, and kept below
+    the cut line (halfway between movement and cut if it can't be)."""
+    aim = max(math.log10(h['p_target_mbar']),
+              h['p_base'] + PRESSURE_FLOW_MARGINS * h['p_margin'])
+    return aim if aim < cut else 0.5 * (moving_line + cut)
 
 
 def _enter(h, phase, now, temp, msgs, why):
@@ -551,7 +564,7 @@ def _enter(h, phase, now, temp, msgs, why):
     further freezes the setpoint just below the TC: the TC sits by the
     heater and leads the valve body (logs 1-5 Oct 2026: the TC rose ≤ 1.4 K
     after a cut)."""
-    if h['p_phase'] in ('seek', 'approach') and phase in ('hold', 'near', 'park'):
+    if h['p_phase'] in ('seek', 'approach') and phase in ('hold', 'trim', 'park'):
         h['setpoint_C'] = min(h['setpoint_C'], temp - PRESSURE_FREEZE_BELOW_K)
     h.update(p_phase=phase, p_since=now)
     msgs.append(f"auto-p: {why} · T_sp {h['setpoint_C']:.1f} °C")
@@ -581,26 +594,42 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
         h['p_hist'].append((now, y))
         h.update(p_init=False, p_phase='baseline', p_since=now, p_filt=y, p_raw=y,
                  p_base=None, p_quiet_since=now, p_margin=PRESSURE_MOVE_MIN_DEC, p_override=None,
-                 p_capped=False, p_rate_c_min=0.0, setpoint_C=min(tsp_hi, temp))
+                 p_capped=False, p_rate_c_min=0.0, p_aim=None,
+                 setpoint_C=min(tsp_hi, temp))
         up = f"{p_up:.2f} bar" if p_up is not None else "not read — slowest creep"
         msgs.append(f"auto-p: no opening point assumed — holding {temp:.1f} °C "
                     f"while the baseline is measured, then creeping {rate:.2f} °C/min "
-                    f"(P_up {up}); heater off above "
-                    f"{PRESSURE_CUT_FRACTION * h['p_target_mbar']:.2e} mbar "
-                    f"({PRESSURE_CUT_FRACTION:g} × target)")
+                    f"(P_up {up}); aim {h['p_target_mbar']:.1e} mbar, heater off above "
+                    f"{PRESSURE_MAX_MBAR / PRESSURE_SOAK_FACTOR:.2e} so P_vacuum stays "
+                    f"under {PRESSURE_MAX_MBAR:.1e}")
         return
 
     h['p_raw'] = y
     h['p_filt'] += dt / (PRESSURE_FILTER_S + dt) * (y - h['p_filt'])
     h['p_hist'].append((now, y))
     phase = h['p_phase']
+    cut, resume = _cut_lines()
     if h['p_base'] is None or (phase in ('seek', 'park')
                                and y <= h['p_base'] + h['p_margin']):
+        first = h['p_base'] is None
         _update_baseline(h, now)        # parked: a baseline taken with the valve
                                         # still open falls once it shuts
-    cut, resume = _cut_lines(h)
+        if first and h['p_base'] is not None and h['p_base'] > cut:
+            msgs.append(f"auto-p: baseline {10 ** h['p_base']:.2e} mbar is above the "
+                        f"cut line {10 ** cut:.2e}: no room for gas flow below "
+                        f"P_vacuum_max {PRESSURE_MAX_MBAR:.1e} — heater stays off")
     slope, _ = _fit(_recent(h, now, PRESSURE_SLOPE_WINDOW_S))
     predicted = y + max(0.0, slope) * PRESSURE_PREDICT_S
+
+    # Stopped: past P_vacuum_max the valve opens faster than any heater cut.
+    if phase == 'stopped' or vac > PRESSURE_MAX_MBAR:
+        if phase != 'stopped':
+            _enter(h, 'stopped', now, temp, msgs,
+                   f"P_vacuum {vac:.2e} mbar is above P_vacuum_max "
+                   f"{PRESSURE_MAX_MBAR:.1e}: the valve opened too abruptly for the "
+                   f"heater to hold it. Heater OFF until auto-p is restarted")
+        h.update(p_override=0.0, p_rate_c_min=0.0)
+        return
 
     # Cut: above the cut line, or about to be.
     if y > cut or predicted > cut:
@@ -609,19 +638,20 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
                    f"P_vacuum {vac:.2e} mbar rising, predicted {10 ** predicted:.2e} "
                    f"in {PRESSURE_PREDICT_S:g} s")
             _enter(h, 'cut', now, temp, msgs,
-                   f"{why} — above {10 ** cut:.2e} ({PRESSURE_CUT_FRACTION:g} × target): "
-                   f"heater OFF at {temp:.1f} °C")
+                   f"{why} — above the cut line {10 ** cut:.2e} (P_vacuum_max "
+                   f"{PRESSURE_MAX_MBAR:.1e} ÷ {PRESSURE_SOAK_FACTOR:g}): heater OFF at "
+                   f"{temp:.1f} °C")
         h['p_override'] = 0.0
         h['p_rate_c_min'] = 0.0
         return
     if phase == 'cut':
-        if y >= resume:
+        if y >= resume:                         # predicted is below the cut line here
             h['p_override'] = 0.0
             return
         h['setpoint_C'] = min(h['setpoint_C'], temp)
         h.update(p_override=None, d_prev=None)
         _enter(h, 'hold', now, temp, msgs,
-               f"P_vacuum {vac:.2e} mbar, below {10 ** resume:.2e} — holding "
+               f"P_vacuum {vac:.2e} mbar, back below {10 ** resume:.2e} — holding "
                f"{h['setpoint_C']:.1f} °C, no creep until it has not risen for "
                f"{PRESSURE_STEADY_S:g} s")
         return
@@ -630,15 +660,15 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
     if h['p_base'] is None:
         return                                  # still measuring: hold
     moving_line = h['p_base'] + h['p_margin']
-    near_line = h['p_base'] + 0.5 * (cut - h['p_base'])
+    aim = h['p_aim'] = _aim(h, moving_line, cut)
 
     # Park: the target is too low to open the valve for at all.
     if cut <= moving_line:
         if phase != 'park':
             _enter(h, 'park', now, temp, msgs,
-                   f"{PRESSURE_CUT_FRACTION:g} × target ({10 ** cut:.2e} mbar) is "
-                   f"not above the baseline + margin ({10 ** moving_line:.2e}) — "
-                   f"not heating further")
+                   f"the cut line ({10 ** cut:.2e} mbar) is not above the baseline "
+                   f"+ margin ({10 ** moving_line:.2e}): no room for flow below "
+                   f"P_vacuum_max — not heating further")
         return
 
     if y <= moving_line:                        # valve shut
@@ -648,23 +678,31 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
                    f"P_vacuum back at baseline ({vac:.2e} mbar) — creeping "
                    f"{rate:.2f} °C/min from {h['setpoint_C']:.1f} °C")
         elif phase == 'baseline':
+            raised = (f", raised from {h['p_target_mbar']:.1e} so that flow shows"
+                      if aim > math.log10(h['p_target_mbar']) + 1e-9 else "")
             _enter(h, 'seek', now, temp, msgs,
                    f"baseline {10 ** h['p_base']:.2e} mbar (moves at "
-                   f"{10 ** moving_line:.2e}) — creeping {rate:.2f} °C/min")
+                   f"{10 ** moving_line:.2e}); aiming at {10 ** aim:.2e}{raised}, "
+                   f"cut at {10 ** cut:.2e} — creeping {rate:.2f} °C/min")
         _creep(h, rate, dt, tsp_hi, msgs)
         return
 
     # The valve is moving.
     rise, _ = _fit(_recent(h, now, PRESSURE_STEADY_S))
     rising = rise * PRESSURE_STEADY_S > h['p_margin']
-    if y >= near_line:
-        if phase != 'near':
-            _enter(h, 'near', now, temp, msgs,
-                   f"P_vacuum {vac:.2e} mbar, near the cut line {10 ** cut:.2e} — "
-                   f"holding; the setpoint may only fall")
+    slow = PRESSURE_APPROACH_FRACTION * rate
+    approach = slow if y > aim - PRESSURE_NEAR_AIM_DEC else rate
+    if y > aim:
+        if phase != 'trim':
+            _enter(h, 'trim', now, temp, msgs,
+                   f"P_vacuum {vac:.2e} mbar, above the aim {10 ** aim:.2e} — "
+                   f"easing the setpoint down {slow:.2f} °C/min")
+        h['p_rate_c_min'] = -slow
+        h['setpoint_C'] = max(temp - PRESSURE_TRIM_BELOW_K,
+                              h['setpoint_C'] - slow / 60.0 * dt)
         return
-    if phase in ('baseline', 'seek', 'near') or (phase == 'approach' and rising):
-        what = {'near': "fell below the near line",
+    if phase in ('baseline', 'seek', 'trim') or (phase == 'approach' and rising):
+        what = {'trim': "fell below the aim",
                 'approach': "rising again"}.get(phase, "moved")
         _enter(h, 'hold', now, temp, msgs,
                f"P_vacuum {what} ({vac:.2e} mbar, baseline "
@@ -674,6 +712,6 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
         if rising or now - h['p_since'] < PRESSURE_STEADY_S:
             return
         _enter(h, 'approach', now, temp, msgs,
-               f"P_vacuum steady at {vac:.2e} mbar for {PRESSURE_STEADY_S:g} s — "
-               f"creeping {PRESSURE_APPROACH_FRACTION * rate:.2f} °C/min")
-    _creep(h, PRESSURE_APPROACH_FRACTION * rate, dt, tsp_hi, msgs)
+               f"P_vacuum steady at {vac:.2e} mbar for {PRESSURE_STEADY_S:g} s, below "
+               f"the aim {10 ** aim:.2e} — creeping {approach:.2f} °C/min")
+    _creep(h, approach, dt, tsp_hi, msgs)

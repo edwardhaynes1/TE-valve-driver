@@ -46,14 +46,15 @@ with the 1 W flight budget dashed) and a scrolling event log.
 |---|---|
 | **manual** | A fixed duty. |
 | **auto-t** | Holds a valve temperature setpoint: the measured hold power for that temperature (`HEATER_HOLD_*`), plus a PID that only trims. For a step up of `TEMP_BURST_MIN_STEP_K` or more it bursts at full power, cuts when the TC is predicted to coast to just short of the setpoint (T + tau × rate of rise ≥ setpoint − max(1.5 K, 15 % of the step), tau learned from every coast), and hands over at the peak; the PID lands it within 0.5 °C (history 35). |
-| **auto-p** | Holds the chamber pressure P_vacuum below a target P_vacuum_target, conservatively (history 50). It assumes no opening point and ignores the seat screw torque. It holds the valve where it is while it measures the baseline, then creeps the auto-t setpoint up at 0.5 °C/min × (1 bar / P_up)^1.5 (0.1-1 °C/min). At the first raw reading above baseline + margin (4 × the gauge scatter, ≥ 0.02 decades) the creep stops and the setpoint freezes 1 K below the TC; it creeps again, at a quarter of the rate, only once P_vacuum hasn't risen for 30 s, and past halfway to the cut line the setpoint may only hold or fall. The heater goes OFF the moment P_vacuum is above 0.7 × P_vacuum_target, or is predicted to be within 3 s, and stays off until it is below 0.56 × the target. Decisions use the raw gauge reading, every 0.25 s. |
+| **auto-p** | Gets gas flowing into the chamber near P_vacuum_target (default 5 × 10⁻⁷ mbar) and never lets P_vacuum exceed P_vacuum_max (9 × 10⁻⁷ mbar), conservatively (history 50-51). It assumes no opening point and ignores the seat screw torque. It holds the valve where it is while it measures the baseline, then creeps the auto-t setpoint up at 0.5 °C/min × (1 bar / P_up)^1.5 (0.1-1 °C/min). At the first raw reading above baseline + margin (4 × the gauge scatter, ≥ 0.02 decades) the creep stops and the setpoint freezes 1 K below the TC; it creeps again only once P_vacuum hasn't risen for 30 s (at a quarter of the rate within 0.1 decades of the aim). Above the aim the setpoint eases down. The heater goes OFF the moment P_vacuum is above the cut line, P_vacuum_max ÷ 1.4 = 6.4 × 10⁻⁷ mbar, or is predicted to be within 3 s. If P_vacuum ever exceeds P_vacuum_max, the valve opened too abruptly to control: auto-p stops heating until it is restarted. Decisions use the raw gauge reading, every 0.25 s. |
 
-The heater can only add heat: auto-p can't cool the valve. A target too low
-to open the valve for at all parks it (no further heating); a target below
-the baseline keeps the heater off. P_vacuum settles below the target, not
-on it: about halfway (log scale) between the baseline and 0.7 × the target.
-From room temperature the creep covers ~30 K an hour at 1 bar, ~8 K at 2.4
-bar, so start near where the valve might open, within the 60 min arming limit.
+The heater can only add heat: auto-p can't cool the valve. With a high
+baseline the aim is raised just enough for the flow to show; a baseline
+above the cut line keeps the heater off (5 Oct 2026, 08:55: ~1 × 10⁻⁶ mbar
+with the valve shut). In simulation it takes ~25-30 min of flow to come
+within 0.1 decades of the aim. From room temperature the creep covers ~30 K
+an hour at 1 bar, ~8 K at 2.4 bar, so start near where the valve might open,
+within the 60 min arming limit.
 
 ### t-min-tune: the lowest opening temperature
 

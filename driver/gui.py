@@ -17,7 +17,8 @@ from .config import (
     TMIN_QUIT_WHEN_CONVERGED, TMIN_UP_CHART_WEIGHT,
     FLIGHT_POWER_BUDGET_W, HEATER_I_AIN, HEATER_MAX_DUTY, HEATER_PWM_PERIOD_S,
     HEATER_R_OHM, HEATER_V_AIN, PID_SETPOINT_DEFAULT, PRESSURE_TARGET_DEFAULT,
-    PRESSURE_TARGET_MIN, PRESSURE_TRIP_MBAR, TEMP_TRIP_C, heater_current_a,
+    PRESSURE_MAX_MBAR, PRESSURE_SOAK_FACTOR, PRESSURE_TARGET_MIN,
+    TEMP_TRIP_C, heater_current_a,
     heater_power_w, heater_voltage_v,
 )
 from .control import AUTO_P, AUTO_T, MANUAL, MODES, heater_command, snapshot
@@ -639,7 +640,8 @@ class TEGui:
         else:   # auto-p — the outer loop owns the temperature setpoint
             key = 'tgt'
             val = self._read_entry(self.p_entry, "target", a['tgt'],
-                                   PRESSURE_TARGET_MIN, PRESSURE_TRIP_MBAR / 2.0,
+                                   PRESSURE_TARGET_MIN,
+                                   PRESSURE_MAX_MBAR / PRESSURE_SOAK_FACTOR,
                                    fmt="{:.2e}", unit=" mbar")
             heater_command(mode=mode, p_target_mbar=val)
             change = f"target {a['tgt']:.2e} → {val:.2e} mbar"

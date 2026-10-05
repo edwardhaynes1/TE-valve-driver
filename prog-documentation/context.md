@@ -36,7 +36,8 @@ differently from this page, fix one of them. Add terms as they appear.
 | **Closing hysteresis** | The valve closes below where it opened: ~1 K on 16 Sept, 10-35 K on 21 Sept. |
 | **Baseline** | Chamber pressure with the valve shut. auto-p measures it before it creeps and while the valve stays shut (it may fall, never rise), from readings since the valve last shut. |
 | **P_vacuum** | Chamber pressure (Pfeiffer IKR 270), mbar. The symbol for *chamber pressure* in equations, plots and the auto-p code. |
-| **P_vacuum_target** | The chamber pressure auto-p is given, mbar (default 1.5 × 10⁻⁶). auto-p keeps P_vacuum below it: the heater goes off above 0.7 × P_vacuum_target (the *cut line*), or when P_vacuum is predicted to cross that within 3 s. |
+| **P_vacuum_target** | Where auto-p aims P_vacuum, mbar (default 5 × 10⁻⁷). Anywhere near it will do; what matters is that gas flows and P_vacuum stays under *P_vacuum_max*. |
+| **P_vacuum_max** | The chamber pressure auto-p must never let P_vacuum exceed: 9 × 10⁻⁷ mbar (`PRESSURE_MAX_MBAR`). |
 | **Hold power** | Power that holds a valve temperature, lab ~23 °C (21 Sept 2026, 9 holds): 0.47 W at 40 °C, 2.0 W at 90 °C, 4.1 W at 150 °C (`HEATER_HOLD_*`). Only up to ~58 °C fits the 1 W flight budget (in the lab). |
 
 ## Known rig behaviour
@@ -68,10 +69,12 @@ differently from this page, fix one of them. Add terms as they appear.
 | **Seek** | auto-p phase with the valve shut: the setpoint creeps up at 0.5 °C/min × (1 bar / P_up)^1.5, kept within 0.1-1 °C/min (0.1 with no live P_up), from wherever the valve was when auto-p started. |
 | **Movement** | One raw P_vacuum reading above baseline + margin: the first sign the valve is opening. The margin is 4 × the gauge's scatter about a straight line over the baseline window, at least 0.02 decades (+4.7 %). The setpoint freezes 1 K below the TC, which leads the valve body. |
 | **Hold (auto-p)** | After movement, or after a cut: no creep until P_vacuum has not risen for 30 s. |
-| **Approach (auto-p)** | The valve is open and P_vacuum steady below the *near line*: creep at ¼ of the seek rate. Rising again → hold. |
-| **Cut line** | 0.7 × P_vacuum_target. Above it, or predicted above it within 3 s (a straight line through the last 2 s), the heater is OFF; it comes back on, holding the TC of that moment, below 0.8 × the cut line. The 0.7 leaves room for the ×1.4 soak seen after cuts (logs 1-5 Oct 2026). |
-| **Near line** | Halfway, on a log scale, between the baseline and the cut line. Above it the auto-p setpoint may only hold or fall. P_vacuum settles about here. |
-| **Park** | The cut line is not above baseline + margin: auto-p doesn't heat further. (A target below the baseline keeps the heater off instead.) |
+| **Aim** | P_vacuum_target, raised to the baseline + 2 movement margins if that is higher (so the flow shows), and kept below the cut line. |
+| **Approach (auto-p)** | The valve is open and P_vacuum steady below the *aim*: creep at the seek rate, or at ¼ of it within 0.1 decades of the aim. Rising again → hold. |
+| **Trim** | P_vacuum above the aim, below the cut line: the setpoint eases down at ¼ of the seek rate, at most 3 K below the TC. |
+| **Cut line** | P_vacuum_max ÷ 1.4 = 6.4 × 10⁻⁷ mbar. Above it, or predicted above it within 3 s (a straight line through the last 2 s), the heater is OFF; it comes back on, holding the TC of that moment, as soon as P_vacuum is below 0.95 × the cut line (the TC falls ~0.4 K/s with the heater off). The 1.4 is the largest rise after a cut (logs 1-5 Oct 2026). |
+| **Stopped (auto-p)** | P_vacuum went above P_vacuum_max: the valve opened too abruptly for the heater to hold it. Heater off until auto-p is restarted (re-arm, or mode). |
+| **Park** | The cut line is not above baseline + margin: no room for flow below P_vacuum_max, so auto-p doesn't heat further. A baseline above the cut line keeps the heater off. |
 | **Upstream shift** | Opening-point offset for upstream pressure used by batches and t-min-tune: −12 K per bar relative to the pressure the torque's point was measured at; at most +10 K, −40 K. |
 
 ## Batches — repeated opening-point runs

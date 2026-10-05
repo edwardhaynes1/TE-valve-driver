@@ -4,9 +4,9 @@
 These pin down the redesign's purpose:
   * auto-t: no overshoot after a burst (the old hold rule overshot 5-8 K,
     reaching 159.5 °C against a 160 °C trip)
-  * auto-p (history 50): told nothing about where the valve opens, it never
-    lets P_vacuum past P_vacuum_target, settles with the valve open, and
-    cuts the heater at once when a refill pushes P_vacuum up
+  * auto-p (history 50): told nothing about where the valve opens, it gets
+    gas flowing near P_vacuum_target and never lets P_vacuum past
+    P_vacuum_max; a valve that snaps open past it stops auto-p
 Each fitted thermal model is used only within the range of its run.
 """
 
@@ -82,23 +82,24 @@ def test_tau_is_learned_so_the_next_burst_lands_better():
 
 # ── auto-p ───────────────────────────────────────────────────────────────────
 
-VALVES = {   # torque: (thermal fit, true opening point, at bar, e-fold, rise at opening, baseline)
-    0.25: ("150128", 40.0, 2.10, 3.5, 1.0e-7, 4.6e-7),
-    0.40: ("152054", 88.0, 2.38, 7.5, 1.6e-7, 4.5e-7),
-    0.45: ("173217", 150.0, 1.02, 12.0, 4.8e-6, 2.7e-7),
+VALVES = {   # torque: (thermal fit, true opening point, at bar, e-fold, rise at opening)
+    0.25: ("150128", 40.0, 2.10, 3.5, 1.0e-7),
+    0.40: ("152054", 88.0, 2.38, 7.5, 1.6e-7),
+    0.45: ("173217", 150.0, 1.02, 12.0, 4.8e-6),    # opens straight to ~5e-6 mbar
 }
-TARGETS = {0.25: 1.2e-6, 0.40: 1.5e-6, 0.45: 8e-6}
+BASE = 1.7e-7                       # the KW40 background
+MAX = 9e-7
 
 
-def run_p(torque, seconds, hyst=10.0, upstream=None, below=3.0):
-    """auto-p from `below` K under the valve's (unknown to it) opening point.
-    Returns [(t, P_vacuum, duty)], messages, final state."""
-    fit, open_c, bar, efold, rise, base = VALVES[torque]
+def run_p(torque, seconds, hyst=10.0, upstream=None, below=3.0, base=BASE):
+    """auto-p from `below` K under the valve's (unknown to it) opening point,
+    aiming at 5e-7 mbar. Returns [(t, P_vacuum, duty)], messages, final state."""
+    fit, open_c, bar, efold, rise = VALVES[torque]
     upstream = upstream or (lambda t: bar)
     th = Thermal(fit, t0=open_c - below)
     valve = Valve(open_c, bar, efold, rise_open=rise, hyst=hyst, base=base)
     h, now = controller.new_state(), 1000.0
-    controller.command(h, now, mode='auto-p', p_target_mbar=TARGETS[torque], armed=True)
+    controller.command(h, now, mode='auto-p', p_target_mbar=5e-7, armed=True)
     out, msgs = [], []
     for k in range(int(seconds / DT)):
         t = k * DT
@@ -114,29 +115,35 @@ def run_p(torque, seconds, hyst=10.0, upstream=None, below=3.0):
 
 
 @pytest.mark.parametrize("hyst", [10.0, 1.0])
-@pytest.mark.parametrize("torque", sorted(VALVES))
-def test_p_vacuum_never_passes_the_target(torque, hyst):
-    out, msgs, h = run_p(torque, 1800, hyst=hyst)
-    target = TARGETS[torque]
-    assert max(p for _, p, _ in out) < target
+@pytest.mark.parametrize("torque", [0.25, 0.40])
+@pytest.mark.parametrize("base", [BASE, 4.5e-7])
+def test_p_vacuum_never_passes_p_vacuum_max(torque, hyst, base):
+    out, msgs, h = run_p(torque, 2400, hyst=hyst, base=base)
+    assert max(p for _, p, _ in out) < MAX
     assert any("moved" in m for m in msgs)                     # it did open
-    assert h['trip_reason'] is None
+    assert h['trip_reason'] is None and h['p_phase'] != 'stopped'
 
 
-@pytest.mark.parametrize("torque", sorted(VALVES))
-def test_a_valve_with_wide_hysteresis_settles_open_below_the_cut_line(torque):
-    out, _, h = run_p(torque, 1800)
-    base, cut = VALVES[torque][5], 0.7 * TARGETS[torque]
-    tail = [p for t, p, _ in out if t > 1500]
-    assert min(tail) > 1.05 * base and max(tail) < cut
+@pytest.mark.parametrize("torque", [0.25, 0.40])
+def test_gas_flows_near_the_aim_within_an_hour(torque):
+    out, _, _ = run_p(torque, 3600)
+    tail = [p for t, p, _ in out if t > 3000]
+    assert min(tail) > 1.05 * BASE                             # flowing throughout
+    assert 3.5e-7 < max(tail) < 6.43e-7                        # near 5e-7, under the cut
+
+
+def test_a_valve_that_snaps_open_past_the_max_stops_auto_p():
+    out, msgs, h = run_p(0.45, 1800)
+    over = next(i for i, (_, p, _) in enumerate(out) if p > MAX)
+    assert all(d == 0.0 for _, _, d in out[over:])
+    assert h['p_phase'] == 'stopped' and any("too abruptly" in m for m in msgs)
 
 
 def test_a_refill_cuts_the_heater_on_the_first_reading_over_the_line():
-    # 0.25 N·m, open and settled; then the upstream is refilled 2.1 → 4 bar,
-    # which multiplies the flow by ~2.6 at a fixed opening
-    out, msgs, h = run_p(0.25, 1800, upstream=lambda t: 2.1 if t < 1500 else 4.0)
-    cut = 0.7 * TARGETS[0.25]
-    after = [(t, p, d) for t, p, d in out if t >= 1500]
+    # 0.25 N·m, flowing; then the upstream is refilled 2.1 → 4 bar, which
+    # multiplies the flow by ~2.6 at a fixed opening
+    out, msgs, h = run_p(0.25, 2400, upstream=lambda t: 2.1 if t < 2000 else 4.0)
+    cut = MAX / 1.4
+    after = [(t, p, d) for t, p, d in out if t >= 2000]
     first = next(i for i, (_, p, _) in enumerate(after) if p > cut)
     assert all(d == 0.0 for _, _, d in after[first:first + 8])
-    assert any("heater OFF" in m for m in msgs)

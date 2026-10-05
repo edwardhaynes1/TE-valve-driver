@@ -18,7 +18,7 @@ A tag names a colour, which gui.py looks up in the palette: 'bright', 'dim',
 import time
 
 from .config import (
-    HEATER_MAX_RUN_S, HEATER_R_OHM, P20_REF_K, PRESSURE_CUT_FRACTION,
+    HEATER_MAX_RUN_S, HEATER_R_OHM, P20_REF_K, PRESSURE_MAX_MBAR, PRESSURE_SOAK_FACTOR,
     SEAT_SCREW_TORQUE_MAX_NM, heater_current_a, heater_power_w, heater_voltage_v,
 )
 from .control import AUTO_P, AUTO_T, MANUAL
@@ -210,25 +210,26 @@ def loop_status(h):
                 f"PI resumes at the peak", "bright")
     if mode != AUTO_P:
         return ("", "dim")
-    cut = PRESSURE_CUT_FRACTION * h['p_target_mbar']
+    cut = PRESSURE_MAX_MBAR / PRESSURE_SOAK_FACTOR
     if not h['armed'] or h['p_raw'] is None or h['p_init']:
-        return (f"auto-p idle · target {h['p_target_mbar']:.2e} mbar · on arm: "
-                f"measure the baseline, creep up slowly, heater off above "
-                f"{cut:.2e} mbar", "dim")
+        return (f"auto-p idle · aim {h['p_target_mbar']:.1e} mbar · on arm: measure "
+                f"the baseline, creep up slowly, heater off above {cut:.2e} so "
+                f"P_vacuum stays under {PRESSURE_MAX_MBAR:.1e}", "dim")
     phase = h['p_phase']
     what = {
         'baseline': "measuring the baseline",
         'seek':     f"valve shut · creeping {h['p_rate_c_min']:.2f} °C/min",
         'hold':     "valve moved · holding, waiting for P_vacuum to settle",
-        'approach': f"valve open, steady · creeping {h['p_rate_c_min']:.2f} °C/min",
-        'near':     "near the cut line · holding",
+        'approach': f"gas flowing, below the aim · creeping {h['p_rate_c_min']:.2f} °C/min",
+        'trim':     f"gas flowing, above the aim · easing down {-h['p_rate_c_min']:.2f} °C/min",
         'cut':      "HEATER OFF · P_vacuum at or heading over the cut line",
-        'park':     "target too low to open for · not heating further",
+        'park':     "no room for flow below P_vacuum_max · not heating further",
     }[phase]
     base = f"{10 ** h['p_base']:.2e}" if h['p_base'] is not None else "…"
+    aim = f"{10 ** h['p_aim']:.2e}" if h['p_aim'] is not None else f"{h['p_target_mbar']:.2e}"
     up = f"{h['p_up_bar']:.2f} bar" if h['p_up_bar'] is not None else "not read"
     return (f"auto-p · {what} · P_vacuum {10 ** h['p_raw']:.2e} · baseline {base} · "
-            f"cut {cut:.2e} mbar · T_sp {h['setpoint_C']:.1f} °C · P_up {up}",
+            f"aim {aim} · cut {cut:.2e} mbar · T_sp {h['setpoint_C']:.1f} °C · P_up {up}",
             "warn" if phase in ('cut', 'park') or h['p_capped'] else "bright")
 
 

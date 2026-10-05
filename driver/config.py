@@ -214,8 +214,8 @@ PID_SETPOINT_DEFAULT  = 60.0       # °C
 # used (the opening point moved by tens of K between two seatings, KW40 →
 # KW41 2026). auto-p holds the start temperature while it measures the
 # baseline P_vacuum (valve shut), creeps up slowly, and backs right off as
-# soon as P_vacuum moves; it cuts the heater before P_vacuum reaches
-# P_vacuum_target. Only the upstream pressure P_up is trusted: it sets the
+# soon as P_vacuum moves. It aims for P_vacuum_target and cuts the heater well
+# before P_vacuum_max. Only the upstream pressure P_up is trusted: it sets the
 # creep rate. Decisions use the RAW gauge reading, sample by sample (4 Hz).
 #
 # Lag, from 33 t-min-tune openings (logs 1-5 Oct 2026, 0.20-0.50 N·m, heater
@@ -223,7 +223,10 @@ PID_SETPOINT_DEFAULT  = 60.0       # °C
 # (≤ 4.5 s); P_vacuum peaked ~1 s later (79 % within 3 s), but in 3 of 33 it
 # crept up for 5 s-2 min by ≤ 0.15 decades (×1.4: soak); the valve closed
 # ~10 K below where it was cut (0-27 K).
-PRESSURE_TARGET_DEFAULT = 1.5e-6   # mbar, P_vacuum_target
+PRESSURE_TARGET_DEFAULT = 5e-7     # mbar, P_vacuum_target: where to aim. Any flow near
+                                   # it will do (Edward, 5 Oct 2026); what matters is that
+                                   # gas flows and P_vacuum never exceeds PRESSURE_MAX_MBAR
+PRESSURE_MAX_MBAR       = 9e-7     # mbar, P_vacuum_max: never to be exceeded
 PRESSURE_TARGET_MIN     = 5e-11    # mbar, IKR 270 lower measuring limit
 PRESSURE_FILTER_S       = 2.0      # EMA time constant on log10(p), s — display and
                                    # batches / t-min-tune; auto-p decides on the raw reading
@@ -257,16 +260,29 @@ PRESSURE_MOVE_MIN_DEC   = 0.02     # decades (+4.7 %): never a smaller margin
 PRESSURE_FREEZE_BELOW_K = 1.0      # on movement the setpoint freezes this far below the TC,
                                    # which leads the valve body (rose ≤ 1.4 K after a cut)
 PRESSURE_STEADY_S       = 30.0     # no further creep until P_vacuum has not risen for this long
-PRESSURE_APPROACH_FRACTION = 0.25  # …then creep at this share of the rate
+PRESSURE_APPROACH_FRACTION = 0.25  # …then creep at this share of the rate within
+PRESSURE_NEAR_AIM_DEC   = 0.1      # this many decades (×1.26) of the aim; the full rate
+                                   # further below it
 
-# Cut — heater OFF when P_vacuum is above PRESSURE_CUT_FRACTION × target, or a
-# straight-line fit of the last PRESSURE_SLOPE_WINDOW_S predicts it will be
-# within PRESSURE_PREDICT_S. 0.7 leaves room for the ×1.4 soak seen after
-# cuts. Past halfway (log scale) from baseline to that line the setpoint may
-# only hold or fall. Heating resumes, holding the TC of that moment, once
-# P_vacuum is below PRESSURE_RESUME_FRACTION × the cut line.
-PRESSURE_CUT_FRACTION   = 0.7
-PRESSURE_RESUME_FRACTION = 0.8
+# Aim — P_vacuum_target, but at least PRESSURE_FLOW_MARGINS movement margins
+# above the baseline, so gas is seen to flow even when the baseline is high.
+# Above the aim (and below the cut line) the setpoint eases down at the
+# approach rate, at most PRESSURE_TRIM_BELOW_K below the TC.
+PRESSURE_FLOW_MARGINS   = 2.0
+PRESSURE_TRIM_BELOW_K   = 3.0
+
+# Cut — heater OFF when P_vacuum is above the cut line, P_vacuum_max ÷
+# PRESSURE_SOAK_FACTOR (9e-7 / 1.4 = 6.4e-7 mbar), or a straight-line fit of
+# the last PRESSURE_SLOPE_WINDOW_S predicts it will be within
+# PRESSURE_PREDICT_S. 1.4 is the most P_vacuum rose after a cut (1 of 33; the
+# others ≤ ×1.12). Heating resumes, holding the TC of that moment, as soon as
+# P_vacuum is below PRESSURE_RESUME_FRACTION × the cut line and no longer
+# predicted to cross it: the TC falls fast with the heater off (~0.4 K/s
+# after t-min-tune cuts), and once the valve shuts it takes long to reopen.
+# Above P_vacuum_max itself the valve opens too abruptly for the heater to
+# stop it: auto-p stops heating until it is restarted (re-arm, or mode).
+PRESSURE_SOAK_FACTOR    = 1.4
+PRESSURE_RESUME_FRACTION = 0.95
 PRESSURE_PREDICT_S      = 3.0      # s: P_vacuum peaked within 3 s of a cut in 79 % of cases
 PRESSURE_SLOPE_WINDOW_S = 2.0      # s of raw readings (8 at 4 Hz) for the rate of rise
 

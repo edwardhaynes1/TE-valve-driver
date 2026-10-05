@@ -209,27 +209,27 @@ def test_no_torque_uses_the_16_sept_reference():
 # ── auto-p (history 50): no opening point, creep, back off, cut ─────────────
 
 BASE = 1.5e-7
-TARGET = 1.5e-6          # cut line 1.05e-6, resume below 0.84e-6
+TARGET = 5e-7                                   # the aim
+CUT = config.PRESSURE_MAX_MBAR / config.PRESSURE_SOAK_FACTOR    # 6.43e-7
 
 
 def run_p(h, vacs, temp=40.0, p_up=1.0, start=T0, armed_now=True):
-    """Step auto-p through raw readings vacs (one per 0.25 s, temp fixed or a
-    function of the step). Returns (duties, messages, next time)."""
+    """Step auto-p through raw readings vacs (one per 0.25 s) at a fixed TC.
+    Returns (duties, messages, next time)."""
     if armed_now:
         armed(h, mode=controller.AUTO_P, p_target_mbar=TARGET)
     duties, msgs, now = [], [], start
-    for k, vac in enumerate(vacs):
-        tc = temp(k) if callable(temp) else temp
-        d, m = controller.step(h, now, 0.25, tc, True, vac=vac, p_up=p_up, p_up_t=now)
+    for vac in vacs:
+        d, m = controller.step(h, now, 0.25, temp, True, vac=vac, p_up=p_up, p_up_t=now)
         duties.append(d)
         msgs += m
         now += 0.25
     return duties, msgs, now
 
 
-def creeping(h, temp=40.0, p_up=1.0, seconds=20):
+def creeping(h, temp=40.0, p_up=1.0, seconds=20, base=BASE):
     """Armed, baseline measured, creeping with the valve shut."""
-    _, msgs, now = run_p(h, [BASE] * int(seconds * 4), temp=temp, p_up=p_up)
+    _, msgs, now = run_p(h, [base] * int(seconds * 4), temp=temp, p_up=p_up)
     assert h['p_phase'] == 'seek'
     return msgs, now
 
@@ -242,10 +242,15 @@ def test_the_creep_rate_follows_only_the_upstream_pressure(p_up, rate):
     assert controller._creep_rate(p_up) == pytest.approx(rate)
 
 
+def test_the_cut_line_leaves_room_for_the_soak_below_p_vacuum_max():
+    assert CUT == pytest.approx(6.43e-7, rel=1e-3)
+    assert TARGET < CUT < config.PRESSURE_MAX_MBAR == 9e-7
+
+
 def test_it_creeps_once_the_baseline_is_measured(h):
     msgs, _ = creeping(h)
-    assert any("baseline 1.50e-07 mbar" in m and "creeping 0.50 °C/min" in m for m in msgs)
-    # 0.5 °C/min from 40 °C, for the seconds after the baseline was known
+    assert any("baseline 1.50e-07 mbar" in m and "aiming at 5.00e-07" in m
+               and "creeping 0.50 °C/min" in m for m in msgs)
     assert 40.0 < h['setpoint_C'] < 40.0 + 0.5 * 20 / 60
 
 
@@ -265,46 +270,62 @@ def test_one_raw_sample_above_baseline_plus_margin_stops_the_creep(h):
 
 def test_above_the_cut_line_the_heater_is_off_at_once(h):
     _, now = creeping(h)
-    duties, msgs, _ = run_p(h, [0.71 * TARGET], start=now, armed_now=False)
+    duties, msgs, _ = run_p(h, [1.01 * CUT], start=now, armed_now=False)
     assert duties == [0.0] and h['p_phase'] == 'cut'
-    assert any("heater OFF" in m and "1.05e-06" in m for m in msgs)
+    assert any("heater OFF" in m and "6.43e-07" in m for m in msgs)
 
 
 def test_a_fast_rise_cuts_before_it_reaches_the_line(h):
     _, now = creeping(h)
-    # ×1.5 per sample: still below 0.7 × target when the heater goes off
-    rise = [BASE * 1.5 ** k for k in range(1, 8)]
+    rise = [BASE * 1.3 ** k for k in range(1, 8)]
     duties, msgs, _ = run_p(h, rise, start=now, armed_now=False)
     first_off = duties.index(0.0)
-    assert rise[first_off] < 0.7 * TARGET
+    assert rise[first_off] < CUT
     assert any("predicted" in m for m in msgs)
 
 
-def test_after_a_cut_it_holds_the_tc_of_that_moment_without_creeping(h):
+def test_after_a_cut_it_holds_the_tc_as_soon_as_it_is_back_below(h):
     _, now = creeping(h, temp=45.0)
-    _, _, now = run_p(h, [0.8 * TARGET] * 8, temp=45.0, start=now, armed_now=False)
-    duties, _, now = run_p(h, [0.6 * TARGET] * 4, temp=44.0, start=now, armed_now=False)
-    assert duties == [0.0] * 4                  # 0.6 is above 0.8 × 0.7 = 0.56
-    duties, msgs, now = run_p(h, [0.5 * TARGET], temp=43.0, start=now, armed_now=False)
+    _, _, now = run_p(h, [1.1 * CUT] * 8, temp=45.0, start=now, armed_now=False)
+    duties, _, now = run_p(h, [0.97 * CUT] * 4, temp=44.0, start=now, armed_now=False)
+    assert duties == [0.0] * 4                  # still above 0.95 × the cut line
+    duties, msgs, now = run_p(h, [0.9 * CUT], temp=43.0, start=now, armed_now=False)
     assert h['p_phase'] == 'hold' and h['setpoint_C'] == pytest.approx(43.0)
     assert duties[0] > 0.0 and any("holding 43.0 °C" in m for m in msgs)
 
 
-def test_near_the_cut_line_the_setpoint_never_rises(h):
+def test_above_p_vacuum_max_it_stops_until_restarted(h):
+    _, now = creeping(h)
+    duties, msgs, now = run_p(h, [1.2e-6], start=now, armed_now=False)
+    assert h['p_phase'] == 'stopped' and duties == [0.0]
+    assert any("above P_vacuum_max" in m for m in msgs)
+    duties, _, now = run_p(h, [BASE] * 240, start=now, armed_now=False)     # 60 s
+    assert h['p_phase'] == 'stopped' and set(duties) == {0.0}
+    run_p(h, [BASE], start=now)                                            # re-armed
+    assert h['p_phase'] == 'baseline'
+
+
+def test_above_the_aim_the_setpoint_eases_down_to_3_K_below_the_tc(h):
     _, now = creeping(h, temp=50.0)
-    near = 10 ** (0.5 * (math.log10(BASE) + math.log10(0.7 * TARGET)) + 0.05)
-    _, _, now = run_p(h, [near] * 40, temp=50.0, start=now, armed_now=False)
-    assert h['p_phase'] == 'near'
+    above_aim = 1.1 * TARGET                    # below the cut line
+    _, msgs, now = run_p(h, [above_aim] * 40, temp=50.0, start=now, armed_now=False)
+    assert h['p_phase'] == 'trim' and any("above the aim" in m for m in msgs)
     sp = h['setpoint_C']
-    run_p(h, [near] * 400, temp=50.0, start=now, armed_now=False)    # 100 s, steady
-    assert h['p_phase'] == 'near' and h['setpoint_C'] <= sp
+    _, _, now = run_p(h, [above_aim] * 4 * 600, temp=50.0, start=now, armed_now=False)
+    assert h['setpoint_C'] == pytest.approx(sp - 0.125 * 10, abs=0.01)     # 10 min
+    run_p(h, [above_aim] * 4 * 1200, temp=50.0, start=now, armed_now=False)
+    assert h['setpoint_C'] == pytest.approx(50.0 - config.PRESSURE_TRIM_BELOW_K)
 
 
-def test_steady_and_below_the_near_line_it_creeps_at_a_quarter(h):
+def test_well_below_the_aim_it_creeps_at_the_full_rate_once_steady(h):
     _, now = creeping(h, temp=50.0)
-    open_a_little = BASE * 1.3
-    _, msgs, now = run_p(h, [open_a_little] * 4 * 35, temp=50.0, start=now,
-                         armed_now=False)
+    _, msgs, _ = run_p(h, [BASE * 1.3] * 4 * 35, temp=50.0, start=now, armed_now=False)
+    assert h['p_phase'] == 'approach' and h['p_rate_c_min'] == pytest.approx(0.5)
+
+
+def test_close_below_the_aim_it_creeps_at_a_quarter(h):
+    _, now = creeping(h, temp=50.0)
+    _, msgs, _ = run_p(h, [0.9 * TARGET] * 4 * 35, temp=50.0, start=now, armed_now=False)
     assert h['p_phase'] == 'approach' and h['p_rate_c_min'] == pytest.approx(0.125)
     assert any("steady" in m and "creeping 0.12 °C/min" in m for m in msgs)
 
@@ -317,38 +338,34 @@ def test_back_at_baseline_it_creeps_at_the_full_rate_again(h):
     assert any("back at baseline" in m for m in msgs)
 
 
-def test_a_target_within_the_margin_of_the_baseline_parks(h):
-    # 0.7 × target just above the baseline, but below baseline + margin
-    armed(h, mode=controller.AUTO_P, p_target_mbar=1.02 * BASE / 0.7)
-    now = T0
-    for _ in range(80):
-        controller.step(h, now, 0.25, 40.0, True, vac=BASE, p_up=1.0, p_up_t=now)
-        now += 0.25
+def test_a_high_baseline_raises_the_aim_so_that_flow_shows(h):
+    msgs, _ = creeping(h, base=4.8e-7)
+    assert 10 ** h['p_aim'] > TARGET
+    assert any("raised from 5.0e-07 so that flow shows" in m for m in msgs)
+
+
+def test_a_baseline_just_under_the_cut_line_parks(h):
+    _, _, _ = run_p(h, [0.98 * CUT] * 80)       # baseline + margin is past the cut line
     assert h['p_phase'] == 'park' and h['setpoint_C'] <= 40.0
 
 
-def test_a_target_below_the_baseline_keeps_the_heater_off():
-    h2 = controller.new_state()
-    controller.command(h2, T0, armed=True, mode=controller.AUTO_P, p_target_mbar=BASE)
-    now, d = T0, []
-    for _ in range(80):
-        d.append(controller.step(h2, now, 0.25, 40.0, True, vac=BASE, p_up=1.0,
-                                 p_up_t=now)[0])
-        now += 0.25
-    assert h2['p_phase'] == 'cut' and d[-1] == 0.0
+def test_a_baseline_above_the_cut_line_keeps_the_heater_off_and_says_why(h):
+    duties, msgs, _ = run_p(h, [8e-7] * 80)
+    assert h['p_phase'] == 'cut' and duties[-1] == 0.0
+    assert any("no room for gas flow below P_vacuum_max" in m for m in msgs)
 
 
 def test_started_with_the_valve_open_it_cuts_then_creeps_once_it_shuts(h):
-    # armed with flow already at 0.9 × target: that reading becomes the
-    # "baseline", the heater goes off, and the valve shuts as it cools
-    _, _, now = run_p(h, [0.9 * TARGET] * 60)
+    # armed with flow already over the cut line: the heater goes off, and the
+    # valve shuts as it cools
+    _, _, now = run_p(h, [8e-7] * 60)
     assert h['p_phase'] == 'cut'
     run_p(h, [BASE] * 4 * 40, start=now, armed_now=False)
     assert h['p_phase'] == 'seek' and h['p_base'] == pytest.approx(math.log10(BASE))
 
 
 def test_the_cut_applies_while_the_baseline_is_still_being_measured(h):
-    duties, _, _ = run_p(h, [0.9 * TARGET] * 4)
+    duties, _, _ = run_p(h, [8e-7] * 4)
     assert h['p_base'] is None and duties[1:] == [0.0] * 3
 
 
