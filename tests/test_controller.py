@@ -287,6 +287,35 @@ def test_a_one_reading_spike_changes_nothing(h):
     assert h['setpoint_C'] > sp                     # still creeping
 
 
+def test_back_at_baseline_within_30_s_is_a_false_alarm(h):
+    # 5 Oct 2026, 17:47: a few readings at 2.9e-7, back 2 s later; the
+    # setpoint stayed frozen 4.5 K down and the valve cooled for minutes
+    _, now = creeping(h, temp=40.0)
+    sp = h['setpoint_C']
+    _, _, now = run_p(h, [2.9e-7] * 3, temp=40.0, start=now, armed_now=False)
+    assert h['p_phase'] in ('hold', 'cut') and h['setpoint_C'] < sp - 4
+    _, msgs, _ = run_p(h, [BASE] * 8, temp=40.0, start=now, armed_now=False)
+    # resumed from where it was, capped at the TC: 40 °C, not 35.75 °C
+    assert h['p_phase'] == 'seek' and h['setpoint_C'] >= 40.0
+    assert any("false alarm" in m for m in msgs)
+
+
+def test_back_at_baseline_after_30_s_creeps_on_from_the_freeze(h):
+    _, now = creeping(h, temp=40.0)
+    _, _, now = run_p(h, [2.9e-7] * 4 * 35, temp=40.0, start=now, armed_now=False)
+    frozen = h['setpoint_C']
+    _, msgs, _ = run_p(h, [BASE] * 2, temp=40.0, start=now, armed_now=False)
+    assert h['p_phase'] == 'seek' and h['setpoint_C'] < frozen + 0.1
+    assert not any("false alarm" in m for m in msgs)
+
+
+def test_a_false_alarm_never_resumes_above_the_tc(h):
+    _, now = creeping(h, temp=40.0)
+    _, _, now = run_p(h, [2.9e-7] * 3, temp=40.0, start=now, armed_now=False)
+    run_p(h, [BASE] * 2, temp=38.0, start=now, armed_now=False)        # TC fell
+    assert h['setpoint_C'] == pytest.approx(38.0, abs=0.01)
+
+
 @pytest.mark.parametrize("rate, freeze", [(1.5, 4.25), (0.3, 1.0)])
 def test_the_freeze_grows_with_the_creep_rate(rate, freeze):
     assert controller._freeze_k(rate) == pytest.approx(freeze)

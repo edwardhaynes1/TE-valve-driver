@@ -4,6 +4,16 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 54. Back at the baseline within 30 s is a false alarm — 5 Oct 2026
+At 17:47 a spike a few readings long (2.15 → 2.9e-7 mbar) passed the
+two-readings check, froze the setpoint 4.5 K below the TC (28.9 → 24.4 °C),
+and P_vacuum was back at the baseline 2 s later. The creep then resumed
+from 24.4 °C, so the heater stayed off for ~3 min and the valve cooled.
+Now, back at the baseline within PRESSURE_FALSE_ALARM_S (30 s) of the
+movement or cut, the creep resumes from the setpoint before the freeze,
+at most the TC of that moment; the event log says "false alarm". A real
+opening that lasts longer still creeps on from the freeze.
+
 ## 53. auto-p creeps 3× faster and ignores one-reading spikes — 5 Oct 2026
 Run te-sensor_20261005_162143 (0.50 N·m, P_up 0.96 bar): at 0.53 °C/min
 the valve went 30 → 56 °C before the 60 min arming limit ended it; at

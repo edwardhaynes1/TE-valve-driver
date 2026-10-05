@@ -31,7 +31,7 @@ from .config import (
     HEATER_MAX_DUTY, HEATER_MAX_RUN_S, LABJACK_SAMPLE_HZ, PID_D_FILTER_S,
     PID_KD, PID_KI, PID_KP, PID_SETPOINT_DEFAULT, PRESSURE_APPROACH_FRACTION,
     PRESSURE_BAD_READS_TO_TRIP, PRESSURE_BASE_GUARD_S, PRESSURE_BASE_MIN_S,
-    PRESSURE_BODY_LAG_S,
+    PRESSURE_BODY_LAG_S, PRESSURE_FALSE_ALARM_S,
     PRESSURE_BASE_WINDOW_S, PRESSURE_CREEP_C_MIN, PRESSURE_CREEP_MAX_C_MIN,
     PRESSURE_CREEP_MIN_C_MIN, PRESSURE_CREEP_REF_BAR, PRESSURE_CREEP_UP_EXP,
     PRESSURE_EFOLD_REF_K, PRESSURE_FILTER_S, PRESSURE_FLOW_MARGINS,
@@ -124,6 +124,8 @@ def new_state():
         p_capped        = False,   # creep reached the setpoint limit
         p_aim           = None,    # log10 of where auto-p aims, mbar (≥ the target)
         p_creeping      = 0.0,     # the last creep rate, °C/min (sets the freeze)
+        p_sp_before     = None,    # setpoint when creeping last stopped…
+        p_moved_at      = None,    # …and when (a false alarm resumes from it)
         t_check         = False,   # auto-t: re-evaluate a burst (armed / setpoint changed)
         t_burst         = None,    # auto-t: None, 'burst', 'coast'
         t_burst_t0      = None,
@@ -575,6 +577,8 @@ def _enter(h, phase, now, temp, msgs, why):
     """Change phase. Leaving a creeping phase for one that must not heat
     further freezes the setpoint below the TC: the TC sits by the heater and
     leads the valve body, the more so the faster it creeps."""
+    if h['p_phase'] in ('seek', 'approach') and phase in ('hold', 'trim', 'park', 'cut'):
+        h.update(p_sp_before=h['setpoint_C'], p_moved_at=now)
     if h['p_phase'] in ('seek', 'approach') and phase in ('hold', 'trim', 'park'):
         h['setpoint_C'] = min(h['setpoint_C'], temp - _freeze_k(h['p_creeping']))
     h.update(p_phase=phase, p_since=now)
@@ -606,6 +610,7 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
         h.update(p_init=False, p_phase='baseline', p_since=now, p_filt=y, p_raw=y,
                  p_base=None, p_quiet_since=now, p_margin=PRESSURE_MOVE_MIN_DEC, p_override=None,
                  p_capped=False, p_rate_c_min=0.0, p_aim=None, p_creeping=0.0,
+                 p_sp_before=None, p_moved_at=None,
                  setpoint_C=min(tsp_hi, temp))
         up = f"{p_up:.2f} bar" if p_up is not None else "not read — slowest creep"
         msgs.append(f"auto-p: no opening point assumed — holding {temp:.1f} °C "
@@ -688,8 +693,15 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
     if yc <= moving_line:                       # valve shut
         if phase not in ('baseline', 'seek'):
             h['p_quiet_since'] = now
+            moved = h['p_moved_at']
+            if moved is not None and now - moved <= PRESSURE_FALSE_ALARM_S:
+                h['setpoint_C'] = max(h['setpoint_C'], min(h['p_sp_before'], temp))
+                what = f"false alarm, back at baseline after {now - moved:.1f} s"
+            else:
+                what = "P_vacuum back at baseline"
+            h['p_moved_at'] = None
             _enter(h, 'seek', now, temp, msgs,
-                   f"P_vacuum back at baseline ({vac:.2e} mbar) — creeping "
+                   f"{what} ({vac:.2e} mbar) — creeping "
                    f"{rate:.2f} °C/min from {h['setpoint_C']:.1f} °C")
         elif phase == 'baseline':
             raised = (f", raised from {h['p_target_mbar']:.1e} so that flow shows"

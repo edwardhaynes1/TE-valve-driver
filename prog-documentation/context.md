@@ -70,6 +70,7 @@ differently from this page, fix one of them. Add terms as they appear.
 | **Movement** | Two raw P_vacuum readings in a row above baseline + margin: the first sign the valve is opening (one alone is a *spike*). The margin is 4 × the gauge's scatter about a straight line over the baseline window, at least 0.02 decades (+4.7 %). The setpoint freezes below the TC by the valve body's lag at the creep rate: rate × 170 s, at least 1 K (4.25 K at 1.5 °C/min). |
 | **Spike** | A single P_vacuum reading well above its neighbours, straight back down (four in an hour on 5 Oct 2026, 16:21). auto-p ignores it: it decides on the lower of each two readings, except that one reading over the cut line still cuts. |
 | **Hold (auto-p)** | After movement, or after a cut: no creep until P_vacuum has not risen for 30 s. |
+| **False alarm** | P_vacuum back at the baseline within 30 s of the movement (a spike a few readings long). The creep resumes from the setpoint before the freeze, at most the TC, instead of from the frozen value. |
 | **Aim** | P_vacuum_target, raised to the baseline + 2 movement margins if that is higher (so the flow shows), and kept below the cut line. |
 | **Approach (auto-p)** | The valve is open and P_vacuum steady below the *aim*: creep at the seek rate, or at ¼ of it within 0.1 decades of the aim. Rising again → hold. |
 | **Trim** | P_vacuum more than 0.02 decades above the aim (and below the cut line) until it is back under the aim: the setpoint eases down at ¼ of the seek rate, at most 3 K below the TC, and never rises. |

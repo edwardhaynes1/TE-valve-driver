@@ -268,6 +268,11 @@ PRESSURE_MOVE_MIN_DEC   = 0.02     # decades (+4.7 %): never a smaller margin
 # least PRESSURE_FREEZE_BELOW_K (the TC rose ≤ 1.4 K after a cut).
 PRESSURE_FREEZE_BELOW_K = 1.0
 PRESSURE_BODY_LAG_S     = 170.0
+# Back at the baseline within this long of the movement: a false alarm (a
+# spike a few readings long, 5 Oct 2026 17:47). The creep resumes from the
+# setpoint before the freeze, at most the TC — not from the frozen value,
+# which let the valve cool 4.5 K for ~3 min (history 54).
+PRESSURE_FALSE_ALARM_S  = 30.0
 PRESSURE_STEADY_S       = 30.0     # no further creep until P_vacuum has not risen for this long
 PRESSURE_APPROACH_FRACTION = 0.25  # …then creep at this share of the rate within
 PRESSURE_NEAR_AIM_DEC   = 0.1      # this many decades (×1.26) of the aim; the full rate
