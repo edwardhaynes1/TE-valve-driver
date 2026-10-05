@@ -171,23 +171,27 @@ def test_clicking_the_torque_opens_the_box_to_change_it(gui):
 
 def test_every_row_above_the_charts_is_one_line_high(gui):
     """History 46: no padding above or below a row, so the charts get the
-    height. A row of buttons and boxes may add only their 1 px border and
-    the 1 px Tk keeps inside it."""
+    height. Checked by what the window sets, not by pixels: a button's own
+    frame is the platform's (Windows draws taller buttons than Linux)."""
     gui._set_entry(gui.seat_entry, "0.4")
     gui._set_seat_screw()
     gui.mode_var.set("t-min-tune")
     gui._on_mode()
     gui._poll()
     gui.root.update()
-    line = gui.f.metrics("linespace")
     rows = {"seat screw": gui.seat_row, "mode": gui.arm_btn.master, "inputs": gui._row2,
-            "upstream target": gui._up_row_frame}
+            "upstream target": gui._up_row_frame, "status lines": gui._lines_frame}
     for name, row in rows.items():
-        assert row.winfo_reqheight() <= line + 4, name
-        assert row.pack_info().get("pady") in (0, "0"), name
-    lines = [w for w in gui._lines_frame.pack_slaves()]
-    assert lines, "the ARMED / status lines are shown"
-    for w in lines:
-        assert w.winfo_reqheight() == line * w.cget("text").count("\n") + line, w.cget("text")
+        assert int(str(row.pack_info()["pady"])) == 0, name
+        kids = row.pack_slaves()
+        assert kids, name
+        for w in kids:
+            assert int(str(w.pack_info()["pady"])) == 0, (name, w)
+            if w.winfo_class() in ("Label", "Button", "Radiobutton"):
+                assert int(str(w.cget("pady"))) == 0, (name, w)
+            if w.winfo_class() == "Label":
+                assert int(str(w.cget("bd"))) == 0, (name, w)
+        # nothing taller than its tallest widget: no gap above or below
+        assert row.winfo_reqheight() == max(w.winfo_reqheight() for w in kids), name
     assert gui.status_text.cget("height") == 7
     assert "\n\n" not in gui.status_text.get("1.0", "end").rstrip("\n")   # no blank line
