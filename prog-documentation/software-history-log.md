@@ -4,6 +4,25 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 53. auto-p creeps 3× faster and ignores one-reading spikes — 5 Oct 2026
+Run te-sensor_20261005_162143 (0.50 N·m, P_up 0.96 bar): at 0.53 °C/min
+the valve went 30 → 56 °C before the 60 min arming limit ended it; at
+0.50 N·m it opened at ~92 °C in KW41. Four single-reading spikes
+(2.2 → 3.4e-7 mbar and straight back) each made it back off 1.5-2 K.
+Edward agreed: creep 1.5 °C/min at 1 bar (0.3-2 °C/min); the freeze below
+the TC grows with the rate, by the valve body's lag (TC leads it ~8.5 K at
+3 °C/min, ~170 s): 4.25 K at 1.5 °C/min, at least 1 K; movement and the
+rate of rise for the prediction use the lower of each two readings, so a
+spike moves nothing, while one reading over the cut line still cuts. The
+60 min limit stays.
+
+Found on the way: the trim could RAISE a setpoint frozen below its 3 K
+floor; it now never rises. And the gauge's 0.005-decade steps flicked trim
+on and off at the aim (~150 log lines in 40 min in simulation): it now
+starts 0.02 decades above the aim. In simulation, valves with 10 K
+hysteresis hold 4.4-5.3e-7 mbar; 1 K-hysteresis valves shut again after
+each freeze and cycle.
+
 ## 52. UPSTREAM P shows the latest reading; no P20, no value on the chart — 5 Oct 2026
 Edward: the upstream chart printed 0.9568 bar while UPSTREAM P at the top
 left said "---". The readout showed the mean of the Keller samples since the

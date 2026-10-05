@@ -246,19 +246,28 @@ PRESSURE_BASE_MIN_S     = 5.0      # …and available once this much has been re
 # Creep — valve shut. Flow through a given opening grows as P_up^1.5
 # (0.45 N·m: 1.0 → 5.2 bar gave ×11), so the creep slows by the same factor:
 #     rate = PRESSURE_CREEP_C_MIN × (PRESSURE_CREEP_REF_BAR / P_up)^1.5
-PRESSURE_CREEP_C_MIN    = 0.5      # °C/min at PRESSURE_CREEP_REF_BAR
+# 1.5 °C/min (history 53): at 0.5 °C/min a 0.50 N·m valve went 30 → 56 °C in
+# the 60 min arming limit (5 Oct 2026, 16:21) and opens at ~92 °C.
+PRESSURE_CREEP_C_MIN    = 1.5      # °C/min at PRESSURE_CREEP_REF_BAR
 PRESSURE_CREEP_REF_BAR  = 1.0
 PRESSURE_CREEP_UP_EXP   = 1.5
-PRESSURE_CREEP_MIN_C_MIN = 0.1     # slowest; also used while P_up is not read
-PRESSURE_CREEP_MAX_C_MIN = 1.0     # fastest
+PRESSURE_CREEP_MIN_C_MIN = 0.3     # slowest; also used while P_up is not read
+PRESSURE_CREEP_MAX_C_MIN = 2.0     # fastest
 
-# Movement — the first sign that the valve is opening: one raw sample above
-# baseline + margin. The margin is 4 × the gauge's scatter over the baseline
-# window, so it triggers as early as the noise allows.
+# Movement — the first sign that the valve is opening: two raw readings in a
+# row above baseline + margin (one alone was a spike four times in an hour on
+# 5 Oct 2026, 16:21, each costing a back-off). The margin is 4 × the gauge's
+# scatter over the baseline window, so it triggers as early as the noise
+# allows. The rate of rise for the cut prediction uses the same pairs (the
+# lower of each two readings), so a spike can't fake a fast rise; a single
+# reading over the cut line still cuts at once.
 PRESSURE_MOVE_SIGMAS    = 4.0
 PRESSURE_MOVE_MIN_DEC   = 0.02     # decades (+4.7 %): never a smaller margin
-PRESSURE_FREEZE_BELOW_K = 1.0      # on movement the setpoint freezes this far below the TC,
-                                   # which leads the valve body (rose ≤ 1.4 K after a cut)
+# On movement the setpoint freezes below the TC by what the valve body lags
+# it at the creep rate (TC lags the body ~8.5 K at 3 °C/min: ~170 s), at
+# least PRESSURE_FREEZE_BELOW_K (the TC rose ≤ 1.4 K after a cut).
+PRESSURE_FREEZE_BELOW_K = 1.0
+PRESSURE_BODY_LAG_S     = 170.0
 PRESSURE_STEADY_S       = 30.0     # no further creep until P_vacuum has not risen for this long
 PRESSURE_APPROACH_FRACTION = 0.25  # …then creep at this share of the rate within
 PRESSURE_NEAR_AIM_DEC   = 0.1      # this many decades (×1.26) of the aim; the full rate
@@ -270,6 +279,9 @@ PRESSURE_NEAR_AIM_DEC   = 0.1      # this many decades (×1.26) of the aim; the 
 # approach rate, at most PRESSURE_TRIM_BELOW_K below the TC.
 PRESSURE_FLOW_MARGINS   = 2.0
 PRESSURE_TRIM_BELOW_K   = 3.0
+PRESSURE_AIM_BAND_DEC   = 0.02     # easing down starts this far (×1.05) above the aim and
+                                   # ends below it, so the gauge's 0.005-decade steps don't
+                                   # flick it on and off
 
 # Cut — heater OFF when P_vacuum is above the cut line, P_vacuum_max ÷
 # PRESSURE_SOAK_FACTOR (9e-7 / 1.4 = 6.4e-7 mbar), or a straight-line fit of

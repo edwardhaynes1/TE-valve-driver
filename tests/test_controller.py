@@ -235,8 +235,8 @@ def creeping(h, temp=40.0, p_up=1.0, seconds=20, base=BASE):
 
 
 @pytest.mark.parametrize("p_up, rate", [
-    (1.0, 0.5), (2.0, 0.5 / 2 ** 1.5), (0.5, 1.0),   # 0.5 bar: 1.41, kept at the fastest
-    (5.0, 0.1), (None, 0.1),                         # slowest: high P_up, or not read
+    (1.0, 1.5), (2.0, 1.5 / 2 ** 1.5), (0.5, 2.0),   # 0.5 bar: 4.24, kept at the fastest
+    (5.0, 0.3), (None, 0.3),                         # slowest: high P_up, or not read
 ])
 def test_the_creep_rate_follows_only_the_upstream_pressure(p_up, rate):
     assert controller._creep_rate(p_up) == pytest.approx(rate)
@@ -250,16 +250,19 @@ def test_the_cut_line_leaves_room_for_the_soak_below_p_vacuum_max():
 def test_it_creeps_once_the_baseline_is_measured(h):
     msgs, _ = creeping(h)
     assert any("baseline 1.50e-07 mbar" in m and "aiming at 5.00e-07" in m
-               and "creeping 0.50 °C/min" in m for m in msgs)
-    assert 40.0 < h['setpoint_C'] < 40.0 + 0.5 * 20 / 60
+               and "creeping 1.50 °C/min" in m for m in msgs)
+    assert 40.0 < h['setpoint_C'] < 40.0 + 1.5 * 20 / 60
 
 
-def test_one_raw_sample_above_baseline_plus_margin_stops_the_creep(h):
+def test_two_readings_above_baseline_plus_margin_stop_the_creep(h):
     _, now = creeping(h, temp=40.0)
     moved = BASE * 10 ** (config.PRESSURE_MOVE_MIN_DEC + 0.005)
+    _, _, now = run_p(h, [moved], temp=40.0, start=now, armed_now=False)
+    assert h['p_phase'] == 'seek'                    # one reading: not yet
     _, msgs, now = run_p(h, [moved], temp=40.0, start=now, armed_now=False)
     assert h['p_phase'] == 'hold'
-    assert h['setpoint_C'] == pytest.approx(40.0 - config.PRESSURE_FREEZE_BELOW_K)
+    # frozen below the TC by the body's lag at 1.5 °C/min: 1.5 × 170 / 60 = 4.25 K
+    assert h['setpoint_C'] == pytest.approx(40.0 - 4.25)
     assert any("moved" in m and "creep stopped" in m for m in msgs)
     # no creep while P_vacuum is still rising, nor for 30 s after
     sp = h['setpoint_C']
@@ -273,6 +276,20 @@ def test_above_the_cut_line_the_heater_is_off_at_once(h):
     duties, msgs, _ = run_p(h, [1.01 * CUT], start=now, armed_now=False)
     assert duties == [0.0] and h['p_phase'] == 'cut'
     assert any("heater OFF" in m and "6.43e-07" in m for m in msgs)
+
+
+def test_a_one_reading_spike_changes_nothing(h):
+    # 5 Oct 2026, 16:21: single readings 2.2 → 3.4e-7 and straight back
+    _, now = creeping(h)
+    sp = h['setpoint_C']
+    duties, msgs, _ = run_p(h, [3.4e-7, BASE, BASE], start=now, armed_now=False)
+    assert h['p_phase'] == 'seek' and 0.0 not in duties and msgs == []
+    assert h['setpoint_C'] > sp                     # still creeping
+
+
+@pytest.mark.parametrize("rate, freeze", [(1.5, 4.25), (0.3, 1.0)])
+def test_the_freeze_grows_with_the_creep_rate(rate, freeze):
+    assert controller._freeze_k(rate) == pytest.approx(freeze)
 
 
 def test_a_fast_rise_cuts_before_it_reaches_the_line(h):
@@ -306,35 +323,46 @@ def test_above_p_vacuum_max_it_stops_until_restarted(h):
 
 
 def test_above_the_aim_the_setpoint_eases_down_to_3_K_below_the_tc(h):
-    _, now = creeping(h, temp=50.0)
-    above_aim = 1.1 * TARGET                    # below the cut line
-    _, msgs, now = run_p(h, [above_aim] * 40, temp=50.0, start=now, armed_now=False)
+    _, now = creeping(h, temp=40.0)
+    _, _, now = run_p(h, [1.1 * CUT] * 2, temp=40.0, start=now, armed_now=False)
+    assert h['p_phase'] == 'cut'
+    # back under the cut line but above the aim: hold at the TC, then trim
+    _, msgs, now = run_p(h, [1.1 * TARGET] * 4 * 60, temp=40.0, start=now,
+                         armed_now=False)
     assert h['p_phase'] == 'trim' and any("above the aim" in m for m in msgs)
-    sp = h['setpoint_C']
-    _, _, now = run_p(h, [above_aim] * 4 * 600, temp=50.0, start=now, armed_now=False)
-    assert h['setpoint_C'] == pytest.approx(sp - 0.125 * 10, abs=0.01)     # 10 min
-    run_p(h, [above_aim] * 4 * 1200, temp=50.0, start=now, armed_now=False)
-    assert h['setpoint_C'] == pytest.approx(50.0 - config.PRESSURE_TRIM_BELOW_K)
+    assert h['setpoint_C'] == pytest.approx(40.0 - 0.375 * (60 - 0.5) / 60, abs=0.01)
+    run_p(h, [1.1 * TARGET] * 4 * 600, temp=40.0, start=now, armed_now=False)
+    assert h['setpoint_C'] == pytest.approx(40.0 - config.PRESSURE_TRIM_BELOW_K)
+
+
+def test_above_the_aim_the_setpoint_never_rises(h):
+    _, now = creeping(h, temp=40.0)
+    _, _, now = run_p(h, [1.1 * CUT] * 2, temp=40.0, start=now, armed_now=False)
+    _, _, now = run_p(h, [1.1 * TARGET] * 20, temp=40.0, start=now, armed_now=False)
+    assert h['p_phase'] == 'trim'
+    h['setpoint_C'] = 35.0                           # e.g. frozen below the 3 K floor
+    run_p(h, [1.1 * TARGET] * 400, temp=40.0, start=now, armed_now=False)
+    assert h['setpoint_C'] <= 35.0
 
 
 def test_well_below_the_aim_it_creeps_at_the_full_rate_once_steady(h):
     _, now = creeping(h, temp=50.0)
     _, msgs, _ = run_p(h, [BASE * 1.3] * 4 * 35, temp=50.0, start=now, armed_now=False)
-    assert h['p_phase'] == 'approach' and h['p_rate_c_min'] == pytest.approx(0.5)
+    assert h['p_phase'] == 'approach' and h['p_rate_c_min'] == pytest.approx(1.5)
 
 
 def test_close_below_the_aim_it_creeps_at_a_quarter(h):
     _, now = creeping(h, temp=50.0)
     _, msgs, _ = run_p(h, [0.9 * TARGET] * 4 * 35, temp=50.0, start=now, armed_now=False)
-    assert h['p_phase'] == 'approach' and h['p_rate_c_min'] == pytest.approx(0.125)
-    assert any("steady" in m and "creeping 0.12 °C/min" in m for m in msgs)
+    assert h['p_phase'] == 'approach' and h['p_rate_c_min'] == pytest.approx(0.375)
+    assert any("steady" in m and "creeping 0.38 °C/min" in m for m in msgs)
 
 
 def test_back_at_baseline_it_creeps_at_the_full_rate_again(h):
     _, now = creeping(h)
     _, _, now = run_p(h, [BASE * 1.3] * 8, start=now, armed_now=False)
-    _, msgs, _ = run_p(h, [BASE], start=now, armed_now=False)
-    assert h['p_phase'] == 'seek' and h['p_rate_c_min'] == pytest.approx(0.5)
+    _, msgs, _ = run_p(h, [BASE, BASE], start=now, armed_now=False)
+    assert h['p_phase'] == 'seek' and h['p_rate_c_min'] == pytest.approx(1.5)
     assert any("back at baseline" in m for m in msgs)
 
 
