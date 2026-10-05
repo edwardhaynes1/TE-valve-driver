@@ -21,12 +21,13 @@ Valve open/close times are detected from the chamber pressure: the valve
 counts as open while the pressure sits clearly above its fitted baseline
 (dotted blue). Both plots get dashed vertical lines at those times.
 
-The seat screw torque (N·m, as entered in the driver) goes in the figure
-title and the terminal summary; if it changed during the run, both plots
-get a dotted vertical line at each change. Logs from before the column
-existed say "not recorded". The lock nut torque (history 44) is shown the
-same way, with its own dotted lines; logs from before it existed leave it
-out.
+The figure title gives the seat screw torque and the run's median upstream
+pressure, e.g. "M_screw = 0.40 N·m, P_up ≈ 0.96 bar (abs)"; the log's
+name and start date sit below it in small grey (history 49). If the torque
+changed during the run, the title lists each value and both plots get a
+dotted vertical line at each change. Logs without it say "M_screw not
+recorded". The lock nut torque (history 44) is left out of the title but
+still goes in the terminal summary, with its own dotted lines.
 
 Step-response fits, upstream decay rates (raw pressure), heater energy and
 the outgassing fit are printed to the terminal.
@@ -55,6 +56,8 @@ import sys
 sys.dont_write_bytecode = True   # keep __pycache__ folders out of the project
 
 import argparse
+import datetime
+import re
 import sys
 import traceback
 
@@ -551,6 +554,43 @@ def seat_screw_text(history, what="seat screw"):
     return text
 
 
+def m_screw_text(history):
+    """'M_screw = 0.40 N·m', or '0.40 → 0.45 N·m' if it changed. Blanks are
+    skipped (the torque is often typed in a few seconds after the start);
+    'M_screw not recorded' if it never was."""
+    values = []
+    for _, v in history or []:
+        if v is not None and (not values or v != values[-1]):
+            values.append(v)
+    if not values:
+        return "M_screw not recorded"
+    return "M_screw = " + " → ".join(f"{v:.2f}" for v in values) + " N·m"
+
+
+def figure_title(df, cols, seat_screw):
+    """'M_screw = 0.40 N·m, P_up ≈ 0.96 bar (abs)'. P_up is the run's median
+    upstream pressure, so a refill spike does not move it; left out if the
+    log has none."""
+    parts = [m_screw_text(seat_screw)]
+    col = cols.get("upstream")
+    if col and df[col].notna().any():
+        parts.append(f"P_up ≈ {df[col].median():.2f} bar (abs)")
+    return ", ".join(parts)
+
+
+def figure_subtitle(filename):
+    """The log's name and, if the name carries one, its start date:
+    'te-sensor_20261001_144601.csv  ·  1 Oct 2026 14:46'."""
+    m = re.search(r"(\d{8})_(\d{6})", filename)
+    if not m:
+        return filename
+    try:
+        d = datetime.datetime.strptime("".join(m.groups()), "%Y%m%d%H%M%S")
+    except ValueError:
+        return filename
+    return f"{filename}  ·  {d.day} {d:%b %Y %H:%M}"
+
+
 def mark_seat_screw(axes, history, label_ax, what="seat screw", colour=SEAT_SCREW_COLOUR):
     """Dotted vertical lines where the seat screw (or lock nut) torque
     changed mid-run."""
@@ -687,7 +727,9 @@ def make_figure(df, cols, steps, segs, outgas, title, valve=(None, []),
     else:
         fig, ax = plt.subplots(figsize=(14, 7 if has_main else 5.5))
         ax_t, ax_m = (None, ax) if has_main else (ax, None)
-    fig.suptitle(f"{title}  ·  {torques_text(seat_screw, lock_nut)}", fontsize=12, y=0.99)
+    fig.suptitle(figure_title(df, cols, seat_screw), fontsize=13, y=0.995)
+    fig.text(0.5, 0.968, figure_subtitle(title), ha="center", va="top",
+             fontsize=9, color="0.45")
 
     if ax_t is not None:
         panel_timeseries(ax_t, df, cols, roles=TOP_ROLES)
@@ -732,7 +774,7 @@ def make_figure(df, cols, steps, segs, outgas, title, valve=(None, []),
         mark_seat_screw(hosts, lock_nut, ax_m if ax_m is not None else ax_t,
                         what="lock nut", colour=LOCK_NUT_COLOUR)
 
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.tight_layout(rect=(0, 0, 1, 0.955))
     return fig
 
 

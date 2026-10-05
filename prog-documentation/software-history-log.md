@@ -4,6 +4,16 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 49. The plot title gives M_screw and P_up — 5 Oct 2026
+The title read "te-sensor_20261001_144601.csv · seat screw torque not
+recorded → 0.40 N·m at 4.5 s": the torque is typed in a few seconds after
+the start, so every log began "not recorded". The title is now
+"M_screw = 0.40 N·m, P_up ≈ 0.96 bar (abs)": a blank before the first
+entry is skipped, and P_up is the run's median upstream pressure, so a
+refill spike does not move it. The file name and start date sit below in
+small grey. The lock nut is left out of the title (it is characterised
+loose; history 45) but stays in the terminal summary and its markers.
+
 ## 48. The upstream chart prints its latest value, axis to 4 decimals — 5 Oct 2026
 Edward read the upstream trace as drawn the wrong way up. It was not: at
 10:31 the pressure was 0.9601 bar against a target of 0.9526 bar, and the

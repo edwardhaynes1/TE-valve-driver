@@ -126,9 +126,65 @@ def test_the_figure_title_and_markers_show_it(plotter, tmp_path):
     history = plotter.seat_screw_history(df, cols)
     fig = plotter.make_figure(df, cols, [], [], None, "log.csv",
                               seat_screw=history)
-    assert "seat screw torque 0.40 N·m → 0.45 N·m at 150.0 s" in fig._suptitle.get_text()
+    assert fig._suptitle.get_text().startswith("M_screw = 0.40 → 0.45 N·m")
     labels = [t.get_text() for ax in fig.axes for t in ax.texts]
     assert any("seat screw 0.45 N·m" in s for s in labels)
+
+
+# ── figure title (history 49) ───────────────────────────────────────────────
+
+def test_title_skips_a_torque_entered_after_the_start(plotter, tmp_path):
+    df, cols = loaded(plotter, tmp_path, with_seat_screw([np.nan] * 9 + [0.4] * 591))
+    title = plotter.figure_title(df, cols, plotter.seat_screw_history(df, cols))
+    assert title.startswith("M_screw = 0.40 N·m, ")
+    assert "not recorded" not in title
+
+
+def test_title_says_when_the_torque_was_never_entered(plotter, tmp_path):
+    df, cols = loaded(plotter, tmp_path, with_seat_screw([np.nan] * 6))
+    title = plotter.figure_title(df, cols, plotter.seat_screw_history(df, cols))
+    assert title.startswith("M_screw not recorded, ")
+
+
+def test_title_for_logs_before_the_torque_column(plotter, tmp_path):
+    old = [c for c in schema.MAIN if c != "seat_screw_torque_Nm"]
+    df, cols = loaded(plotter, tmp_path, synthetic_log(6, columns=old))
+    title = plotter.figure_title(df, cols, plotter.seat_screw_history(df, cols))
+    assert title.startswith("M_screw not recorded, ")
+
+
+def test_title_gives_the_median_upstream_pressure(plotter, tmp_path):
+    df = with_seat_screw([0.4] * 5)
+    df["keller_pressure_bar"] = [0.95, 0.96, 0.96, 0.97, 1.40]   # one refill spike
+    df, cols = loaded(plotter, tmp_path, df)
+    title = plotter.figure_title(df, cols, plotter.seat_screw_history(df, cols))
+    assert title == "M_screw = 0.40 N·m, P_up ≈ 0.96 bar (abs)"
+
+
+def test_title_leaves_out_upstream_when_not_logged(plotter):
+    df = pd.DataFrame({"t": [0.0, 0.5]})
+    title = plotter.figure_title(df, {"upstream": None}, [(0.0, 0.4)])
+    assert title == "M_screw = 0.40 N·m"
+
+
+def test_subtitle_gives_the_file_and_its_date(plotter):
+    assert plotter.figure_subtitle("te-sensor_20261001_144601.csv") == \
+        "te-sensor_20261001_144601.csv  ·  1 Oct 2026 14:46"
+
+
+def test_subtitle_is_just_the_name_when_it_has_no_date(plotter):
+    assert plotter.figure_subtitle("log.csv") == "log.csv"
+
+
+def test_the_figure_shows_title_and_subtitle(plotter, tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    df, cols = loaded(plotter, tmp_path, with_seat_screw([0.4] * 600))
+    fig = plotter.make_figure(df, cols, [], [], None, "te-sensor_20261001_144601.csv",
+                              seat_screw=plotter.seat_screw_history(df, cols))
+    assert fig._suptitle.get_text().startswith("M_screw = 0.40 N·m, P_up ≈ ")
+    assert "te-sensor_20261001_144601.csv  ·  1 Oct 2026 14:46" in \
+        [t.get_text() for t in fig.texts]
 
 
 # ── valve open/close detection ──────────────────────────────────────────────
@@ -255,7 +311,7 @@ def test_no_chamber_column_gives_no_events(plotter):
 
 # ── lock nut torque (history 44) ────────────────────────────────────────────
 
-def test_lock_nut_in_the_title_summary_and_markers(plotter, tmp_path):
+def test_lock_nut_in_the_summary_and_markers_not_the_title(plotter, tmp_path):
     import matplotlib
     matplotlib.use("Agg")
     df = with_seat_screw([0.4] * 600)
@@ -265,8 +321,9 @@ def test_lock_nut_in_the_title_summary_and_markers(plotter, tmp_path):
     assert plotter.lock_nut_text(nut) == "lock nut torque 0.10 N·m → 0.20 N·m at 150.0 s"
     fig = plotter.make_figure(df, cols, [], [], None, "log.csv",
                               seat_screw=plotter.seat_screw_history(df, cols), lock_nut=nut)
-    title = fig._suptitle.get_text()
-    assert "seat screw torque 0.40 N·m  ·  lock nut torque 0.10 N·m → 0.20 N·m" in title
+    assert "lock nut" not in fig._suptitle.get_text()
+    assert "lock nut torque 0.10 N·m → 0.20 N·m" in plotter.torques_text(
+        plotter.seat_screw_history(df, cols), nut)
     labels = [t.get_text() for ax in fig.axes for t in ax.texts]
     assert any("lock nut 0.20 N·m" in s for s in labels)
 
