@@ -4,6 +4,36 @@ Short records of choices that shaped the code, newest first. Each says what
 was decided and why, so nobody has to rediscover the reason. Add one when a
 change would otherwise puzzle someone reading the code later.
 
+## 55. auto-p: the crack is a step; a valve that shuts as it cools opened — 6 Oct 2026
+Run te-sensor_20261006_075510 (0.50 N·m, P_up 0.96 bar): the valve cracked
+at ~65 °C with a step (1.6 → 2.9e-7 mbar in one reading, then flat). The
+3 s look-ahead, fitted across the step, predicted ~7e-7 and cut the heater
+at every crack; the valve shut 2-3 K lower, P_vacuum was back at the
+baseline within 30 s, history 54 called it a false alarm, and the creep
+resumed into the same crack: ~25 cycles of ~30 s, never above ~3e-7. A
+manual step-hold the same morning (64 / 65 / 65.5 / 66 °C, ~3 min each)
+showed the shape: shut to 65 °C, a ×1.9 step at 65.3 °C, then smooth and
+gentle above (+10 % per 0.5 K, drifting slowly up at a fixed TC).
+Best guess, before any testing at higher P_up:
+- The rate of rise for the look-ahead is fitted only over readings above
+  baseline + margin, so the crack step is a level, not a slope. A real
+  ramp still cuts; a reading over the cut line still cuts at once.
+- Back at the baseline after the TC fell ≥ 0.75 K since the movement is a
+  real opening (a gauge spike passes with the TC within ~0.2 K). Its TC
+  and P_up are remembered as the crack point; the creep resumes from
+  0.5 K below it, lowered by PRESSURE_UP_K_PER_BAR (12 K/bar) for each bar
+  P_up has risen since, and creeps from there at a quarter of the rate.
+- The freeze below the TC is at most 1.5 K (was 4.25 K at 1.5 °C/min,
+  which alone shut this valve).
+- Once open, auto-p always creeps at a quarter of the rate, which itself
+  slows as P_up^-1.5: the gain after the crack is steep and, like the
+  flow, expected to grow roughly as P_up^1.5.
+- If a real opening went straight past the aim, the event log says the
+  target may be below the smallest flow the valve passes at this P_up
+  (expected at higher P_up, where the crack step grows as ~P_up^1.5).
+The crack point is forgotten on re-arm (the seating may have changed).
+Unverified above ~1 bar.
+
 ## 54. Back at the baseline within 30 s is a false alarm — 5 Oct 2026
 At 17:47 a spike a few readings long (2.15 → 2.9e-7 mbar) passed the
 two-readings check, froze the setpoint 4.5 K below the TC (28.9 → 24.4 °C),

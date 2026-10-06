@@ -31,13 +31,13 @@ from .config import (
     HEATER_MAX_DUTY, HEATER_MAX_RUN_S, LABJACK_SAMPLE_HZ, PID_D_FILTER_S,
     PID_KD, PID_KI, PID_KP, PID_SETPOINT_DEFAULT, PRESSURE_APPROACH_FRACTION,
     PRESSURE_BAD_READS_TO_TRIP, PRESSURE_BASE_GUARD_S, PRESSURE_BASE_MIN_S,
-    PRESSURE_BODY_LAG_S, PRESSURE_FALSE_ALARM_S,
+    PRESSURE_BODY_LAG_S, PRESSURE_CLOSE_COOL_K, PRESSURE_FALSE_ALARM_S,
     PRESSURE_BASE_WINDOW_S, PRESSURE_CREEP_C_MIN, PRESSURE_CREEP_MAX_C_MIN,
     PRESSURE_CREEP_MIN_C_MIN, PRESSURE_CREEP_REF_BAR, PRESSURE_CREEP_UP_EXP,
     PRESSURE_EFOLD_REF_K, PRESSURE_FILTER_S, PRESSURE_FLOW_MARGINS,
-    PRESSURE_FREEZE_BELOW_K, PRESSURE_MAX_MBAR, PRESSURE_MOVE_MIN_DEC,
-    PRESSURE_MOVE_SIGMAS, PRESSURE_NEAR_AIM_DEC, PRESSURE_PREDICT_S,
-    PRESSURE_RESUME_FRACTION, PRESSURE_SEEK_START_C, PRESSURE_SLOPE_WINDOW_S,
+    PRESSURE_FREEZE_BELOW_K, PRESSURE_FREEZE_MAX_K, PRESSURE_MAX_MBAR,
+    PRESSURE_MOVE_MIN_DEC, PRESSURE_MOVE_SIGMAS, PRESSURE_PREDICT_S,
+    PRESSURE_RECRACK_BELOW_K, PRESSURE_RESUME_FRACTION, PRESSURE_SEEK_START_C, PRESSURE_SLOPE_WINDOW_S,
     PRESSURE_SOAK_FACTOR, PRESSURE_STEADY_S, PRESSURE_TARGET_DEFAULT,
     PRESSURE_TRIM_BELOW_K, PRESSURE_TRIP_ALL_MODES, PRESSURE_AIM_BAND_DEC, PRESSURE_TRIP_MBAR,
     PRESSURE_TSP_MAX_C,
@@ -126,6 +126,11 @@ def new_state():
         p_creeping      = 0.0,     # the last creep rate, °C/min (sets the freeze)
         p_sp_before     = None,    # setpoint when creeping last stopped…
         p_moved_at      = None,    # …and when (a false alarm resumes from it)
+        p_moved_T       = None,    # TC at that movement…
+        p_moved_up      = None,    # …and P_up then
+        p_peak          = None,    # highest confirmed log10(P_vacuum) since the movement
+        p_crack_T       = None,    # TC of the last real opening (history 55)…
+        p_crack_up      = None,    # …and P_up then
         t_check         = False,   # auto-t: re-evaluate a burst (armed / setpoint changed)
         t_burst         = None,    # auto-t: None, 'burst', 'coast'
         t_burst_t0      = None,
@@ -531,6 +536,19 @@ def _recent(h, now, seconds):
     return [(t, min(y, y0)) for (_, y0), (t, y) in zip(pts, pts[1:]) if t >= now - seconds]
 
 
+def _flowing(h, now, seconds):
+    """Confirmed readings of the last `seconds` above baseline + margin: the
+    rate of rise once gas flows. The valve cracks with a step (6 Oct 2026:
+    1.6 → 2.9e-7 mbar in one reading, then flat); a fit across the step reads
+    it as a runaway and cut every crack (history 55). Before the baseline is
+    known, all readings count."""
+    pts = _recent(h, now, seconds)
+    if h['p_base'] is None:
+        return pts
+    line = h['p_base'] + h['p_margin']
+    return [(t, y) for t, y in pts if y > line]
+
+
 def _update_baseline(h, now):
     """Median of the raw log10(p) over the baseline window, skipping the
     newest seconds. It may fall but never rise (the chamber only pumps down;
@@ -569,8 +587,27 @@ def _aim(h, moving_line, cut):
 
 def _freeze_k(rate_c_min):
     """How far below the TC to freeze: the valve body's lag behind the TC at
-    this creep rate, at least PRESSURE_FREEZE_BELOW_K."""
-    return max(PRESSURE_FREEZE_BELOW_K, rate_c_min * PRESSURE_BODY_LAG_S / 60.0)
+    this creep rate, at least PRESSURE_FREEZE_BELOW_K and at most
+    PRESSURE_FREEZE_MAX_K (more shut a valve that closes 2-3 K below its
+    crack)."""
+    return min(PRESSURE_FREEZE_MAX_K,
+               max(PRESSURE_FREEZE_BELOW_K, rate_c_min * PRESSURE_BODY_LAG_S / 60.0))
+
+
+def _near_crack(h, p_up):
+    """Shut, with a remembered crack point, and the setpoint already at or
+    above where to re-approach it from: creep at the approach rate."""
+    return (h['p_crack_T'] is not None
+            and h['setpoint_C'] >= _recrack_from(h, p_up) - 1e-9)
+
+
+def _recrack_from(h, p_up):
+    """Setpoint to re-approach the remembered crack point from: just below
+    it, and lower still if P_up has risen since (it cracks cooler)."""
+    t = h['p_crack_T'] - PRESSURE_RECRACK_BELOW_K
+    if p_up is not None and h['p_crack_up'] is not None and p_up > h['p_crack_up']:
+        t -= PRESSURE_UP_K_PER_BAR * (p_up - h['p_crack_up'])
+    return t
 
 
 def _enter(h, phase, now, temp, msgs, why):
@@ -578,7 +615,8 @@ def _enter(h, phase, now, temp, msgs, why):
     further freezes the setpoint below the TC: the TC sits by the heater and
     leads the valve body, the more so the faster it creeps."""
     if h['p_phase'] in ('seek', 'approach') and phase in ('hold', 'trim', 'park', 'cut'):
-        h.update(p_sp_before=h['setpoint_C'], p_moved_at=now)
+        h.update(p_sp_before=h['setpoint_C'], p_moved_at=now, p_moved_T=temp,
+                 p_moved_up=h['p_up_bar'], p_peak=None)
     if h['p_phase'] in ('seek', 'approach') and phase in ('hold', 'trim', 'park'):
         h['setpoint_C'] = min(h['setpoint_C'], temp - _freeze_k(h['p_creeping']))
     h.update(p_phase=phase, p_since=now)
@@ -610,7 +648,8 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
         h.update(p_init=False, p_phase='baseline', p_since=now, p_filt=y, p_raw=y,
                  p_base=None, p_quiet_since=now, p_margin=PRESSURE_MOVE_MIN_DEC, p_override=None,
                  p_capped=False, p_rate_c_min=0.0, p_aim=None, p_creeping=0.0,
-                 p_sp_before=None, p_moved_at=None,
+                 p_sp_before=None, p_moved_at=None, p_moved_T=None, p_moved_up=None,
+                 p_peak=None, p_crack_T=None, p_crack_up=None,
                  setpoint_C=min(tsp_hi, temp))
         up = f"{p_up:.2f} bar" if p_up is not None else "not read — slowest creep"
         msgs.append(f"auto-p: no opening point assumed — holding {temp:.1f} °C "
@@ -637,8 +676,10 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
     # Confirmed level: the lower of this reading and the one before, so a
     # one-reading spike moves nothing; a raw reading over a line still cuts.
     yc = min(y, h['p_hist'][-2][1]) if len(h['p_hist']) > 1 else y
-    slope, _ = _fit(_recent(h, now, PRESSURE_SLOPE_WINDOW_S))
+    slope, _ = _fit(_flowing(h, now, PRESSURE_SLOPE_WINDOW_S))
     predicted = yc + max(0.0, slope) * PRESSURE_PREDICT_S
+    if h['p_moved_at'] is not None:
+        h['p_peak'] = yc if h['p_peak'] is None else max(h['p_peak'], yc)
 
     # Stopped: past P_vacuum_max the valve opens faster than any heater cut.
     if phase == 'stopped' or vac > PRESSURE_MAX_MBAR:
@@ -694,12 +735,28 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
         if phase not in ('baseline', 'seek'):
             h['p_quiet_since'] = now
             moved = h['p_moved_at']
-            if moved is not None and now - moved <= PRESSURE_FALSE_ALARM_S:
+            cooled = (h['p_moved_T'] is not None
+                      and temp <= h['p_moved_T'] - PRESSURE_CLOSE_COOL_K)
+            if moved is not None and cooled:
+                # A real opening: the valve shut as it cooled (history 55).
+                h.update(p_crack_T=h['p_moved_T'], p_crack_up=h['p_moved_up'])
+                h['setpoint_C'] = min(tsp_hi, _recrack_from(h, p_up))
+                up = (f" at P_up {h['p_crack_up']:.2f} bar"
+                      if h['p_crack_up'] is not None else "")
+                what = (f"valve shut again {h['p_moved_T'] - temp:.1f} K below where it "
+                        f"opened ({h['p_moved_T']:.1f} °C{up})")
+                if h['p_peak'] is not None and h['p_peak'] > aim + PRESSURE_AIM_BAND_DEC:
+                    what += (f"; it opened straight past the aim, to "
+                             f"{10 ** h['p_peak']:.2e} mbar — the target may be below "
+                             f"the smallest flow it passes at this P_up")
+            elif moved is not None and now - moved <= PRESSURE_FALSE_ALARM_S:
                 h['setpoint_C'] = max(h['setpoint_C'], min(h['p_sp_before'], temp))
                 what = f"false alarm, back at baseline after {now - moved:.1f} s"
             else:
                 what = "P_vacuum back at baseline"
-            h['p_moved_at'] = None
+            h.update(p_moved_at=None, p_moved_T=None, p_peak=None)
+            if _near_crack(h, p_up):
+                rate *= PRESSURE_APPROACH_FRACTION
             _enter(h, 'seek', now, temp, msgs,
                    f"{what} ({vac:.2e} mbar) — creeping "
                    f"{rate:.2f} °C/min from {h['setpoint_C']:.1f} °C")
@@ -710,14 +767,16 @@ def _pressure_outer_loop(h, vac, temp, dt, now, p_up, p_up_t, msgs):
                    f"baseline {10 ** h['p_base']:.2e} mbar (moves at "
                    f"{10 ** moving_line:.2e}); aiming at {10 ** aim:.2e}{raised}, "
                    f"cut at {10 ** cut:.2e} — creeping {rate:.2f} °C/min")
+        if _near_crack(h, p_up):
+            rate *= PRESSURE_APPROACH_FRACTION
         _creep(h, rate, dt, tsp_hi, msgs)
         return
 
     # The valve is moving.
-    rise, _ = _fit(_recent(h, now, PRESSURE_STEADY_S))
+    rise, _ = _fit(_flowing(h, now, PRESSURE_STEADY_S))
     rising = rise * PRESSURE_STEADY_S > h['p_margin']
     slow = PRESSURE_APPROACH_FRACTION * rate
-    approach = slow if yc > aim - PRESSURE_NEAR_AIM_DEC else rate
+    approach = slow                 # open: the gain is steep (history 55)
     over = yc > aim + PRESSURE_AIM_BAND_DEC or (phase == 'trim' and yc > aim)
     if over:
         if phase != 'trim':

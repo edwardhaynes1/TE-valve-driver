@@ -265,18 +265,33 @@ PRESSURE_MOVE_SIGMAS    = 4.0
 PRESSURE_MOVE_MIN_DEC   = 0.02     # decades (+4.7 %): never a smaller margin
 # On movement the setpoint freezes below the TC by what the valve body lags
 # it at the creep rate (TC lags the body ~8.5 K at 3 °C/min: ~170 s), at
-# least PRESSURE_FREEZE_BELOW_K (the TC rose ≤ 1.4 K after a cut).
+# least PRESSURE_FREEZE_BELOW_K (the TC rose ≤ 1.4 K after a cut), at most
+# PRESSURE_FREEZE_MAX_K: a 0.50 N·m valve that cracked at ~65 °C shut again
+# 2-3 K lower (6 Oct 2026 07:55), so a 4.25 K freeze shut it (history 55).
 PRESSURE_FREEZE_BELOW_K = 1.0
+PRESSURE_FREEZE_MAX_K   = 1.5
 PRESSURE_BODY_LAG_S     = 170.0
-# Back at the baseline within this long of the movement: a false alarm (a
-# spike a few readings long, 5 Oct 2026 17:47). The creep resumes from the
-# setpoint before the freeze, at most the TC — not from the frozen value,
-# which let the valve cool 4.5 K for ~3 min (history 54).
+# Back at the baseline within this long of the movement, with the TC not
+# fallen by PRESSURE_CLOSE_COOL_K: a false alarm (a spike a few readings
+# long, 5 Oct 2026 17:47). The creep resumes from the setpoint before the
+# freeze, at most the TC — not from the frozen value, which let the valve
+# cool 4.5 K for ~3 min (history 54).
 PRESSURE_FALSE_ALARM_S  = 30.0
+# A real opening (history 55): back at the baseline only after the TC fell
+# PRESSURE_CLOSE_COOL_K or more since the movement — the valve shut as it
+# cooled (6 Oct 2026 07:55: cracked at ~65 °C, shut 2-3 K lower, 25 times;
+# a gauge spike passes with the TC within ~0.2 K). The TC and P_up at the
+# movement are remembered as the crack point. The creep resumes from
+# PRESSURE_RECRACK_BELOW_K below it, lowered by PRESSURE_UP_K_PER_BAR for
+# each bar P_up has risen since (it cracks cooler at higher P_up; a fall is
+# not credited), and from there creeps at the approach rate.
+PRESSURE_CLOSE_COOL_K    = 0.75
+PRESSURE_RECRACK_BELOW_K = 0.5
 PRESSURE_STEADY_S       = 30.0     # no further creep until P_vacuum has not risen for this long
-PRESSURE_APPROACH_FRACTION = 0.25  # …then creep at this share of the rate within
-PRESSURE_NEAR_AIM_DEC   = 0.1      # this many decades (×1.26) of the aim; the full rate
-                                   # further below it
+PRESSURE_APPROACH_FRACTION = 0.25  # …then creep at this share of the rate. Once open the
+                                   # valve's gain is steep (6 Oct 2026: +10 % per 0.5 K at
+                                   # 1 bar, ~×P_up^1.5 higher up), so never the full rate;
+                                   # the rate itself already slows as P_up^-1.5 (history 55)
 
 # Aim — P_vacuum_target, but at least PRESSURE_FLOW_MARGINS movement margins
 # above the baseline, so gas is seen to flow even when the baseline is high.
@@ -291,7 +306,10 @@ PRESSURE_AIM_BAND_DEC   = 0.02     # easing down starts this far (×1.05) above 
 # Cut — heater OFF when P_vacuum is above the cut line, P_vacuum_max ÷
 # PRESSURE_SOAK_FACTOR (9e-7 / 1.4 = 6.4e-7 mbar), or a straight-line fit of
 # the last PRESSURE_SLOPE_WINDOW_S predicts it will be within
-# PRESSURE_PREDICT_S. 1.4 is the most P_vacuum rose after a cut (1 of 33; the
+# PRESSURE_PREDICT_S. The fit uses only readings above baseline + margin:
+# the valve cracks with a step (6 Oct 2026: 1.6 → 2.9e-7 mbar in one reading,
+# then flat), and fitted across the step that predicted ~7e-7 and cut every
+# crack (history 55). 1.4 is the most P_vacuum rose after a cut (1 of 33; the
 # others ≤ ×1.12). Heating resumes, holding the TC of that moment, as soon as
 # P_vacuum is below PRESSURE_RESUME_FRACTION × the cut line and no longer
 # predicted to cross it: the TC falls fast with the heater off (~0.4 K/s

@@ -261,8 +261,8 @@ def test_two_readings_above_baseline_plus_margin_stop_the_creep(h):
     assert h['p_phase'] == 'seek'                    # one reading: not yet
     _, msgs, now = run_p(h, [moved], temp=40.0, start=now, armed_now=False)
     assert h['p_phase'] == 'hold'
-    # frozen below the TC by the body's lag at 1.5 °C/min: 1.5 × 170 / 60 = 4.25 K
-    assert h['setpoint_C'] == pytest.approx(40.0 - 4.25)
+    # frozen below the TC by the body's lag at 1.5 °C/min (4.25 K), at most 1.5 K
+    assert h['setpoint_C'] == pytest.approx(40.0 - 1.5)
     assert any("moved" in m and "creep stopped" in m for m in msgs)
     # no creep while P_vacuum is still rising, nor for 30 s after
     sp = h['setpoint_C']
@@ -293,9 +293,9 @@ def test_back_at_baseline_within_30_s_is_a_false_alarm(h):
     _, now = creeping(h, temp=40.0)
     sp = h['setpoint_C']
     _, _, now = run_p(h, [2.9e-7] * 3, temp=40.0, start=now, armed_now=False)
-    assert h['p_phase'] in ('hold', 'cut') and h['setpoint_C'] < sp - 4
+    assert h['p_phase'] in ('hold', 'cut') and h['setpoint_C'] < sp - 1
     _, msgs, _ = run_p(h, [BASE] * 8, temp=40.0, start=now, armed_now=False)
-    # resumed from where it was, capped at the TC: 40 °C, not 35.75 °C
+    # resumed from where it was, capped at the TC: 40 °C, not 38.5 °C
     assert h['p_phase'] == 'seek' and h['setpoint_C'] >= 40.0
     assert any("false alarm" in m for m in msgs)
 
@@ -312,13 +312,55 @@ def test_back_at_baseline_after_30_s_creeps_on_from_the_freeze(h):
 def test_a_false_alarm_never_resumes_above_the_tc(h):
     _, now = creeping(h, temp=40.0)
     _, _, now = run_p(h, [2.9e-7] * 3, temp=40.0, start=now, armed_now=False)
-    run_p(h, [BASE] * 2, temp=38.0, start=now, armed_now=False)        # TC fell
-    assert h['setpoint_C'] == pytest.approx(38.0, abs=0.01)
+    run_p(h, [BASE] * 2, temp=39.5, start=now, armed_now=False)        # TC fell 0.5 K
+    assert h['setpoint_C'] == pytest.approx(39.5, abs=0.02)
+    assert h['p_crack_T'] is None                   # not enough to count as shutting
 
 
-@pytest.mark.parametrize("rate, freeze", [(1.5, 4.25), (0.3, 1.0)])
+# ── history 55: the crack is a step; a valve that shuts as it cools opened ──
+
+def test_the_crack_step_does_not_cut(h):
+    # 6 Oct 2026 07:55: 1.6 → 2.9e-7 mbar in one reading, then flat. Fitted
+    # across the step, the 3 s look-ahead predicted ~7e-7 and cut every crack
+    _, now = creeping(h, temp=65.0)
+    _, msgs, _ = run_p(h, [2.9e-7] * 4 * 10, temp=65.0, start=now, armed_now=False)
+    assert h['p_phase'] == 'hold'
+    assert not any("heater OFF" in m or "predicted" in m for m in msgs)
+
+
+def test_shutting_as_the_tc_falls_is_a_real_opening_and_is_remembered(h):
+    _, now = creeping(h, temp=65.0)
+    _, _, now = run_p(h, [2.9e-7] * 8, temp=65.0, start=now, armed_now=False)
+    _, msgs, now = run_p(h, [BASE] * 2, temp=62.5, start=now, armed_now=False)
+    assert h['p_phase'] == 'seek' and h['p_crack_T'] == pytest.approx(65.0)
+    assert any("shut again 2.5 K below where it opened (65.0 °C at P_up 1.00 bar)" in m
+               for m in msgs)
+    # re-approaches from 0.5 K below the crack, at a quarter of the rate
+    assert h['setpoint_C'] == pytest.approx(64.5, abs=0.01)
+    assert h['p_rate_c_min'] == pytest.approx(0.375)
+    assert not any("false alarm" in m for m in msgs)
+
+
+def test_a_higher_p_up_re_approaches_the_crack_from_lower(h):
+    _, now = creeping(h, temp=65.0, p_up=1.0)
+    _, _, now = run_p(h, [2.9e-7] * 8, temp=65.0, start=now, armed_now=False)
+    run_p(h, [BASE] * 2, temp=62.0, p_up=1.5, start=now, armed_now=False)
+    # 65 − 0.5 − 12 K/bar × 0.5 bar = 58.5 °C
+    assert controller._recrack_from(h, 1.5) == pytest.approx(58.5)
+    assert controller._recrack_from(h, 0.8) == pytest.approx(64.5)   # a fall: no credit
+    assert h['setpoint_C'] == pytest.approx(58.5, abs=0.01)
+
+
+def test_opening_straight_past_the_aim_says_the_target_may_be_too_low(h):
+    _, now = creeping(h, temp=65.0)
+    _, _, now = run_p(h, [6.0e-7] * 8, temp=65.0, start=now, armed_now=False)
+    _, msgs, _ = run_p(h, [BASE] * 2, temp=62.0, start=now, armed_now=False)
+    assert any("straight past the aim" in m and "smallest flow" in m for m in msgs)
+
+
+@pytest.mark.parametrize("rate, freeze", [(1.5, 1.5), (0.5, 1.417), (0.3, 1.0)])
 def test_the_freeze_grows_with_the_creep_rate(rate, freeze):
-    assert controller._freeze_k(rate) == pytest.approx(freeze)
+    assert controller._freeze_k(rate) == pytest.approx(freeze, abs=1e-3)
 
 
 def test_a_fast_rise_cuts_before_it_reaches_the_line(h):
@@ -374,10 +416,11 @@ def test_above_the_aim_the_setpoint_never_rises(h):
     assert h['setpoint_C'] <= 35.0
 
 
-def test_well_below_the_aim_it_creeps_at_the_full_rate_once_steady(h):
+def test_well_below_the_aim_it_still_creeps_at_a_quarter_once_open(h):
+    # history 55: once open the gain is steep, so never the full rate
     _, now = creeping(h, temp=50.0)
     _, msgs, _ = run_p(h, [BASE * 1.3] * 4 * 35, temp=50.0, start=now, armed_now=False)
-    assert h['p_phase'] == 'approach' and h['p_rate_c_min'] == pytest.approx(1.5)
+    assert h['p_phase'] == 'approach' and h['p_rate_c_min'] == pytest.approx(0.375)
 
 
 def test_close_below_the_aim_it_creeps_at_a_quarter(h):
